@@ -46,6 +46,7 @@ psycopg2-binary==2.9.10
 pydantic==2.11.2
 pydantic_core==2.33.1
 PyJWT==2.9.0
+pytz==2024.1
 pyngrok==7.2.3
 PySocks==1.7.1
 python-dateutil==2.9.0.post0
