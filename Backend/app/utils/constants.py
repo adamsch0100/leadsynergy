@@ -4,11 +4,11 @@ import os
 load_dotenv()
 class Credentials:
     def __init__(self) -> None:
-        # Credentials
-        self.FUB_API_KEY = os.getenv('FOLLOWUPBOSS_API_KEY')
+        # Credentials (support both naming conventions)
+        self.FUB_API_KEY = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
         self.SUPABASE_URL = os.getenv('SUPABASE_URL')
         self.SUPABASE_KEY = os.getenv('SUPABASE_KEY')
-        self.SUPABASE_SECRET_KEY = os.getenv('SUPABASE_SECRET_KEY')
+        self.SUPABASE_SECRET_KEY = os.getenv('SUPABASE_SECRET_KEY') or os.getenv('SUPABASE_JWT_SECRET')
         self.SUPABASE_POSTGRES_URL = os.getenv('SUPABASE_POSTGRES_URL')
         # Domains
         self.NGROK_DOMAIN = os.getenv('NGROK_DOMAIN')
