@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python check_users.py:*)",
+      "Bash(python:*)",
+      "Bash(curl:*)",
+      "Bash(grep:*)",
+      "Bash(source:*)",
+      "Bash(./venv/Scripts/python.exe:*)",
+      "Bash(python.exe:*)",
+      "Bash(npx tsc:*)",
+      "Bash(timeout:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

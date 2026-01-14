@@ -1,0 +1,17 @@
+__pycache__/
+*/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+celerybeat-schedule
+*.egg-info/
+dist/
+build/
+.env
+.venv
+.vscode
+venv
+.multi-tenancy-plan
+*.tgz
