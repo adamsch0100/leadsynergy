@@ -13,11 +13,12 @@ class SupabaseClientSingleton:
             with cls._lock:
                 if cls._instance is None:
                     load_dotenv()
-                    api_key = os.getenv('SUPABASE_SECRET_KEY')
+                    # Support both naming conventions
+                    api_key = os.getenv('SUPABASE_SECRET_KEY') or os.getenv('SUPABASE_JWT_SECRET')
                     supabase_url = os.getenv('SUPABASE_URL')
-                    
+
                     if not api_key or not supabase_url:
-                        raise ValueError("SUPABASE_SECRET_KEY and SUPABASE_URL must be set in environment variables")
+                        raise ValueError("SUPABASE_SECRET_KEY (or SUPABASE_JWT_SECRET) and SUPABASE_URL must be set in environment variables")
                     
                     cls._instance = create_client(supabase_url, api_key)
         

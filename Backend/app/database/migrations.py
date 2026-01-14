@@ -19,9 +19,9 @@ logger = logging.getLogger("migration_manager")
 # Load environment variables
 load_dotenv()
 
-# Supabase client connection
+# Supabase client connection (support both naming conventions)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY")
+SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_JWT_SECRET")
 #SUPABASE_POSTGRES_URL
 
 class MigrationManager:

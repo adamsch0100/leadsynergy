@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 URL = os.getenv("SUPABASE_URL")
-KEY = os.getenv("SUPABASE_SECRET_KEY")
+KEY = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_JWT_SECRET")
 supabase = create_client(supabase_url=URL, supabase_key=KEY)
 
 random_email: str = "adam@saahomes.com"
