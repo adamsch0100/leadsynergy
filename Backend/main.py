@@ -49,7 +49,17 @@ app.logger.info("Starting Follow Up Boss webhook server...")
 app.logger.info(f"Server started at: {datetime.now()}")
 
 # Enable CORS to allow requests from our frontend
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {
+    "origins": [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://leadsynergy.ai",
+        "https://www.leadsynergy.ai"
+    ],
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    "allow_headers": ["Content-Type", "Authorization", "X-User-ID", "X-Requested-With"],
+    "supports_credentials": True
+}})
 
 # Register the setup blueprint
 app.register_blueprint(setup_bp, url_prefix='/api/setup')
