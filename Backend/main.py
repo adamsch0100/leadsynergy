@@ -164,6 +164,11 @@ def root():
     })
 
 if __name__ == "__main__":
+    # Get port from environment (Railway sets this) or default to 8000
+    port = int(os.environ.get("PORT", 8000))
+    # Bind to 0.0.0.0 for Railway (external access) or 127.0.0.1 for local dev
+    host = "0.0.0.0" if os.environ.get("RAILWAY_ENVIRONMENT") else "127.0.0.1"
+
     print("=" * 60)
     print("Starting LeadSynergy API Server...")
     print("=" * 60)
@@ -172,41 +177,24 @@ if __name__ == "__main__":
     # Log environment info
     print(f"\nEnvironment Configuration:")
     print(f"  Frontend URL: {os.environ.get('FRONTEND_URL', 'Not set')}")
-    print(f"  Backend Port: 8000")
+    print(f"  Backend Port: {port}")
+    print(f"  Host: {host}")
+    print(f"  Railway Environment: {os.environ.get('RAILWAY_ENVIRONMENT', 'Not set')}")
     print(f"  Stripe key configured: {'Yes' if os.environ.get('STRIPE_SECRET_KEY') else 'No'}")
     print(f"  Webhook secret configured: {'Yes' if os.environ.get('STRIPE_WEBHOOK_SECRET') else 'No'}")
-    print(f"\nServer starting at: http://127.0.0.1:8000")
+    print(f"\nServer starting at: http://{host}:{port}")
     print("=" * 60 + "\n")
 
-    # Use Flask development server for reliability
-    # Set USE_PRODUCTION_SERVER environment variable to use hypercorn
-    use_production = os.environ.get("USE_PRODUCTION_SERVER", "").lower() == "true"
+    # In production (Railway), use debug=False
+    is_production = os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("FLASK_ENV") == "production"
 
-    if use_production:
-        try:
-            from hypercorn.asyncio import serve
-            from hypercorn.config import Config
-            import asyncio
-
-            config = Config()
-            config.bind = ["127.0.0.1:8000"]
-            config.workers = 1
-            print("Using Hypercorn server...")
-            # Run the server
-            asyncio.run(serve(app, config))
-        except Exception as e:
-            print(f"Hypercorn failed: {e}")
-            print("Falling back to Flask development server...")
-            app.run(host="127.0.0.1", port=8000, debug=True)
-    else:
-        print("Using Flask development server...")
-        try:
-            # Use Flask development server
-            app.run(host="127.0.0.1", port=8000, debug=True, use_reloader=False)
-        except OSError as e:
-            if "address already in use" in str(e).lower() or "Address already in use" in str(e):
-                print(f"\nERROR: Port 8000 is already in use!")
-                print("Please stop any other process using port 8000 and try again.")
-                print(f"Error details: {e}\n")
-            else:
-                raise
+    print(f"Running in {'production' if is_production else 'development'} mode...")
+    try:
+        app.run(host=host, port=port, debug=not is_production, use_reloader=False)
+    except OSError as e:
+        if "address already in use" in str(e).lower() or "Address already in use" in str(e):
+            print(f"\nERROR: Port {port} is already in use!")
+            print("Please stop any other process using this port and try again.")
+            print(f"Error details: {e}\n")
+        else:
+            raise
