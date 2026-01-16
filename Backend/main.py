@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from app.webhook.fub_webhook_f import (
     webhook_stage_updated_handler,
     webhook_note_created_handler,
@@ -49,17 +49,43 @@ app.logger.info("Starting Follow Up Boss webhook server...")
 app.logger.info(f"Server started at: {datetime.now()}")
 
 # Enable CORS to allow requests from our frontend
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://leadsynergy.ai",
+    "https://www.leadsynergy.ai"
+]
+
 CORS(app, resources={r"/*": {
-    "origins": [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://leadsynergy.ai",
-        "https://www.leadsynergy.ai"
-    ],
+    "origins": ALLOWED_ORIGINS,
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     "allow_headers": ["Content-Type", "Authorization", "X-User-ID", "X-Requested-With"],
     "supports_credentials": True
 }})
+
+# Explicit CORS handler as fallback to ensure headers are always set
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin')
+    if origin in ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Requested-With'
+    return response
+
+# Handle OPTIONS preflight requests explicitly
+@app.before_request
+def handle_preflight():
+    if request.method == 'OPTIONS':
+        origin = request.headers.get('Origin')
+        if origin in ALLOWED_ORIGINS:
+            response = app.make_default_options_response()
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Requested-With'
+            return response
 
 # Register the setup blueprint
 app.register_blueprint(setup_bp, url_prefix='/api/setup')
