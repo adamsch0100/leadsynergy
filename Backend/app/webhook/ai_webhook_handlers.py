@@ -252,6 +252,8 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             conversation_history=conversation_history,
             channel="sms",
             fub_person_id=person_id,
+            user_id=user_id,
+            organization_id=organization_id,
         )
 
         if agent_response and agent_response.response_text:
