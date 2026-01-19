@@ -41,8 +41,21 @@ class Credentials:
         self.GMAIL_EMAIL = os.getenv('GMAIL_EMAIL')
         self.GMAIL_APP_PASSWORD = os.getenv('GMAIL_APP_PASSWORD')
 
+        # AI Agent System credentials for FUB API identification
+        self.AI_AGENT_SYSTEM_NAME = os.getenv('AI_AGENT_SYSTEM_NAME', 'leadsynergy-ai')
+        self.AI_AGENT_SYSTEM_KEY = os.getenv('AI_AGENT_SYSTEM_KEY')
+
+        # FUB Web Login Credentials (for Playwright browser automation)
+        self.FUB_LOGIN_EMAIL = os.getenv('FUB_LOGIN_EMAIL')
+        self.FUB_LOGIN_PASSWORD = os.getenv('FUB_LOGIN_PASSWORD')
+        self.FUB_LOGIN_TYPE = os.getenv('FUB_LOGIN_TYPE', 'email')  # email, google, microsoft
+
         # Validate critical credentials
-        self._validate_required_credentials() 
+        self._validate_required_credentials()
+
+    def get(self, key: str, default=None):
+        """Get credential value with optional default (dict-like access)."""
+        return getattr(self, key, default) 
         
     def _validate_required_credentials(self):
         """Validate that critical credentials are present."""

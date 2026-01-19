@@ -29,10 +29,17 @@ class AIAgentSettings:
     # Identity
     agent_name: str = "Sarah"
     brokerage_name: str = "our team"
+    team_members: str = ""  # Human agent names (e.g., "Adam and Mandi")
     personality_tone: str = "friendly_casual"  # friendly_casual, professional, energetic
+    use_assigned_agent_name: bool = False  # If True, use lead's assigned agent name instead of branded name
 
-    # Response settings
-    response_delay_seconds: int = 30  # Delay to feel more human
+    # Response timing settings (human-like delays)
+    response_delay_seconds: int = 30  # Configurable delay (for UI)
+    response_delay_min_seconds: int = 30  # Minimum delay to feel human
+    response_delay_max_seconds: int = 120  # Maximum delay (2 minutes)
+    first_message_delay_min: int = 45  # First message to lead - slightly longer
+    first_message_delay_max: int = 180  # Up to 3 minutes for first message
+    typing_speed_chars_per_second: float = 4.0  # Simulate typing time
     max_response_length: int = 160  # SMS character limit
 
     # Working hours (TCPA compliance)
@@ -59,9 +66,59 @@ class AIAgentSettings:
     long_term_nurture_after_days: int = 7  # Days before moving to long-term drip
     re_engagement_channels: list = field(default_factory=lambda: ["sms", "email"])
 
+    # ============================================================================
+    # SEQUENCE SETTINGS - Control follow-up aggressiveness and channels
+    # Research shows: 5-minute response = 21x higher conversion (MIT study)
+    # ============================================================================
+
+    # Channel toggles - enable/disable channels for automated sequences
+    sequence_sms_enabled: bool = True       # SMS always on by default
+    sequence_email_enabled: bool = True     # Email always on by default
+    sequence_voice_enabled: bool = False    # Voice/RVM OFF by default (toggle on when ready)
+    sequence_rvm_enabled: bool = False      # Ringless voicemail OFF by default
+
+    # Day 0 aggression level: "aggressive" | "moderate" | "conservative"
+    # aggressive: 4 touches on Day 0 (SMS → RVM → SMS → Call)
+    # moderate: 2-3 touches on Day 0
+    # conservative: 1 touch on Day 0 (current behavior)
+    day_0_aggression: str = "aggressive"
+
+    # Proactive appointment offering - offer time slots without being asked
+    proactive_appointment_enabled: bool = True
+
+    # Qualification questions - ask qualifying questions in early messages
+    qualification_questions_enabled: bool = True
+
+    # Instant response for new leads (< 1 minute)
+    instant_response_enabled: bool = True
+    instant_response_max_delay_seconds: int = 60  # Max 60 seconds for new leads
+
+    # NBA (Next Best Action) scan intervals
+    nba_hot_lead_scan_interval_minutes: int = 5   # Scan hot leads every 5 minutes
+    nba_cold_lead_scan_interval_minutes: int = 15  # Scan cold leads every 15 minutes
+
     # Custom configuration (JSONB fields)
     qualification_questions: list = field(default_factory=list)
     custom_scripts: dict = field(default_factory=dict)
+
+    # FUB Browser Login Credentials (for Playwright SMS)
+    fub_login_email: Optional[str] = None
+    fub_login_password: Optional[str] = None  # Should be encrypted in DB
+    fub_login_type: str = "email"  # email, google, microsoft
+
+    # LLM Model Configuration (for AI responses)
+    # Provider options: "openrouter", "anthropic"
+    llm_provider: str = "openrouter"  # Default to OpenRouter (free models available)
+
+    # Model selection - user can choose from available models
+    # Free models with tool calling support on OpenRouter:
+    # - xiaomi/mimo-v2-flash:free (fast, good for conversations)
+    # - meta-llama/llama-3.3-70b-instruct:free (high quality)
+    # - google/gemini-2.0-flash-exp:free (1M context)
+    # - qwen/qwen3-coder:free (best for tool use)
+    # - openai/gpt-oss-120b:free (GPT quality)
+    llm_model: str = "xiaomi/mimo-v2-flash:free"
+    llm_model_fallback: str = "deepseek/deepseek-r1-0528:free"
 
     # Database metadata
     settings_id: Optional[str] = None
@@ -109,7 +166,9 @@ class AIAgentSettings:
             organization_id=row.get('organization_id'),
             agent_name=row.get('agent_name') or "Sarah",
             brokerage_name=row.get('brokerage_name') or "our team",
+            team_members=row.get('team_members') or "",
             personality_tone=row.get('personality_tone') or "friendly_casual",
+            use_assigned_agent_name=row.get('use_assigned_agent_name', False),
             response_delay_seconds=row.get('response_delay_seconds') or 30,
             working_hours_start=working_start,
             working_hours_end=working_end,
@@ -119,6 +178,33 @@ class AIAgentSettings:
             is_enabled=row.get('is_enabled', True),
             qualification_questions=row.get('qualification_questions') or [],
             custom_scripts=row.get('custom_scripts') or {},
+            # Re-engagement settings
+            re_engagement_enabled=row.get('re_engagement_enabled', True),
+            quiet_hours_before_re_engage=row.get('quiet_hours_before_re_engage') or 24,
+            re_engagement_max_attempts=row.get('re_engagement_max_attempts') or 3,
+            long_term_nurture_after_days=row.get('long_term_nurture_after_days') or 7,
+            re_engagement_channels=row.get('re_engagement_channels') or ["sms", "email"],
+            max_response_length=row.get('max_response_length') or 160,
+            # FUB Browser Login
+            fub_login_email=row.get('fub_login_email'),
+            fub_login_password=row.get('fub_login_password'),
+            fub_login_type=row.get('fub_login_type') or "email",
+            # LLM Model Configuration
+            llm_provider=row.get('llm_provider') or "openrouter",
+            llm_model=row.get('llm_model') or "xiaomi/mimo-v2-flash:free",
+            llm_model_fallback=row.get('llm_model_fallback') or "deepseek/deepseek-r1-0528:free",
+            # Sequence settings
+            sequence_sms_enabled=row.get('sequence_sms_enabled', True),
+            sequence_email_enabled=row.get('sequence_email_enabled', True),
+            sequence_voice_enabled=row.get('sequence_voice_enabled', False),
+            sequence_rvm_enabled=row.get('sequence_rvm_enabled', False),
+            day_0_aggression=row.get('day_0_aggression') or "aggressive",
+            proactive_appointment_enabled=row.get('proactive_appointment_enabled', True),
+            qualification_questions_enabled=row.get('qualification_questions_enabled', True),
+            instant_response_enabled=row.get('instant_response_enabled', True),
+            instant_response_max_delay_seconds=row.get('instant_response_max_delay_seconds') or 60,
+            nba_hot_lead_scan_interval_minutes=row.get('nba_hot_lead_scan_interval_minutes') or 5,
+            nba_cold_lead_scan_interval_minutes=row.get('nba_cold_lead_scan_interval_minutes') or 15,
         )
 
 
@@ -225,6 +311,13 @@ class AIAgentSettingsService:
                 if result.data:
                     settings = AIAgentSettings.from_db_row(result.data[0])
                     logger.info(f"Loaded org settings for org_id={organization_id}")
+
+            # Try to get any settings if none found yet (single-user setup)
+            if not settings:
+                result = self.supabase.table("ai_agent_settings").select("*").limit(1).execute()
+                if result.data:
+                    settings = AIAgentSettings.from_db_row(result.data[0])
+                    logger.info("Loaded default settings from first available record")
 
             # Use defaults if no settings found
             if not settings:
@@ -403,3 +496,55 @@ async def get_agent_settings(
     """
     service = get_settings_service(supabase_client)
     return await service.get_settings(user_id, organization_id)
+
+
+async def get_fub_browser_credentials(
+    supabase_client=None,
+    user_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Get FUB browser login credentials for Playwright SMS.
+
+    Checks in order:
+    1. User-specific settings from database
+    2. Organization settings from database
+    3. Environment variables (fallback)
+
+    Args:
+        supabase_client: Supabase client
+        user_id: User ID for settings lookup
+        organization_id: Organization ID for fallback
+
+    Returns:
+        Dict with 'type', 'email', 'password', 'agent_id' keys
+    """
+    import os
+
+    # Try to get from database settings first
+    settings = await get_agent_settings(supabase_client, user_id, organization_id)
+
+    if settings.fub_login_email and settings.fub_login_password:
+        return {
+            "type": settings.fub_login_type or "email",
+            "email": settings.fub_login_email,
+            "password": settings.fub_login_password,
+            "agent_id": user_id or organization_id or "default_agent",
+        }
+
+    # Fallback to environment variables
+    fub_email = os.getenv("FUB_LOGIN_EMAIL")
+    fub_password = os.getenv("FUB_LOGIN_PASSWORD")
+    fub_login_type = os.getenv("FUB_LOGIN_TYPE", "email")
+
+    if fub_email and fub_password:
+        return {
+            "type": fub_login_type,
+            "email": fub_email,
+            "password": fub_password,
+            "agent_id": user_id or organization_id or "default_agent",
+        }
+
+    # No credentials available
+    logger.warning("No FUB browser credentials found in settings or environment")
+    return None

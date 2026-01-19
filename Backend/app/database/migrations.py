@@ -664,6 +664,251 @@ MIGRATIONS = [
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_field_mappings_org_ai ON ai_custom_field_mappings(organization_id, ai_field);",
             "CREATE INDEX IF NOT EXISTS idx_ai_field_mappings_org ON ai_custom_field_mappings(organization_id);",
         ]
+    },
+    {
+        'version': '20250114_add_ai_scheduled_followups',
+        'description': 'Add AI scheduled follow-ups table and update ai_conversations for follow-up tracking',
+        'sql_statements': [
+            # Add follow-up tracking columns to ai_conversations
+            """
+            ALTER TABLE ai_conversations
+                ADD COLUMN IF NOT EXISTS last_channel_used VARCHAR(20),
+                ADD COLUMN IF NOT EXISTS followup_sequence_id UUID,
+                ADD COLUMN IF NOT EXISTS next_followup_at TIMESTAMPTZ;
+            """,
+            # Add constraint for last_channel_used
+            """
+            DO $$ BEGIN
+                ALTER TABLE ai_conversations
+                    ADD CONSTRAINT ai_conversations_last_channel_check
+                    CHECK (last_channel_used IS NULL OR last_channel_used IN ('sms', 'email'));
+            EXCEPTION
+                WHEN duplicate_object THEN null;
+            END $$;
+            """,
+            # Create scheduled follow-ups table
+            """
+            CREATE TABLE IF NOT EXISTS ai_scheduled_followups (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                fub_person_id BIGINT NOT NULL,
+                organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                scheduled_at TIMESTAMPTZ NOT NULL,
+                channel VARCHAR(20) NOT NULL,
+                message_type VARCHAR(50) NOT NULL,
+                sequence_step INTEGER NOT NULL DEFAULT 0,
+                sequence_id UUID NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                executed_at TIMESTAMPTZ,
+                cancelled_at TIMESTAMPTZ,
+                error_message TEXT,
+                CONSTRAINT ai_followups_channel_check
+                    CHECK (channel IN ('sms', 'email')),
+                CONSTRAINT ai_followups_status_check
+                    CHECK (status IN ('pending', 'sent', 'cancelled', 'failed', 'skipped')),
+                CONSTRAINT ai_followups_message_type_check
+                    CHECK (message_type IN ('gentle_followup', 'value_add', 'channel_switch', 'final_attempt', 'monthly_touchpoint'))
+            );
+            """,
+            # Indexes for scheduled follow-ups
+            "CREATE INDEX IF NOT EXISTS idx_ai_followups_scheduled ON ai_scheduled_followups(scheduled_at, status);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_followups_person ON ai_scheduled_followups(fub_person_id);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_followups_sequence ON ai_scheduled_followups(sequence_id);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_followups_org ON ai_scheduled_followups(organization_id);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_followups_pending ON ai_scheduled_followups(scheduled_at) WHERE status = 'pending';",
+            # Index for conversations next followup
+            "CREATE INDEX IF NOT EXISTS idx_ai_conversations_next_followup ON ai_conversations(next_followup_at) WHERE next_followup_at IS NOT NULL;",
+        ]
+    },
+    {
+        'version': '20250114_add_ai_assignment_rules',
+        'description': 'Add AI assignment rules table for controlling which leads get AI-enabled',
+        'sql_statements': [
+            # AI assignment rules table - controls which leads get AI
+            """
+            CREATE TABLE IF NOT EXISTS ai_assignment_rules (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                rule_name VARCHAR(100) NOT NULL,
+                rule_type VARCHAR(50) NOT NULL,
+                rule_value JSONB NOT NULL,
+                is_active BOOLEAN DEFAULT true,
+                priority INTEGER DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                CONSTRAINT ai_rules_type_check
+                    CHECK (rule_type IN ('stage', 'source', 'date', 'score', 'agent', 'tag'))
+            );
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ai_rules_org ON ai_assignment_rules(organization_id);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_rules_active ON ai_assignment_rules(organization_id, is_active) WHERE is_active = true;",
+            "CREATE INDEX IF NOT EXISTS idx_ai_rules_type ON ai_assignment_rules(rule_type);",
+            # Trigger for updated_at
+            """
+            DROP TRIGGER IF EXISTS ai_assignment_rules_updated_at ON ai_assignment_rules;
+            CREATE TRIGGER ai_assignment_rules_updated_at
+                BEFORE UPDATE ON ai_assignment_rules
+                FOR EACH ROW
+                EXECUTE FUNCTION update_ai_conversation_timestamp();
+            """,
+        ]
+    },
+    {
+        'version': '20250114_add_lead_tier_system',
+        'description': 'Add lead tier system for efficient scale processing and re-engagement campaigns',
+        'sql_statements': [
+            # Add tier columns to leads table for efficient querying
+            """
+            ALTER TABLE leads
+                ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'dormant',
+                ADD COLUMN IF NOT EXISTS priority_score INTEGER DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS last_ai_contact_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS tier_updated_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
+            """,
+            # Add constraint for tier values
+            """
+            DO $$ BEGIN
+                ALTER TABLE leads
+                    ADD CONSTRAINT leads_tier_check
+                    CHECK (tier IN ('hot', 'warm', 'dormant', 'archived'));
+            EXCEPTION
+                WHEN duplicate_object THEN null;
+            END $$;
+            """,
+            # Indexes for tier-based queries (critical for scale)
+            "CREATE INDEX IF NOT EXISTS idx_leads_tier_priority ON leads(tier, priority_score DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_leads_org_tier ON leads(organization_id, tier);",
+            "CREATE INDEX IF NOT EXISTS idx_leads_last_activity ON leads(last_activity_at);",
+            "CREATE INDEX IF NOT EXISTS idx_leads_last_ai_contact ON leads(last_ai_contact_at);",
+            # Composite index for dormant lead queries
+            "CREATE INDEX IF NOT EXISTS idx_leads_org_tier_activity ON leads(organization_id, tier, last_activity_at);",
+
+            # AI campaigns table for bulk re-engagement
+            """
+            CREATE TABLE IF NOT EXISTS ai_campaigns (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                campaign_name VARCHAR(255) NOT NULL,
+                campaign_type VARCHAR(50) NOT NULL,
+                status VARCHAR(20) DEFAULT 'scheduled',
+                total_leads INTEGER DEFAULT 0,
+                leads_processed INTEGER DEFAULT 0,
+                messages_sent INTEGER DEFAULT 0,
+                leads_responded INTEGER DEFAULT 0,
+                leads_converted INTEGER DEFAULT 0,
+                daily_limit INTEGER DEFAULT 200,
+                lead_filters JSONB DEFAULT '{}',
+                target_tiers JSONB DEFAULT '["dormant"]',
+                message_template VARCHAR(100),
+                custom_message TEXT,
+                scheduled_start_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                cancelled_at TIMESTAMPTZ,
+                created_by UUID REFERENCES users(id),
+                CONSTRAINT ai_campaigns_type_check
+                    CHECK (campaign_type IN ('market_update', 'price_drop_alert', 'just_checking_in', 'new_listings', 'custom')),
+                CONSTRAINT ai_campaigns_status_check
+                    CHECK (status IN ('draft', 'scheduled', 'running', 'paused', 'completed', 'cancelled'))
+            );
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ai_campaigns_org ON ai_campaigns(organization_id);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_campaigns_status ON ai_campaigns(status);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_campaigns_scheduled ON ai_campaigns(scheduled_start_at) WHERE status = 'scheduled';",
+
+            # Campaign lead tracking for detailed analytics
+            """
+            CREATE TABLE IF NOT EXISTS ai_campaign_leads (
+                campaign_id UUID NOT NULL REFERENCES ai_campaigns(id) ON DELETE CASCADE,
+                fub_person_id BIGINT NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending',
+                priority_score INTEGER DEFAULT 0,
+                scheduled_batch INTEGER DEFAULT 0,
+                sent_at TIMESTAMPTZ,
+                responded_at TIMESTAMPTZ,
+                converted_at TIMESTAMPTZ,
+                error_message TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (campaign_id, fub_person_id),
+                CONSTRAINT ai_campaign_leads_status_check
+                    CHECK (status IN ('pending', 'sent', 'responded', 'converted', 'skipped', 'failed'))
+            );
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_campaign_leads_status ON ai_campaign_leads(campaign_id, status);",
+            "CREATE INDEX IF NOT EXISTS idx_campaign_leads_batch ON ai_campaign_leads(campaign_id, scheduled_batch) WHERE status = 'pending';",
+            "CREATE INDEX IF NOT EXISTS idx_campaign_leads_person ON ai_campaign_leads(fub_person_id);",
+        ]
+    },
+    {
+        'version': '20250115_add_fub_browser_login',
+        'description': 'Add FUB browser login credentials to ai_agent_settings for Playwright SMS',
+        'sql_statements': [
+            # Add FUB login columns to ai_agent_settings
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS fub_login_email VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS fub_login_password VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS fub_login_type VARCHAR(20) DEFAULT 'email';
+            """,
+            # Add constraint for login type
+            """
+            DO $$ BEGIN
+                ALTER TABLE ai_agent_settings
+                    ADD CONSTRAINT ai_settings_login_type_check
+                    CHECK (fub_login_type IS NULL OR fub_login_type IN ('email', 'google', 'microsoft'));
+            EXCEPTION
+                WHEN duplicate_object THEN null;
+            END $$;
+            """,
+            # Add use_assigned_agent_name if it doesn't exist
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS use_assigned_agent_name BOOLEAN DEFAULT false;
+            """,
+        ]
+    },
+    {
+        'version': '20250114_add_lead_tier_triggers',
+        'description': 'Add triggers for campaign stats auto-update',
+        'sql_statements': [
+            # Triggers for campaign stats auto-update
+            """
+            CREATE OR REPLACE FUNCTION update_campaign_stats()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                IF NEW.status = 'sent' AND (OLD.status IS NULL OR OLD.status != 'sent') THEN
+                    UPDATE ai_campaigns
+                    SET messages_sent = messages_sent + 1,
+                        leads_processed = leads_processed + 1
+                    WHERE id = NEW.campaign_id;
+                END IF;
+
+                IF NEW.status = 'responded' AND (OLD.status IS NULL OR OLD.status != 'responded') THEN
+                    UPDATE ai_campaigns
+                    SET leads_responded = leads_responded + 1
+                    WHERE id = NEW.campaign_id;
+                END IF;
+
+                IF NEW.status = 'converted' AND (OLD.status IS NULL OR OLD.status != 'converted') THEN
+                    UPDATE ai_campaigns
+                    SET leads_converted = leads_converted + 1
+                    WHERE id = NEW.campaign_id;
+                END IF;
+
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """,
+            """
+            DROP TRIGGER IF EXISTS ai_campaign_leads_stats ON ai_campaign_leads;
+            CREATE TRIGGER ai_campaign_leads_stats
+                AFTER INSERT OR UPDATE ON ai_campaign_leads
+                FOR EACH ROW
+                EXECUTE FUNCTION update_campaign_stats();
+            """,
+        ]
     }
 ]
 

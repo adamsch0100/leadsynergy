@@ -45,7 +45,9 @@ from app.ai_agent.response_generator import (
     GeneratedResponse,
     LeadProfile,
     ResponseQuality,
+    ToolResponse,
 )
+from app.ai_agent.tool_executor import ToolExecutor, ExecutionResult
 from app.ai_agent.intent_detector import (
     IntentDetector,
     Intent,
@@ -252,6 +254,9 @@ class AIAgentService:
             brokerage_name=self.settings.brokerage_name,
         )
 
+        # Tool executor for action execution
+        self.tool_executor = ToolExecutor(api_key=None)  # FUB API key loaded per-org
+
         # State managers (created per-conversation)
         self._conversation_managers: Dict[str, ConversationManager] = {}
         self._qualification_managers: Dict[str, QualificationFlowManager] = {}
@@ -296,6 +301,7 @@ class AIAgentService:
             self.response_generator.personality = settings.personality_tone
             self.response_generator.agent_name = settings.agent_name
             self.response_generator.brokerage_name = settings.brokerage_name
+            self.response_generator.use_assigned_agent_name = settings.use_assigned_agent_name
 
         return settings
 
@@ -358,6 +364,28 @@ class AIAgentService:
                 response_text="",
                 channel=channel,
             )
+
+            # Step 0: Stage Eligibility Check (smart pattern matching)
+            # This blocks AI contact for stages like "Closed", "Sold", "Sphere", "Trash"
+            # and flags handoff stages like "Under Contract", "Showing", "Negotiating"
+            if lead_profile.stage_name:
+                is_eligible, stage_status, stage_reason = self.compliance_checker.check_stage_eligibility(
+                    lead_profile.stage_name
+                )
+
+                if not is_eligible:
+                    logger.info(f"Stage eligibility blocked: {stage_reason}")
+                    return AgentResponse(
+                        response_text="",
+                        result=ProcessingResult.COMPLIANCE_BLOCKED,
+                        compliance_status=stage_status,
+                        error_message=stage_reason,
+                    )
+
+                if stage_status == ComplianceStatus.HANDOFF_STAGE:
+                    # Stage requires human attention - respond but flag for handoff
+                    response.should_handoff = True
+                    response.handoff_reason = stage_reason
 
             # Step 1: Compliance Check
             if channel == "sms":
@@ -993,6 +1021,127 @@ class AIAgentService:
         """Reset conversation state for a lead."""
         self._conversation_managers.pop(lead_id, None)
         self._qualification_managers.pop(lead_id, None)
+
+    async def process_message_with_tools(
+        self,
+        message: str,
+        lead_profile: LeadProfile,
+        conversation_history: List[Dict[str, Any]] = None,
+        fub_person_id: int = None,
+        user_id: str = None,
+        organization_id: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Process message using Claude's tool use for intelligent action selection.
+
+        This is the "smart" mode where Claude decides what action to take:
+        - send_sms: Send a text message
+        - send_email: Draft an email for review
+        - create_task: Create a follow-up task for human agent
+        - schedule_showing: Propose showing times
+        - add_note: Document information in lead profile
+        - no_action: Skip response (e.g., lead said "ok", "thanks")
+
+        This is a single LLM call - Claude picks the best action AND generates content.
+
+        Args:
+            message: Incoming message from lead
+            lead_profile: Rich lead profile for context
+            conversation_history: Previous messages
+            fub_person_id: FUB person ID
+            user_id: User ID for settings
+            organization_id: Organization ID
+
+        Returns:
+            Dict with tool_response, execution_result, and metadata
+        """
+        start_time = datetime.utcnow()
+        lead_id = str(lead_profile.fub_person_id or fub_person_id or "unknown")
+
+        # Load settings
+        await self._load_db_settings(user_id, organization_id)
+
+        # Check if AI is enabled
+        if self._db_settings and not self._db_settings.is_enabled:
+            return {
+                "success": False,
+                "skipped": True,
+                "reason": "AI agent is disabled",
+            }
+
+        # Step 0: Stage Eligibility Check
+        if lead_profile.stage_name:
+            is_eligible, stage_status, stage_reason = self.compliance_checker.check_stage_eligibility(
+                lead_profile.stage_name
+            )
+
+            if not is_eligible:
+                logger.info(f"Stage eligibility blocked: {stage_reason}")
+                return {
+                    "success": False,
+                    "blocked": True,
+                    "reason": stage_reason,
+                    "status": stage_status.value,
+                }
+
+        # Step 1: Get conversation manager for state
+        conv_manager = self._get_conversation_manager(lead_id)
+        qual_manager = self._get_qualification_manager(lead_id)
+
+        try:
+            # Step 2: Let Claude choose the action using tool use
+            tool_response: ToolResponse = await self.response_generator.generate_response_with_tools(
+                incoming_message=message,
+                conversation_history=conversation_history or [],
+                lead_profile=lead_profile,
+                current_state=conv_manager.current_state.value,
+                qualification_data=qual_manager.data.to_dict(),
+            )
+
+            logger.info(f"Claude selected action: {tool_response.action} for lead {lead_id}")
+
+            # Step 3: Execute the selected action
+            execution_result: ExecutionResult = await self.tool_executor.execute(
+                tool_response=tool_response,
+                fub_person_id=fub_person_id,
+                lead_context={
+                    "first_name": lead_profile.first_name,
+                    "email": lead_profile.email,
+                    "stage": lead_profile.stage_name,
+                },
+            )
+
+            # Step 4: Update conversation state based on action
+            if tool_response.action == "schedule_showing":
+                conv_manager.transition_to(ConversationState.SCHEDULING)
+            elif tool_response.action == "create_task":
+                # Task created may indicate handoff
+                conv_manager.transition_to(ConversationState.HANDED_OFF)
+            elif tool_response.action == "no_action":
+                # No state change for no_action
+                pass
+
+            # Calculate response time
+            response_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+            return {
+                "success": execution_result.success,
+                "action": tool_response.action,
+                "action_parameters": tool_response.parameters,
+                "execution_result": execution_result.to_dict(),
+                "conversation_state": conv_manager.current_state.value,
+                "tokens_used": tool_response.tokens_used,
+                "model_used": tool_response.model_used,
+                "response_time_ms": response_time_ms,
+            }
+
+        except Exception as e:
+            logger.error(f"Error in process_message_with_tools: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "action": "error",
+            }
 
 
 # Factory function for creating agent instances

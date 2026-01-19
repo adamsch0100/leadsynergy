@@ -56,14 +56,36 @@ class WebhookCache:
 
     def is_recently_processed(self, lead_id: str, event_type: str) -> bool:
         """
-        Check if a webhook for this lead and event type was recently processed
+        Check if a webhook for this lead and event type was recently processed.
+
         :param lead_id: The ID of the lead
         :param event_type: The type of event (e.g., 'stage_update', 'tag_update')
         :return: True if this combination was processed recently, False otherwise
         """
-
         key = self._get_key(lead_id, event_type)
-        self.redis.set(key, int(time.time()), ex=self.expiration_seconds)
+        return self.redis.exists(key) > 0
+
+    def check_and_mark(self, lead_id: str, event_type: str) -> bool:
+        """
+        Atomically check if a webhook was recently processed and mark it if not.
+
+        This is the recommended method for idempotency checks - it prevents
+        race conditions by using Redis SETNX (SET if Not eXists).
+
+        :param lead_id: The ID of the lead
+        :param event_type: The type of event (e.g., 'new_lead', 'tag_update')
+        :return: True if this is a NEW webhook (not duplicate), False if duplicate
+        """
+        key = self._get_key(lead_id, event_type)
+        # SETNX returns True if key was set (new), False if it already existed (duplicate)
+        is_new = self.redis.setnx(key, int(time.time()))
+
+        if is_new:
+            # Set expiration on the new key
+            self.redis.expire(key, self.expiration_seconds)
+            return True  # New webhook, proceed with processing
+
+        return False  # Duplicate, skip processing
 
 
     def mark_as_processed(self, lead_id: str, event_type: str) -> None:

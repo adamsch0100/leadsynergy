@@ -65,6 +65,18 @@ interface LeadSource {
   next_sync_at?: string | null
   auto_discovered?: boolean
   user_id?: string
+  last_sync_results?: {
+    completed_at?: string
+    status?: 'completed' | 'failed' | 'cancelled'
+    successful?: number
+    failed?: number
+    skipped?: number
+    total_leads?: number
+    processed?: number
+    filter_summary?: any
+    error?: string
+    details?: any[]
+  } | null
 }
 
 interface LeadSourceAlias {
@@ -502,9 +514,49 @@ export default function LeadSourcesPage() {
             source.sync_interval_days = null
           }
 
+          // Parse last_sync_results field
+          if (source.last_sync_results && typeof source.last_sync_results === 'string') {
+            try {
+              source.last_sync_results = JSON.parse(source.last_sync_results)
+            } catch (e) {
+              console.warn('Failed to parse last_sync_results for source:', source.id, e)
+              source.last_sync_results = null
+            }
+          }
+
           return source
         })
         setSources(parsedSources)
+
+        // Load persisted sync results into lastSyncResults state
+        const persistedResults = new Map<string, LastSyncResult>()
+        parsedSources.forEach((source: LeadSource) => {
+          if (source.last_sync_results && source.last_sync_results.completed_at) {
+            persistedResults.set(source.id, {
+              sourceId: source.id,
+              sourceName: source.source_name,
+              completedAt: new Date(source.last_sync_results.completed_at),
+              status: source.last_sync_results.status || 'completed',
+              processed: source.last_sync_results.processed || 0,
+              total: source.last_sync_results.total_leads || 0,
+              newLeads: source.last_sync_results.successful || 0,
+              updatedLeads: source.last_sync_results.skipped || 0,
+              errors: source.last_sync_results.failed || 0,
+              fullResults: source.last_sync_results,
+            })
+          }
+        })
+        // Only set if we have persisted results and no active sync results
+        if (persistedResults.size > 0) {
+          setLastSyncResults(prev => {
+            // Merge: persisted results are the base, active sync results override
+            const merged = new Map(persistedResults)
+            prev.forEach((value, key) => {
+              merged.set(key, value)
+            })
+            return merged
+          })
+        }
       } else {
         throw new Error(data.error || 'Failed to load lead sources')
       }
@@ -1033,6 +1085,128 @@ export default function LeadSourcesPage() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to trigger sync')
+      setTimeout(() => setError(null), 5000)
+      cleanupSyncConnections()
+      setIsSyncProgressDialogOpen(false)
+      setCurrentSyncId(null)
+      setSyncingSourceId(null)
+      setSyncSourceName(null)
+    }
+  }
+
+  // Handler for Needs Action sweep (ReferralExchange and similar)
+  const handleNeedsActionSweep = async (source: LeadSource) => {
+    if (!user) {
+      setError('User session not found. Please log in again.')
+      return
+    }
+
+    if (!hasCredentials(source)) {
+      setError(`Please configure credentials for ${source.source_name} before running sweep.`)
+      setTimeout(() => setError(null), 5000)
+      return
+    }
+
+    // Cleanup any existing connections
+    cleanupSyncConnections()
+
+    setSyncingSourceId(source.id)
+    setSyncSourceName(`${source.source_name} Needs Action`)
+    setError(null)
+    setSyncMessages([])
+    setSyncStatus(null)
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/supabase/lead-sources/${source.id}/needs-action-sweep`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-ID': user.id
+        }
+      })
+
+      const data = await response.json()
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to trigger Needs Action sweep')
+      }
+
+      // Get sync_id from response
+      const syncId = data.sync_id
+      if (syncId) {
+        setCurrentSyncId(syncId)
+        setIsSyncProgressDialogOpen(true)
+
+        // Connect to SSE stream for real-time updates
+        const eventSource = new EventSource(
+          `${API_BASE_URL}/api/supabase/sync-status/${syncId}/stream`
+        )
+        eventSourceRef.current = eventSource
+
+        eventSource.onmessage = (event) => {
+          try {
+            const update = JSON.parse(event.data)
+
+            if (update.type === 'status') {
+              setSyncStatus(update.data)
+              if (update.data?.status === 'cancelled') {
+                setSyncMessages(prev => [...prev, 'Sweep cancelled by user'])
+                saveLastSyncResult(source.id, source.source_name, update.data, 'cancelled')
+                cleanupSyncConnections()
+                setIsSyncProgressDialogOpen(false)
+                setCurrentSyncId(null)
+                setSyncingSourceId(null)
+                setSyncSourceName(null)
+                setSuccessMessage(`Needs Action sweep cancelled for ${source.source_name}`)
+                setTimeout(() => setSuccessMessage(null), 3000)
+                fetchSources(false)
+              }
+            } else if (update.type === 'message') {
+              setSyncMessages(prev => [...prev, update.data.message])
+            } else if (update.type === 'complete') {
+              setSyncStatus(update.data)
+              saveLastSyncResult(source.id, source.source_name, update.data, 'completed')
+              cleanupSyncConnections()
+              setIsSyncProgressDialogOpen(false)
+              setCurrentSyncId(null)
+              setSyncingSourceId(null)
+              setSyncSourceName(null)
+              const successCount = update.data?.successful || 0
+              const failCount = update.data?.failed || 0
+              setSuccessMessage(`Needs Action sweep complete for ${source.source_name}: ${successCount} updated, ${failCount} failed.`)
+              setTimeout(() => setSuccessMessage(null), 5000)
+              fetchSources(false)
+            } else if (update.type === 'error') {
+              setError(update.message || 'Sweep error occurred')
+              saveLastSyncResult(source.id, source.source_name, update.data, 'failed')
+              cleanupSyncConnections()
+              setIsSyncProgressDialogOpen(false)
+              setCurrentSyncId(null)
+              setSyncingSourceId(null)
+              setSyncSourceName(null)
+            }
+          } catch (e) {
+            console.error('Error parsing SSE message:', e)
+          }
+        }
+
+        eventSource.onerror = (error) => {
+          console.error('SSE connection error:', error)
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close()
+            eventSourceRef.current = null
+          }
+          pollSyncStatus(syncId, source.id, source.source_name)
+        }
+      } else {
+        setSyncingSourceId(null)
+        setSyncSourceName(null)
+        setSuccessMessage(`Needs Action sweep started for ${source.source_name}`)
+        setTimeout(() => setSuccessMessage(null), 5000)
+        await fetchSources(false)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to trigger Needs Action sweep')
       setTimeout(() => setError(null), 5000)
       cleanupSyncConnections()
       setIsSyncProgressDialogOpen(false)
@@ -1790,6 +1964,20 @@ export default function LeadSourcesPage() {
                               >
                                 <MapIcon className="h-3 w-3 mr-1" />
                                 Mapping
+                              </Button>
+                            )}
+                            {/* Needs Action button for ReferralExchange */}
+                            {source.source_name?.toLowerCase().replace(/\s+/g, '') === 'referralexchange' && !isSyncing && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleNeedsActionSweep(source)}
+                                disabled={standby || !hasCredentials(source)}
+                                className="h-8 px-2 text-xs border-amber-500 text-amber-600 hover:bg-amber-50"
+                                title="Fix all leads in 'Needs Action' status"
+                              >
+                                <AlertTriangle className="h-3 w-3 mr-1" />
+                                Fix Urgent
                               </Button>
                             )}
                             {isSyncing ? (

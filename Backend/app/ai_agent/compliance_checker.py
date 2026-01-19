@@ -34,6 +34,8 @@ class ComplianceStatus(Enum):
     BLOCKED_DNC = "blocked_dnc"
     BLOCKED_OUTSIDE_HOURS = "blocked_outside_hours"
     BLOCKED_RATE_LIMIT = "blocked_rate_limit"
+    BLOCKED_STAGE = "blocked_stage"  # Lead's FUB stage blocks AI contact
+    HANDOFF_STAGE = "handoff_stage"  # Stage requires human handoff
     BLOCKED_OTHER = "blocked_other"
 
 
@@ -81,6 +83,22 @@ class ComplianceChecker:
 
     # Default timezone if unknown
     DEFAULT_TIMEZONE = "America/New_York"
+
+    # Stage patterns that BLOCK AI outreach entirely
+    # These stages mean the lead should NOT receive automated AI messages
+    BLOCK_STAGE_PATTERNS = [
+        "closed", "sold", "lost", "sphere", "trash",
+        "not interested", "dnc", "do not", "archived",
+        "inactive", "dead", "junk", "spam", "wrong",
+        "bad number", "duplicate", "deceased"
+    ]
+
+    # Stage patterns that require human handoff
+    # AI can still respond but should create task for human follow-up
+    HANDOFF_STAGE_PATTERNS = [
+        "showing", "offer", "negotiat", "contract",
+        "under agreement", "pending", "escrow", "closing"
+    ]
 
     def __init__(self, supabase_client=None, endato_client=None):
         """
@@ -174,6 +192,118 @@ class ComplianceChecker:
                     reason=f"Rate limit reached ({self.MAX_MESSAGES_PER_DAY} messages per day)",
                     next_allowed_time=next_allowed,
                 )
+
+        # All checks passed
+        return ComplianceResult(
+            status=ComplianceStatus.COMPLIANT,
+            can_send=True,
+            warnings=warnings,
+        )
+
+    def check_stage_eligibility(
+        self,
+        stage_name: str,
+    ) -> Tuple[bool, ComplianceStatus, str]:
+        """
+        Check if lead's FUB stage allows AI contact.
+
+        Uses smart pattern matching to handle custom agent-created stages.
+        For example, "Closed - Sold" and "CLOSED" both match the "closed" pattern.
+
+        Args:
+            stage_name: The lead's current FUB stage name
+
+        Returns:
+            Tuple of (is_eligible, status, reason)
+            - is_eligible: True if AI can contact, False if blocked
+            - status: ComplianceStatus indicating the result type
+            - reason: Human-readable reason for the decision
+        """
+        if not stage_name:
+            # No stage means we can proceed (new lead without stage assignment)
+            return True, ComplianceStatus.COMPLIANT, "No stage assigned"
+
+        stage_lower = stage_name.lower().strip()
+
+        # Check 1: Is this a blocked stage?
+        for pattern in self.BLOCK_STAGE_PATTERNS:
+            if pattern in stage_lower:
+                reason = f"Lead stage '{stage_name}' blocks AI contact (matched '{pattern}')"
+                logger.info(f"Stage eligibility check: BLOCKED - {reason}")
+                return False, ComplianceStatus.BLOCKED_STAGE, reason
+
+        # Check 2: Is this a handoff stage?
+        for pattern in self.HANDOFF_STAGE_PATTERNS:
+            if pattern in stage_lower:
+                reason = f"Lead stage '{stage_name}' requires human handoff (matched '{pattern}')"
+                logger.info(f"Stage eligibility check: HANDOFF - {reason}")
+                return True, ComplianceStatus.HANDOFF_STAGE, reason
+
+        # Stage doesn't match any special patterns - allowed
+        return True, ComplianceStatus.COMPLIANT, "Stage allows AI contact"
+
+    async def check_full_eligibility(
+        self,
+        fub_person_id: int,
+        organization_id: str,
+        phone_number: str,
+        stage_name: str = None,
+        recipient_timezone: str = None,
+    ) -> ComplianceResult:
+        """
+        Perform full eligibility check including stage and SMS compliance.
+
+        This is the recommended method for checking if AI should contact a lead.
+        It combines:
+        1. Stage eligibility (blocked/handoff stages)
+        2. SMS compliance (hours, rate limits, opt-out status, DNC)
+
+        Note: TCPA consent is assumed for all leads in FUB - they consented
+        when entering through the lead source platform.
+
+        Args:
+            fub_person_id: FUB person ID
+            organization_id: Organization ID
+            phone_number: Recipient phone number
+            stage_name: Lead's current FUB stage (optional but recommended)
+            recipient_timezone: Recipient's timezone (optional)
+
+        Returns:
+            ComplianceResult with full status details
+        """
+        warnings = []
+
+        # Check 1: Stage eligibility (if stage provided)
+        if stage_name:
+            is_eligible, status, reason = self.check_stage_eligibility(stage_name)
+
+            if not is_eligible:
+                return ComplianceResult(
+                    status=status,
+                    can_send=False,
+                    reason=reason,
+                )
+
+            if status == ComplianceStatus.HANDOFF_STAGE:
+                # Eligible but requires handoff - add warning
+                warnings.append(f"Stage '{stage_name}' requires human follow-up")
+
+        # Check 3: Standard SMS compliance (hours, rate limits, DNC)
+        sms_result = await self.check_sms_compliance(
+            fub_person_id=fub_person_id,
+            organization_id=organization_id,
+            phone_number=phone_number,
+            recipient_timezone=recipient_timezone,
+        )
+
+        # Merge warnings
+        if sms_result.warnings:
+            warnings.extend(sms_result.warnings)
+
+        # If SMS check failed, return that result
+        if not sms_result.can_send:
+            sms_result.warnings = warnings
+            return sms_result
 
         # All checks passed
         return ComplianceResult(

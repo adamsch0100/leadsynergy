@@ -128,12 +128,14 @@ class FUBNoteService:
             return None
 
         data = {
+            'personId': person_id,
             'subject': subject,
             'body': body,
             'isHtml': is_html
         }
 
-        return self._make_request('POST', f'/people/{person_id}/notes', data)
+        # FUB notes API uses POST /notes with personId in body
+        return self._make_request('POST', '/notes', data)
 
     def post_enrichment_note(self, person_id: int, search_type: str,
                              search_data: Dict[str, Any],

@@ -3072,6 +3072,114 @@ def trigger_immediate_sync(source_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@supabase_api.route("/lead-sources/<source_id>/needs-action-sweep", methods=["POST"])
+def trigger_needs_action_sweep(source_id):
+    """Trigger a Needs Action sweep for ReferralExchange (or similar urgent sweep for other platforms)"""
+    try:
+        import uuid
+        import threading
+        from app.service.sync_status_tracker import get_tracker
+
+        # Get user ID from headers
+        user_id = request.headers.get('X-User-ID')
+        if not user_id:
+            return jsonify({"success": False, "error": "User ID not provided"}), 400
+
+        # Get the lead source
+        source = lead_source_service.get_by_id(source_id)
+        if not source:
+            return jsonify({"success": False, "error": "Lead source not found"}), 404
+
+        # Get source name
+        if isinstance(source, dict):
+            source_name = source.get("source_name")
+        else:
+            source_name = source.source_name
+
+        # Currently only ReferralExchange is supported
+        # Normalize source name for comparison (case-insensitive, no spaces)
+        normalized_name = (source_name or "").lower().replace(" ", "")
+        if normalized_name != "referralexchange":
+            return jsonify({
+                "success": False,
+                "error": f"Needs Action sweep not yet implemented for {source_name}"
+            }), 400
+
+        # Generate unique sync ID for tracking
+        sync_id = str(uuid.uuid4())
+
+        # Initialize sync status
+        tracker = get_tracker()
+        tracker.start_sync(sync_id, source_id, f"{source_name} Needs Action", 0, user_id)
+
+        # Run sweep in background thread
+        def run_sweep():
+            try:
+                logger.info(f"Starting Needs Action sweep for {source_name}")
+                from app.referral_scrapers.referral_exchange.referral_exchange_service import ReferralExchangeService
+
+                # Get credentials from lead source settings
+                source_settings = lead_source_service.get_by_id(source_id)
+                email = None
+                password = None
+                if source_settings:
+                    if isinstance(source_settings, dict):
+                        metadata = source_settings.get('metadata', {}) or {}
+                    else:
+                        metadata = getattr(source_settings, 'metadata', {}) or {}
+                    creds = metadata.get('credentials', {}) if isinstance(metadata, dict) else {}
+                    email = creds.get('email')
+                    password = creds.get('password')
+
+                if not email or not password:
+                    logger.error("No credentials found for ReferralExchange")
+                    tracker.complete_sync(sync_id, error="No credentials configured for ReferralExchange")
+                    return
+
+                # Create service and manually set credentials
+                service = ReferralExchangeService()
+                service.email = email
+                service.password = password
+
+                results = service.run_standalone_need_action_sweep()
+
+                # Update tracker with results
+                tracker.update_progress(
+                    sync_id,
+                    processed=results.get('updated', 0),
+                    total_leads=results.get('total_checked', 0),
+                    successful=results.get('updated', 0),
+                    failed=results.get('errors', 0),
+                    skipped=0,
+                    current_lead=None
+                )
+
+                if results.get('errors', 0) > 0:
+                    tracker.complete_sync(sync_id, error=f"{results['errors']} leads failed")
+                else:
+                    tracker.complete_sync(sync_id)
+
+                logger.info(f"Needs Action sweep completed: {results}")
+
+            except Exception as e:
+                logger.error(f"Error in Needs Action sweep: {str(e)}", exc_info=True)
+                tracker.complete_sync(sync_id, error=str(e))
+
+        thread = threading.Thread(target=run_sweep, daemon=True)
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "sync_id": sync_id,
+            "message": "Needs Action sweep started in background",
+            "status_url": f"/api/supabase/sync-status/{sync_id}"
+        }), 202
+
+    except Exception as e:
+        logger.error(f"Error triggering Needs Action sweep: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @supabase_api.route("/import-fub-leads", methods=["POST"])
 def import_fub_leads(user_id=None):
     """Import all leads from Follow Up Boss API for a specific user"""

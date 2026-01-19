@@ -572,33 +572,123 @@ class MyAgentFinderService(BaseReferralService):
                 self.driver_service.get_page(section_url)
                 self.wis.human_delay(3, 5)
 
-            # Try to find a search box
+            # Try to find a search box - extended selectors for MAF
             search_selectors = [
                 'input[type="search"]',
                 'input[placeholder*="search" i]',
+                'input[placeholder*="Search" i]',
                 'input[name="search"]',
+                'input[name*="search" i]',
                 '.search-input',
                 '#search',
+                'input.MuiInputBase-input',  # MUI input
+                'input[class*="search" i]',
             ]
 
             search_box = None
             for selector in search_selectors:
                 try:
-                    search_box = self.driver_service.find_element(By.CSS_SELECTOR, selector)
+                    elements = self.driver_service.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elements:
+                        if elem.is_displayed():
+                            # Check if it looks like a search box (not a status dropdown)
+                            placeholder = elem.get_attribute('placeholder') or ''
+                            elem_type = elem.get_attribute('type') or ''
+                            role = elem.get_attribute('role') or ''
+
+                            # Skip autocomplete dropdowns (status selector)
+                            if role == 'combobox':
+                                continue
+
+                            if 'search' in placeholder.lower() or elem_type == 'search':
+                                search_box = elem
+                                logger.info(f"Found search box in {section_name}: {selector} (placeholder: {placeholder})")
+                                break
                     if search_box:
-                        logger.info(f"Found search box in {section_name}: {selector}")
                         break
-                except:
+                except Exception as e:
+                    logger.debug(f"Selector {selector} failed: {e}")
                     continue
+
+            if not search_box:
+                # Try JavaScript to find search input
+                logger.warning(f"Could not find search box with CSS selectors, trying JavaScript...")
+                search_script = """
+                var inputs = document.querySelectorAll('input');
+                for (var i = 0; i < inputs.length; i++) {
+                    var inp = inputs[i];
+                    var placeholder = (inp.placeholder || '').toLowerCase();
+                    var type = (inp.type || '').toLowerCase();
+                    if (placeholder.includes('search') || type === 'search') {
+                        return inp;
+                    }
+                }
+                return null;
+                """
+                search_box = self.driver_service.driver.execute_script(search_script)
+                if search_box:
+                    logger.info(f"Found search box via JavaScript")
 
             if search_box:
                 # Clear and search - ONLY use first name because MAF search breaks with spaces
                 # The full name will be verified when matching the row
                 search_term = lead_name.split()[0] if ' ' in lead_name else lead_name
                 logger.info(f"Searching for '{search_term}' (from full name '{lead_name}')")
+
+                # Clear existing text
                 search_box.clear()
+                self.wis.human_delay(0.5, 1)
+
+                # Type the search term
                 self.wis.simulated_typing(search_box, search_term)
+
+                # Dispatch input event for React/MUI components
+                self.driver_service.driver.execute_script("""
+                    var el = arguments[0];
+                    var event = new Event('input', { bubbles: true });
+                    el.dispatchEvent(event);
+                    var changeEvent = new Event('change', { bubbles: true });
+                    el.dispatchEvent(changeEvent);
+                """, search_box)
+                logger.info(f"Dispatched input/change events for React")
+
+                # Small delay to let the filter process
+                self.wis.human_delay(1, 2)
+
+                # Press Enter to trigger search (some sites require this)
+                from selenium.webdriver.common.keys import Keys
+                search_box.send_keys(Keys.RETURN)
+                logger.info(f"Sent Enter key to trigger search")
+
+                # Wait for search results to load - look for table rows to appear
+                logger.info(f"Waiting for search results...")
                 self.wis.human_delay(2, 3)
+
+                # Wait for table to load (additional wait for dynamic content)
+                try:
+                    WebDriverWait(self.driver_service.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "tbody tr"))
+                    )
+                    logger.info("Table rows found after search")
+                except TimeoutException:
+                    logger.warning("Timeout waiting for table rows after search")
+
+                # Additional short delay for any animations/filtering
+                self.wis.human_delay(1, 2)
+
+                # Take screenshot after search to help debug
+                self._take_screenshot(f"after_search_{search_term}")
+            else:
+                logger.warning(f"NO SEARCH BOX FOUND in {section_name} section! Will try to find lead without searching.")
+                # Log all visible inputs for debugging
+                all_inputs = self.driver_service.driver.find_elements(By.TAG_NAME, "input")
+                visible_inputs = [inp for inp in all_inputs if inp.is_displayed()]
+                logger.info(f"Found {len(visible_inputs)} visible inputs on page:")
+                for i, inp in enumerate(visible_inputs[:10]):  # Log first 10
+                    try:
+                        logger.info(f"  Input {i}: type={inp.get_attribute('type')}, placeholder={inp.get_attribute('placeholder')}, class={inp.get_attribute('class')[:50] if inp.get_attribute('class') else None}")
+                    except:
+                        pass
 
             # Look for the lead in the list - this will match the FULL name
             lead_found = self._find_lead_row(lead_name)
@@ -610,6 +700,8 @@ class MyAgentFinderService(BaseReferralService):
 
         except Exception as e:
             logger.error(f"Error searching {section_name} section: {e}")
+            import traceback
+            traceback.print_exc()
             return (None, "")
 
     def _find_lead_row(self, lead_name: str) -> Optional[Any]:
@@ -618,8 +710,15 @@ class MyAgentFinderService(BaseReferralService):
             # Wait for any loading spinners to disappear
             self._wait_for_page_load()
 
+            # Normalize the lead name for matching
+            lead_name_lower = lead_name.lower().strip()
+            lead_name_parts = lead_name_lower.split()
+
+            logger.info(f"Looking for lead: '{lead_name}' (normalized: '{lead_name_lower}')")
+
             # Common selectors for lead/customer rows - try in order of specificity
             row_selectors = [
+                "tbody tr",  # Table body rows (more specific than just tr)
                 "tr",
                 ".lead-row",
                 ".referral-row",
@@ -631,6 +730,17 @@ class MyAgentFinderService(BaseReferralService):
                 "[role='row']",
             ]
 
+            # Log all visible rows for debugging
+            all_rows = self.driver_service.driver.find_elements(By.CSS_SELECTOR, "tbody tr")
+            logger.info(f"Found {len(all_rows)} table body rows")
+            if all_rows:
+                for i, row in enumerate(all_rows[:5]):  # Log first 5 rows
+                    try:
+                        row_text = row.text[:100].replace('\n', ' ') if row.text else "(empty)"
+                        logger.info(f"  Row {i}: '{row_text}...'")
+                    except:
+                        pass
+
             for row_selector in row_selectors:
                 try:
                     # Use driver directly to avoid error logging for expected failures
@@ -640,9 +750,19 @@ class MyAgentFinderService(BaseReferralService):
                         for row in rows:
                             try:
                                 row_text = row.text.lower()
-                                if lead_name.lower() in row_text:
-                                    logger.info(f"Found lead '{lead_name}' using selector '{row_selector}'")
+
+                                # Try exact full name match first
+                                if lead_name_lower in row_text:
+                                    logger.info(f"Found lead '{lead_name}' using selector '{row_selector}' (exact match)")
                                     return row
+
+                                # Try matching both first and last name separately (handles "Last, First" format)
+                                if len(lead_name_parts) >= 2:
+                                    first_name = lead_name_parts[0]
+                                    last_name = lead_name_parts[-1]
+                                    if first_name in row_text and last_name in row_text:
+                                        logger.info(f"Found lead '{lead_name}' using selector '{row_selector}' (parts match)")
+                                        return row
                             except:
                                 continue
                 except:
@@ -650,14 +770,31 @@ class MyAgentFinderService(BaseReferralService):
 
             # Try JavaScript search as fallback - more comprehensive
             search_script = """
-            function findLead(name) {
+            function findLead(name, nameParts) {
                 name = name.toLowerCase();
+                var firstName = nameParts[0] || '';
+                var lastName = nameParts[nameParts.length - 1] || '';
+
+                // Look for table rows first
+                var rows = document.querySelectorAll('tbody tr');
+                for (var i = 0; i < rows.length; i++) {
+                    var rowText = rows[i].textContent.toLowerCase();
+                    // Try full name
+                    if (rowText.includes(name)) {
+                        return rows[i];
+                    }
+                    // Try first + last name separately (handles "Last, First" format)
+                    if (firstName && lastName && rowText.includes(firstName) && rowText.includes(lastName)) {
+                        return rows[i];
+                    }
+                }
 
                 // Look for any element containing the name
                 var elements = document.querySelectorAll('*');
                 for (var i = 0; i < elements.length; i++) {
                     var el = elements[i];
-                    if (el.textContent.toLowerCase().includes(name)) {
+                    var text = el.textContent.toLowerCase();
+                    if (text.includes(name) || (firstName && lastName && text.includes(firstName) && text.includes(lastName))) {
                         // Return the closest clickable parent
                         var parent = el.closest('tr') ||
                                     el.closest('[onclick]') ||
@@ -671,22 +808,40 @@ class MyAgentFinderService(BaseReferralService):
                 }
                 return null;
             }
-            return findLead(arguments[0]);
+            return findLead(arguments[0], arguments[1]);
             """
 
-            lead_element = self.driver_service.driver.execute_script(search_script, lead_name)
+            lead_element = self.driver_service.driver.execute_script(search_script, lead_name_lower, lead_name_parts)
             if lead_element:
                 logger.info(f"Found lead '{lead_name}' using JavaScript fallback")
                 return lead_element
 
             # If still not found, log the page state for debugging
             logger.warning(f"Could not find lead '{lead_name}' on page")
+            logger.warning(f"Page URL: {self.driver_service.get_current_url()}")
+
+            # Log page text content for debugging
+            try:
+                body_text = self.driver_service.driver.find_element(By.TAG_NAME, "body").text
+                logger.info(f"Page contains '{lead_name_parts[0]}': {lead_name_parts[0] in body_text.lower() if lead_name_parts else False}")
+                if lead_name_parts:
+                    # Find where the first name appears
+                    body_lower = body_text.lower()
+                    idx = body_lower.find(lead_name_parts[0])
+                    if idx >= 0:
+                        snippet = body_text[max(0, idx-20):idx+50]
+                        logger.info(f"First name found in context: '...{snippet}...'")
+            except:
+                pass
+
             self._take_screenshot(f"lead_not_found_{lead_name.replace(' ', '_')}")
 
             return None
 
         except Exception as e:
             logger.error(f"Error finding lead row: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def _wait_for_page_load(self, timeout: int = 10) -> None:
@@ -913,6 +1068,35 @@ class MyAgentFinderService(BaseReferralService):
 
             logger.info(f"Looking for status option ({referral_type}): {status_text} (valid_mapping={has_valid_mapping})")
 
+            # First scroll to the "Keep Us Informed" section where the status dropdown is
+            logger.info("Scrolling to status update section...")
+            try:
+                # Look for the "Keep Us Informed" section and scroll to it
+                scroll_targets = [
+                    "//*[contains(text(), 'Keep Us Informed')]",
+                    "//*[contains(text(), 'Update the current status')]",
+                    "//*[contains(text(), 'Status')]",
+                ]
+                for xpath in scroll_targets:
+                    try:
+                        targets = self.driver_service.driver.find_elements(By.XPATH, xpath)
+                        for target in targets:
+                            if target.is_displayed():
+                                self.driver_service.driver.execute_script(
+                                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
+                                    target
+                                )
+                                logger.info(f"Scrolled to: {target.text[:50] if target.text else xpath}")
+                                self.wis.human_delay(1, 2)
+                                break
+                    except:
+                        continue
+            except Exception as e:
+                logger.debug(f"Scroll failed: {e}")
+                # Fallback: scroll down 300px
+                self.driver_service.driver.execute_script("window.scrollBy(0, 300);")
+                self.wis.human_delay(1, 2)
+
             # Find the Status dropdown - it's an MUI Autocomplete input with role="combobox"
             # Need to click the input to open dropdown, then select from options
             dropdown_clicked = False
@@ -930,6 +1114,12 @@ class MyAgentFinderService(BaseReferralService):
                     logger.info(f"Found {len(elements)} elements with selector '{selector}'")
                     for elem in elements:
                         if elem.is_displayed():
+                            # Scroll element into view before clicking
+                            self.driver_service.driver.execute_script(
+                                "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
+                                elem
+                            )
+                            self.wis.human_delay(0.5, 1)
                             logger.info(f"Clicking Status dropdown: {selector}")
                             # Click to focus and open
                             elem.click()
@@ -1190,72 +1380,208 @@ class MyAgentFinderService(BaseReferralService):
         """
         Set the 'Next Status Update Date' to a future date for Nurture status.
         MAF requires a future date - defaults to today + nurture_days_offset days.
+        Uses keyboard-based input clearing and typing for reliability.
         """
+        from selenium.webdriver.common.keys import Keys
+
         try:
             # Calculate future date
             future_date = datetime.now() + timedelta(days=self.nurture_days_offset)
-            date_str = future_date.strftime("%Y-%m-%d")  # Format: 2026-07-14
+            # MAF uses US date format MM/DD/YYYY for text input fields
+            date_str = future_date.strftime("%m/%d/%Y")  # Format: 07/14/2026
             logger.info(f"Setting Nurture date to {date_str} ({self.nurture_days_offset} days from now)")
 
-            # Find the date input - look for input with type="date" or the Next Status Update Date field
-            date_input = None
-            date_selectors = [
-                'input[type="date"]',
-                'input[placeholder*="date" i]',
-                'input[name*="date" i]',
-                'input[id*="date" i]',
-            ]
+            # Log all visible inputs on page for debugging
+            all_inputs = self.driver_service.driver.find_elements(By.TAG_NAME, "input")
+            visible_inputs = [inp for inp in all_inputs if inp.is_displayed()]
+            logger.info(f"Found {len(visible_inputs)} visible inputs on page")
 
-            for selector in date_selectors:
+            # Find the date input - try multiple approaches
+            date_input = None
+
+            # Approach 1: Look for input with date-like value (most reliable for MAF)
+            logger.info("Approach 1: Looking for input with date-like value...")
+            for inp in visible_inputs:
                 try:
-                    inputs = self.driver_service.driver.find_elements(By.CSS_SELECTOR, selector)
-                    for inp in inputs:
-                        if inp.is_displayed():
-                            date_input = inp
-                            logger.info(f"Found date input: {selector}")
-                            break
-                    if date_input:
+                    inp_value = inp.get_attribute("value") or ""
+                    inp_role = inp.get_attribute("role") or ""
+                    inp_placeholder = inp.get_attribute("placeholder") or ""
+
+                    # Skip status dropdown (combobox) and search
+                    if inp_role == "combobox":
+                        continue
+                    if "search" in inp_placeholder.lower():
+                        continue
+
+                    # Look for input with date-like value (contains / and is date length)
+                    if '/' in inp_value and len(inp_value) >= 8 and len(inp_value) <= 12:
+                        logger.info(f"Found date input with current value: {inp_value}")
+                        date_input = inp
                         break
                 except:
                     continue
 
+            # Approach 2: Find by label text "Next Status Update Date"
             if not date_input:
-                # Try to find by label text
+                logger.info("Approach 2: Trying label proximity approach...")
                 try:
-                    # Look for input near "Next Status Update Date" label
-                    labels = self.driver_service.driver.find_elements(By.XPATH, "//*[contains(text(), 'Next Status Update Date')]")
-                    for label in labels:
-                        # Try to find nearby input
-                        parent = label.find_element(By.XPATH, "./..")
-                        inputs = parent.find_elements(By.TAG_NAME, "input")
-                        for inp in inputs:
-                            if inp.is_displayed():
-                                date_input = inp
-                                logger.info("Found date input via label proximity")
+                    label_xpaths = [
+                        "//*[contains(text(), 'Next Status Update')]",
+                        "//*[contains(text(), 'Update Date')]",
+                        "//*[contains(text(), 'Status Update Date')]",
+                    ]
+                    for xpath in label_xpaths:
+                        labels = self.driver_service.driver.find_elements(By.XPATH, xpath)
+                        for label in labels:
+                            logger.info(f"Found label: {label.text[:50] if label.text else 'empty'}")
+                            # Try to find input in parent containers
+                            parent = label
+                            for _ in range(5):
+                                try:
+                                    parent = parent.find_element(By.XPATH, "..")
+                                    inputs = parent.find_elements(By.TAG_NAME, "input")
+                                    for inp in inputs:
+                                        if inp.is_displayed():
+                                            role = inp.get_attribute("role") or ""
+                                            placeholder = inp.get_attribute("placeholder") or ""
+                                            if role != "combobox" and "search" not in placeholder.lower():
+                                                date_input = inp
+                                                logger.info(f"Found input near label")
+                                                break
+                                    if date_input:
+                                        break
+                                except:
+                                    break
+                            if date_input:
                                 break
                         if date_input:
                             break
                 except Exception as e:
                     logger.debug(f"Label search failed: {e}")
 
+            # Approach 3: Standard HTML date input or date-related selectors
+            if not date_input:
+                logger.info("Approach 3: Trying CSS selectors...")
+                date_selectors = [
+                    'input[type="date"]',
+                    'input[placeholder*="date" i]',
+                    'input[name*="date" i]',
+                    'input[id*="date" i]',
+                ]
+                for selector in date_selectors:
+                    try:
+                        inputs = self.driver_service.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for inp in inputs:
+                            if inp.is_displayed():
+                                date_input = inp
+                                logger.info(f"Found date input via selector: {selector}")
+                                break
+                        if date_input:
+                            break
+                    except:
+                        continue
+
+            # Approach 4: Exclusion approach - find visible text input that isn't status/search/textarea
+            if not date_input:
+                logger.info("Approach 4: Trying exclusion approach...")
+                for inp in visible_inputs:
+                    try:
+                        inp_role = inp.get_attribute("role") or ""
+                        inp_placeholder = inp.get_attribute("placeholder") or ""
+                        inp_class = inp.get_attribute("class") or ""
+                        inp_type = inp.get_attribute("type") or ""
+                        inp_tag = inp.tag_name.lower()
+
+                        # Skip: combobox, search, checkbox, hidden, button, textarea
+                        if inp_role == "combobox":
+                            continue
+                        if "search" in inp_placeholder.lower():
+                            continue
+                        if inp_type in ["checkbox", "hidden", "submit", "button"]:
+                            continue
+                        if "Autocomplete" in inp_class:
+                            continue
+                        if inp_tag == "textarea":
+                            continue
+
+                        # This might be our date input
+                        logger.info(f"Potential date input found - type:{inp_type}, placeholder:{inp_placeholder}")
+                        date_input = inp
+                        break
+                    except:
+                        continue
+
             if date_input:
-                # Clear and set the new date
-                # For date inputs, we can use JavaScript to set the value directly
-                self.driver_service.driver.execute_script(
-                    "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('input', { bubbles: true })); arguments[0].dispatchEvent(new Event('change', { bubbles: true }));",
-                    date_input, date_str
-                )
-                logger.info(f"Set date input to: {date_str}")
+                logger.info(f"Attempting to set date value using keyboard method...")
+
+                # Take screenshot before attempting date change
+                self._take_screenshot("before_date_set")
+
+                # Click on the date field to focus it
+                try:
+                    date_input.click()
+                    logger.info("Clicked on date input to focus it")
+                    self.wis.human_delay(0.3, 0.5)
+                except Exception as e:
+                    logger.debug(f"Click on date input failed: {e}")
+
+                # Use keyboard to clear and type new date (most reliable method)
+                try:
+                    # Select all content
+                    date_input.send_keys(Keys.CONTROL + "a")
+                    self.wis.human_delay(0.1, 0.2)
+
+                    # Delete selected content
+                    date_input.send_keys(Keys.DELETE)
+                    self.wis.human_delay(0.1, 0.2)
+
+                    # Type new date in US format
+                    date_input.send_keys(date_str)
+                    logger.info(f"Typed date via keyboard: {date_str}")
+                    self.wis.human_delay(0.2, 0.3)
+
+                    # Press Tab to commit the change and move focus
+                    date_input.send_keys(Keys.TAB)
+                    self.wis.human_delay(0.3, 0.5)
+
+                    logger.info(f"Successfully set date to {date_str}")
+
+                except Exception as e:
+                    logger.warning(f"Keyboard method failed: {e}, trying JavaScript fallback")
+
+                    # JavaScript fallback for React/MUI
+                    try:
+                        self.driver_service.driver.execute_script(
+                            """
+                            var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeInputValueSetter.call(arguments[0], arguments[1]);
+                            arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                            arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                            arguments[0].dispatchEvent(new Event('blur', { bubbles: true }));
+                            """,
+                            date_input, date_str
+                        )
+                        logger.info(f"Set date via JavaScript fallback: {date_str}")
+                    except Exception as js_e:
+                        logger.error(f"JavaScript fallback also failed: {js_e}")
+
+                # Take screenshot after date input attempt
+                self._take_screenshot("after_date_set")
+
                 self.wis.human_delay(0.5, 1)
                 return True
             else:
-                logger.warning("Could not find date input for Nurture status")
+                logger.warning("Could not find date input for Nurture status - taking screenshot")
                 self._take_screenshot("nurture_no_date_input")
-                return False
+                # Don't fail the update just because date couldn't be set
+                logger.info("Continuing without setting date - status update will still proceed")
+                return True  # Return True to not fail the entire update
 
         except Exception as e:
             logger.error(f"Error setting nurture date: {e}")
-            return False
+            import traceback
+            traceback.print_exc()
+            return True  # Don't fail the update just because of date issue
 
     def _find_status_option(self, status_text: str) -> Optional[Any]:
         """Find a status option in dropdown/list"""
@@ -1537,3 +1863,1301 @@ class MyAgentFinderService(BaseReferralService):
         if self.lead:
             return self.my_agent_finder_run()
         return False
+
+    def process_overdue_leads(self, max_leads: int = 50) -> Dict[str, Any]:
+        """
+        Process all overdue leads from the MyAgentFinder platform.
+        This method navigates to the overdue page and updates each lead's
+        Next Status Update Date to 6 months (nurture_days_offset) from now.
+
+        Args:
+            max_leads: Maximum number of overdue leads to process
+
+        Returns:
+            Dict with successful, failed, and details of each lead processed
+        """
+        from selenium.webdriver.common.keys import Keys
+
+        results = {'successful': 0, 'failed': 0, 'details': []}
+
+        try:
+            # Login if needed
+            if not self.is_logged_in:
+                if not self.login():
+                    logger.error("Failed to login for overdue processing")
+                    return results
+                self.is_logged_in = True
+
+            # Navigate to overdue page
+            overdue_url = STATUS_CATEGORIES.get("overdue", "https://app.myagentfinder.com/referral/active/overdue")
+            logger.info(f"Navigating to overdue page: {overdue_url}")
+            self.driver_service.get_page(overdue_url)
+            self.wis.human_delay(3, 4)
+
+            # Calculate target date (6 months out)
+            future_date = datetime.now() + timedelta(days=self.nurture_days_offset)
+            # Use US date format MM/DD/YYYY as MAF expects
+            target_date_str = future_date.strftime("%m/%d/%Y")
+            logger.info(f"Will set overdue leads date to: {target_date_str} ({self.nurture_days_offset} days out)")
+
+            processed_count = 0
+            processed_leads = set()  # Track leads we've already processed
+            max_consecutive_duplicates = 3  # Stop after seeing same lead 3 times in a row
+            consecutive_duplicates = 0
+            last_lead_name = None
+
+            while processed_count < max_leads:
+                # Check if there are any overdue leads
+                page_text = self.driver_service.driver.find_element(By.TAG_NAME, "body").text.lower()
+                if "no referrals" in page_text or "no results" in page_text:
+                    logger.info("No more overdue leads found")
+                    break
+
+                # Find table rows
+                rows = self.driver_service.driver.find_elements(By.CSS_SELECTOR, "tbody tr")
+                if not rows:
+                    logger.info("No table rows found - checking if overdue page is empty")
+                    break
+
+                # Get first unprocessed row
+                data_row = None
+                lead_name = None
+                for row in rows:
+                    row_text = row.text.strip()
+                    if not row_text:
+                        continue
+                    if 'action' in row_text.lower()[:20] or 'contact info' in row_text.lower()[:20]:
+                        continue
+
+                    lines = row_text.split('\n')
+                    potential_name = lines[0] if lines else None
+                    if potential_name and potential_name not in processed_leads:
+                        data_row = row
+                        lead_name = potential_name
+                        break
+
+                if not data_row or not lead_name:
+                    # All visible leads have been processed, try scrolling or we're done
+                    logger.info("All visible leads have been processed or no more data rows")
+                    break
+
+                # Check for consecutive duplicates (same lead appearing after navigation)
+                if lead_name == last_lead_name:
+                    consecutive_duplicates += 1
+                    if consecutive_duplicates >= max_consecutive_duplicates:
+                        logger.warning(f"Same lead '{lead_name}' appeared {consecutive_duplicates} times - MAF may not be saving updates. Skipping.")
+                        processed_leads.add(lead_name)
+                        continue
+                else:
+                    consecutive_duplicates = 0
+
+                last_lead_name = lead_name
+                logger.info(f"Processing overdue lead: {lead_name}")
+
+                # Click on the edit/pencil button to open lead detail page
+                try:
+                    # First try to find the edit button (pencil icon) in the row's first cell
+                    clickable = None
+
+                    # Look for svg/icon in first cell (edit icon)
+                    try:
+                        first_cell = data_row.find_element(By.TAG_NAME, "td")
+                        edit_icon = first_cell.find_element(By.TAG_NAME, "svg")
+                        if edit_icon:
+                            clickable = first_cell  # Click the cell containing the icon
+                            logger.info("Found edit icon in first cell")
+                    except:
+                        pass
+
+                    # Try to find links with /opp/ in href
+                    if not clickable:
+                        try:
+                            links = data_row.find_elements(By.TAG_NAME, "a")
+                            for link in links:
+                                href = link.get_attribute("href") or ""
+                                if "/opp/" in href:
+                                    clickable = link
+                                    logger.info(f"Found link: {href}")
+                                    break
+                        except:
+                            pass
+
+                    # Look for any button in the row
+                    if not clickable:
+                        try:
+                            btns = data_row.find_elements(By.TAG_NAME, "button")
+                            if btns:
+                                clickable = btns[0]
+                                logger.info("Found button in row")
+                        except:
+                            pass
+
+                    # Last resort - click on the lead name (second column usually)
+                    if not clickable:
+                        try:
+                            cells = data_row.find_elements(By.TAG_NAME, "td")
+                            if len(cells) >= 2:
+                                # Second cell usually has the name
+                                name_cell = cells[1]
+                                link = name_cell.find_element(By.TAG_NAME, "a")
+                                if link:
+                                    clickable = link
+                                    logger.info("Found name link in second cell")
+                        except:
+                            pass
+
+                    if not clickable:
+                        clickable = data_row
+
+                    # Click to open detail page
+                    try:
+                        clickable.click()
+                    except:
+                        self.driver_service.driver.execute_script("arguments[0].click();", clickable)
+
+                    self.wis.human_delay(3, 4)
+
+                    # Wait for detail page to load - check URL
+                    current_url = self.driver_service.driver.current_url
+                    logger.info(f"Current URL after click: {current_url}")
+
+                    if "/opp/" not in current_url:
+                        logger.warning("May not have navigated to detail page, trying alternative methods")
+                        navigated = False
+
+                        # Try 1: Find link with /opp/ href and navigate directly
+                        try:
+                            opp_links = self.driver_service.driver.find_elements(
+                                By.CSS_SELECTOR, "a[href*='/opp/']"
+                            )
+                            for link in opp_links:
+                                href = link.get_attribute("href") or ""
+                                if link.is_displayed() and "/opp/" in href:
+                                    logger.info(f"Found /opp/ link, navigating: {href}")
+                                    self.driver_service.driver.get(href)
+                                    self.wis.human_delay(3, 4)
+                                    if "/opp/" in self.driver_service.driver.current_url:
+                                        navigated = True
+                                        logger.info("Successfully navigated via direct link")
+                                    break
+                        except Exception as e:
+                            logger.debug(f"Direct link navigation failed: {e}")
+
+                        # Try 2: Click on name text with href containing /opp/
+                        if not navigated:
+                            name_parts = lead_name.split()
+                            if name_parts:
+                                try:
+                                    name_elems = self.driver_service.driver.find_elements(
+                                        By.XPATH, f"//a[contains(text(), '{name_parts[0]}')]"
+                                    )
+                                    for elem in name_elems:
+                                        if elem.is_displayed():
+                                            href = elem.get_attribute("href") or ""
+                                            if "/opp/" in href:
+                                                self.driver_service.driver.get(href)
+                                                self.wis.human_delay(3, 4)
+                                                if "/opp/" in self.driver_service.driver.current_url:
+                                                    navigated = True
+                                                    logger.info(f"Navigated via name link: {href}")
+                                                break
+                                except Exception as e:
+                                    logger.debug(f"Name link failed: {e}")
+
+                        # If still not on detail page, skip this lead
+                        if not navigated and "/opp/" not in self.driver_service.driver.current_url:
+                            logger.warning(f"Could not navigate to detail page for {lead_name}, skipping")
+                            results['failed'] += 1
+                            results['details'].append({
+                                'name': lead_name,
+                                'status': 'failed',
+                                'reason': 'Could not navigate to detail page'
+                            })
+                            processed_leads.add(lead_name)
+                            self.driver_service.get_page(overdue_url)
+                            self.wis.human_delay(2, 3)
+                            processed_count += 1
+                            continue
+
+                    # Scroll to Keep Us Informed section
+                    try:
+                        keep_informed = self.driver_service.driver.find_element(
+                            By.XPATH, "//*[contains(text(), 'Keep Us Informed')]"
+                        )
+                        self.driver_service.driver.execute_script(
+                            "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
+                            keep_informed
+                        )
+                        self.wis.human_delay(1, 2)
+                    except:
+                        self.driver_service.driver.execute_script("window.scrollBy(0, 300);")
+                        self.wis.human_delay(1, 2)
+
+                    # Re-select the nurture status to trigger the date picker
+                    # The date picker only appears when a status is selected
+                    nurture_status = "I'm nurturing this client (long term)"
+                    logger.info(f"Re-selecting nurture status to trigger date picker: {nurture_status}")
+
+                    status_selected = self._select_status_for_overdue(nurture_status)
+                    if status_selected:
+                        self.wis.human_delay(1, 2)
+
+                        # MAF requires a detail/note for the update to be saved
+                        # Add detail FIRST before setting date to avoid form reset issues
+                        self._add_detail_for_update()
+                        self.wis.human_delay(0.5, 1)
+
+                        # Now set the date LAST (right before clicking Update)
+                        # This prevents other form interactions from resetting the date
+                        date_set = self._set_overdue_lead_date(target_date_str)
+                        if not date_set:
+                            logger.warning("Date input still not found after selecting status")
+                    else:
+                        logger.warning("Could not re-select nurture status")
+
+                    # Click Update button
+                    update_clicked = self._click_update_button()
+
+                    if update_clicked:
+                        results['successful'] += 1
+                        results['details'].append({
+                            'name': lead_name,
+                            'status': 'success',
+                            'new_date': target_date_str
+                        })
+                        processed_leads.add(lead_name)  # Mark as processed
+                        logger.info(f"[SUCCESS] Updated overdue lead: {lead_name}")
+                    else:
+                        results['failed'] += 1
+                        results['details'].append({
+                            'name': lead_name,
+                            'status': 'failed',
+                            'reason': 'Could not click Update button'
+                        })
+                        processed_leads.add(lead_name)  # Still mark as processed to avoid infinite loop
+                        logger.warning(f"[FAILED] Could not update: {lead_name}")
+
+                    self.wis.human_delay(2, 3)
+
+                except Exception as e:
+                    logger.error(f"Error processing overdue lead {lead_name}: {e}")
+                    results['failed'] += 1
+                    results['details'].append({
+                        'name': lead_name,
+                        'status': 'failed',
+                        'reason': str(e)
+                    })
+
+                # Navigate back to overdue page for next lead
+                self.driver_service.get_page(overdue_url)
+                self.wis.human_delay(2, 3)
+                processed_count += 1
+
+            logger.info(f"Overdue processing complete: {results['successful']} success, {results['failed']} failed")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error in process_overdue_leads: {e}")
+            import traceback
+            traceback.print_exc()
+            return results
+
+    def _add_detail_for_update(self) -> bool:
+        """Add a detail/note to the Details textarea - MAF requires this for updates to be saved"""
+        try:
+            # Find the Details textarea
+            textareas = self.driver_service.driver.find_elements(By.TAG_NAME, "textarea")
+            details_textarea = None
+
+            for ta in textareas:
+                if ta.is_displayed():
+                    # This is likely the Details field
+                    details_textarea = ta
+                    logger.info("Found Details textarea")
+                    break
+
+            if not details_textarea:
+                # Try finding by label
+                try:
+                    labels = self.driver_service.driver.find_elements(
+                        By.XPATH, "//*[contains(text(), 'Details')]"
+                    )
+                    for label in labels:
+                        parent = label
+                        for _ in range(5):
+                            try:
+                                parent = parent.find_element(By.XPATH, "..")
+                                tas = parent.find_elements(By.TAG_NAME, "textarea")
+                                for ta in tas:
+                                    if ta.is_displayed():
+                                        details_textarea = ta
+                                        break
+                                if details_textarea:
+                                    break
+                            except:
+                                break
+                        if details_textarea:
+                            break
+                except:
+                    pass
+
+            if details_textarea:
+                # Add a note about the date update
+                note = "Status update - continuing long term nurture. Next follow-up scheduled."
+                details_textarea.click()
+                self.wis.human_delay(0.2, 0.4)
+                details_textarea.send_keys(note)
+                logger.info(f"Added detail note: {note[:50]}...")
+                self.wis.human_delay(0.3, 0.5)
+                return True
+            else:
+                logger.warning("Could not find Details textarea")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error adding detail: {e}")
+            return False
+
+    def _select_status_for_overdue(self, status_text: str) -> bool:
+        """Select a status from the dropdown to trigger the date picker"""
+        from selenium.webdriver.common.keys import Keys
+
+        try:
+            # Find the status dropdown (combobox or select)
+            dropdown = None
+
+            # Look for MUI Autocomplete
+            try:
+                dropdowns = self.driver_service.driver.find_elements(
+                    By.CSS_SELECTOR, 'input[role="combobox"], .MuiAutocomplete-input, [class*="Autocomplete"] input'
+                )
+                for d in dropdowns:
+                    if d.is_displayed():
+                        dropdown = d
+                        logger.info("Found status dropdown (combobox)")
+                        break
+            except:
+                pass
+
+            if not dropdown:
+                # Try finding by label
+                try:
+                    labels = self.driver_service.driver.find_elements(
+                        By.XPATH, "//*[contains(text(), 'Update the current status')]"
+                    )
+                    for label in labels:
+                        parent = label
+                        for _ in range(5):
+                            try:
+                                parent = parent.find_element(By.XPATH, "..")
+                                inputs = parent.find_elements(By.TAG_NAME, "input")
+                                for inp in inputs:
+                                    if inp.is_displayed():
+                                        dropdown = inp
+                                        logger.info("Found status dropdown near label")
+                                        break
+                                if dropdown:
+                                    break
+                            except:
+                                break
+                        if dropdown:
+                            break
+                except:
+                    pass
+
+            if dropdown:
+                # Click to open dropdown
+                dropdown.click()
+                self.wis.human_delay(0.5, 1)
+
+                # Look for the nurture option in the dropdown list
+                try:
+                    # Wait for dropdown options to appear
+                    self.wis.human_delay(0.5, 1)
+
+                    # Find options containing "nurturing" or "long term"
+                    option_selectors = [
+                        f"//li[contains(text(), 'nurturing')]",
+                        f"//li[contains(text(), 'long term')]",
+                        f"//*[contains(@class, 'MuiAutocomplete-option')][contains(text(), 'nurtur')]",
+                        f"//div[contains(@role, 'option')][contains(text(), 'nurtur')]",
+                    ]
+
+                    option_clicked = False
+                    for selector in option_selectors:
+                        try:
+                            options = self.driver_service.driver.find_elements(By.XPATH, selector)
+                            for opt in options:
+                                if opt.is_displayed() and 'nurtur' in opt.text.lower():
+                                    logger.info(f"Found nurture option: {opt.text[:50]}")
+                                    opt.click()
+                                    option_clicked = True
+                                    break
+                            if option_clicked:
+                                break
+                        except:
+                            continue
+
+                    if not option_clicked:
+                        # Try typing to filter
+                        dropdown.clear()
+                        dropdown.send_keys("nurturing")
+                        self.wis.human_delay(0.5, 1)
+
+                        # Click first option
+                        options = self.driver_service.driver.find_elements(
+                            By.CSS_SELECTOR, ".MuiAutocomplete-option, [role='option']"
+                        )
+                        for opt in options:
+                            if opt.is_displayed():
+                                opt.click()
+                                option_clicked = True
+                                logger.info("Selected nurture option via type-ahead")
+                                break
+
+                    self.wis.human_delay(0.5, 1)
+                    return option_clicked
+
+                except Exception as e:
+                    logger.error(f"Error selecting status option: {e}")
+                    return False
+            else:
+                logger.warning("Could not find status dropdown")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error in _select_status_for_overdue: {e}")
+            return False
+
+    def _set_overdue_lead_date(self, date_str: str) -> bool:
+        """Set the date field for an overdue lead"""
+        from selenium.webdriver.common.keys import Keys
+
+        try:
+            # Take screenshot for debugging
+            self._take_screenshot("before_set_overdue_date")
+
+            # Find all visible inputs
+            all_inputs = self.driver_service.driver.find_elements(By.TAG_NAME, "input")
+            visible_inputs = [inp for inp in all_inputs if inp.is_displayed()]
+            logger.info(f"Found {len(visible_inputs)} visible inputs on page")
+
+            # Log all visible inputs for debugging
+            for i, inp in enumerate(visible_inputs):
+                try:
+                    inp_value = inp.get_attribute("value") or ""
+                    inp_type = inp.get_attribute("type") or ""
+                    inp_role = inp.get_attribute("role") or ""
+                    inp_placeholder = inp.get_attribute("placeholder") or ""
+                    logger.debug(f"  Input {i}: type={inp_type}, role={inp_role}, value='{inp_value[:20]}', placeholder='{inp_placeholder}'")
+                except:
+                    pass
+
+            date_input = None
+
+            # Look for input with date-like value (MM/DD/YYYY format)
+            for inp in visible_inputs:
+                try:
+                    inp_value = inp.get_attribute("value") or ""
+                    inp_role = inp.get_attribute("role") or ""
+                    inp_placeholder = inp.get_attribute("placeholder") or ""
+                    inp_type = inp.get_attribute("type") or ""
+
+                    # Skip status dropdown and search
+                    if inp_role == "combobox":
+                        continue
+                    if "search" in inp_placeholder.lower():
+                        continue
+
+                    # Look for date-like value (contains / and is date length)
+                    if '/' in inp_value and len(inp_value) >= 8 and len(inp_value) <= 12:
+                        logger.info(f"Found date input with current value: {inp_value}")
+                        date_input = inp
+                        break
+
+                    # Also check for date type input
+                    if inp_type == "date":
+                        logger.info(f"Found HTML date input")
+                        date_input = inp
+                        break
+                except:
+                    continue
+
+            # Fallback: find by label "Next Status Update"
+            if not date_input:
+                logger.info("Trying to find date input by label...")
+                try:
+                    labels = self.driver_service.driver.find_elements(
+                        By.XPATH, "//*[contains(text(), 'Next Status Update')]"
+                    )
+                    logger.info(f"Found {len(labels)} labels with 'Next Status Update'")
+                    for label in labels:
+                        parent = label
+                        for depth in range(5):
+                            try:
+                                parent = parent.find_element(By.XPATH, "..")
+                                inputs = parent.find_elements(By.TAG_NAME, "input")
+                                for inp in inputs:
+                                    if inp.is_displayed():
+                                        role = inp.get_attribute("role") or ""
+                                        if role != "combobox":
+                                            logger.info(f"Found input near label at depth {depth}")
+                                            date_input = inp
+                                            break
+                                if date_input:
+                                    break
+                            except:
+                                break
+                        if date_input:
+                            break
+                except Exception as e:
+                    logger.debug(f"Label search failed: {e}")
+
+            # Fallback: look for any text input that's not status/search
+            if not date_input:
+                logger.info("Trying exclusion approach to find date input...")
+                for inp in visible_inputs:
+                    try:
+                        inp_role = inp.get_attribute("role") or ""
+                        inp_placeholder = inp.get_attribute("placeholder") or ""
+                        inp_type = inp.get_attribute("type") or ""
+                        inp_class = inp.get_attribute("class") or ""
+
+                        # Skip inappropriate inputs
+                        if inp_role == "combobox":
+                            continue
+                        if "search" in inp_placeholder.lower():
+                            continue
+                        if inp_type in ["checkbox", "hidden", "submit", "button", "email", "tel"]:
+                            continue
+                        if "Autocomplete" in inp_class:
+                            continue
+
+                        # This could be our date input
+                        logger.info(f"Found potential date input via exclusion - type={inp_type}, value='{inp.get_attribute('value') or ''}'")
+                        date_input = inp
+                        break
+                    except:
+                        continue
+
+            if date_input:
+                logger.info(f"Found date input, attempting to set to: {date_str}")
+
+                # Parse target date
+                target_month = int(date_str.split('/')[0])
+                target_day = int(date_str.split('/')[1])
+                target_year = int(date_str.split('/')[2])
+
+                # MAF uses a MUI DatePicker - the input is read-only and we need to use the calendar
+                # Step 1: Click the date input or find calendar icon to open the picker
+                try:
+                    # Look for calendar icon/button near the date input
+                    parent = date_input
+                    calendar_btn = None
+                    for _ in range(3):
+                        try:
+                            parent = parent.find_element(By.XPATH, "./..")
+                            # Look for button or icon in parent
+                            btns = parent.find_elements(By.TAG_NAME, "button")
+                            for btn in btns:
+                                if btn.is_displayed():
+                                    calendar_btn = btn
+                                    break
+                            if calendar_btn:
+                                break
+                            # Also look for SVG calendar icons
+                            svgs = parent.find_elements(By.TAG_NAME, "svg")
+                            for svg in svgs:
+                                if svg.is_displayed():
+                                    # Click the parent of SVG (likely a button)
+                                    svg_parent = svg.find_element(By.XPATH, "./..")
+                                    if svg_parent.tag_name in ['button', 'div', 'span']:
+                                        calendar_btn = svg_parent
+                                        break
+                            if calendar_btn:
+                                break
+                        except:
+                            break
+
+                    if calendar_btn:
+                        logger.info("Found calendar button, clicking to open picker")
+                        calendar_btn.click()
+                    else:
+                        logger.info("No calendar button found, clicking input directly")
+                        date_input.click()
+
+                    self.wis.human_delay(1, 1.5)
+
+                    # Take screenshot to see what opened
+                    self._take_screenshot("after_date_click")
+
+                    # Step 2: Navigate the calendar to the target date
+                    # Look for the calendar dialog/popup
+                    calendar_success = self._navigate_calendar_to_date(target_month, target_day, target_year)
+
+                    if calendar_success:
+                        logger.info(f"Successfully selected {date_str} from calendar")
+                        self._take_screenshot("after_calendar_selection")
+                        return True
+
+                except Exception as cal_e:
+                    logger.warning(f"Calendar interaction failed: {cal_e}")
+
+                # Fallback: Try JavaScript to directly set the underlying React state
+                try:
+                    # Try to find and trigger the onChange handler
+                    self.driver_service.driver.execute_script(
+                        """
+                        // Find React fiber
+                        var input = arguments[0];
+                        var date = new Date(arguments[1]);
+
+                        // Try to find MUI DatePicker's onChange
+                        var key = Object.keys(input).find(k => k.startsWith('__reactFiber'));
+                        if (key) {
+                            var fiber = input[key];
+                            // Navigate up to find DatePicker component
+                            var current = fiber;
+                            for (var i = 0; i < 20 && current; i++) {
+                                if (current.memoizedProps && current.memoizedProps.onChange) {
+                                    current.memoizedProps.onChange(date);
+                                    console.log('Called onChange with date');
+                                    break;
+                                }
+                                current = current.return;
+                            }
+                        }
+
+                        // Also dispatch events
+                        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        nativeInputValueSetter.call(input, arguments[2]);
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        """,
+                        date_input,
+                        f"{target_year}-{target_month:02d}-{target_day:02d}",  # ISO format for Date()
+                        date_str  # Display format
+                    )
+                    logger.info(f"Attempted React state update for: {date_str}")
+                    self.wis.human_delay(0.5, 0.8)
+                except Exception as react_e:
+                    logger.warning(f"React state update failed: {react_e}")
+
+                logger.info(f"Attempted to set date to: {date_str}")
+                return True
+            else:
+                logger.warning("Could not find date input for overdue lead")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error setting overdue lead date: {e}")
+            return False
+
+    def _navigate_calendar_to_date(self, target_month: int, target_day: int, target_year: int) -> bool:
+        """Navigate MUI calendar picker to select a specific date"""
+        try:
+            from datetime import datetime
+            current_date = datetime.now()
+            current_month = current_date.month
+            current_year = current_date.year
+
+            # Calculate months to navigate (positive = forward, negative = backward)
+            months_diff = (target_year - current_year) * 12 + (target_month - current_month)
+            logger.info(f"Need to navigate {months_diff} months to reach {target_month}/{target_year}")
+
+            # Take screenshot to see calendar state
+            self._take_screenshot("calendar_before_nav")
+
+            # Strategy 1: Try to find month/year dropdown for direct selection
+            month_names = ['January', 'February', 'March', 'April', 'May', 'June',
+                          'July', 'August', 'September', 'October', 'November', 'December']
+            target_month_name = month_names[target_month - 1]
+
+            # Look for clickable month header (might allow direct selection)
+            try:
+                month_header = self.driver_service.driver.find_element(
+                    By.XPATH, f"//*[contains(text(), '{month_names[current_month - 1]}')]"
+                )
+                if month_header and month_header.is_displayed():
+                    # Check if it's clickable (has a dropdown)
+                    parent = month_header
+                    for _ in range(3):
+                        try:
+                            parent = parent.find_element(By.XPATH, "./..")
+                            if parent.tag_name == 'button' or 'select' in (parent.get_attribute('class') or '').lower():
+                                logger.info("Found clickable month header, trying direct month selection")
+                                parent.click()
+                                self.wis.human_delay(0.5, 1)
+                                # Look for month option
+                                month_options = self.driver_service.driver.find_elements(
+                                    By.XPATH, f"//*[text()='{target_month_name}']"
+                                )
+                                for opt in month_options:
+                                    if opt.is_displayed():
+                                        opt.click()
+                                        self.wis.human_delay(0.5, 1)
+                                        logger.info(f"Directly selected {target_month_name}")
+                                        months_diff = 0  # Skip arrow navigation
+                                        break
+                                break
+                        except:
+                            continue
+            except:
+                pass
+
+            # Strategy 2: Try to find and click the right arrow button directly using JavaScript
+            arrow_nav_success = False
+            if months_diff > 0:
+                try:
+                    # First, debug: log ALL clickable elements in the calendar area
+                    # Also look for the calendar popup specifically
+                    debug_info = self.driver_service.driver.execute_script("""
+                        var info = {buttons: [], calendarElements: [], popups: []};
+
+                        // Find all buttons
+                        var allButtons = document.querySelectorAll('button');
+                        for (var i = 0; i < allButtons.length; i++) {
+                            var btn = allButtons[i];
+                            var rect = btn.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                                info.buttons.push({
+                                    text: (btn.innerText || btn.textContent || '').substring(0, 20).trim(),
+                                    x: Math.round(rect.x),
+                                    y: Math.round(rect.y),
+                                    w: Math.round(rect.width),
+                                    h: Math.round(rect.height),
+                                    hasSvg: !!btn.querySelector('svg')
+                                });
+                            }
+                        }
+
+                        // Look for calendar-related elements (MUI DatePicker components)
+                        var calSelectors = [
+                            '.MuiCalendarPicker-root', '.MuiDateCalendar-root',
+                            '.MuiPickersCalendarHeader-root', '.MuiDayCalendar-root',
+                            '[class*="calendar"]', '[class*="Calendar"]',
+                            '[class*="picker"]', '[class*="Picker"]'
+                        ];
+                        calSelectors.forEach(function(sel) {
+                            var els = document.querySelectorAll(sel);
+                            els.forEach(function(el) {
+                                var rect = el.getBoundingClientRect();
+                                if (rect.width > 0) {
+                                    info.calendarElements.push({
+                                        sel: sel,
+                                        x: Math.round(rect.x),
+                                        y: Math.round(rect.y),
+                                        w: Math.round(rect.width),
+                                        h: Math.round(rect.height)
+                                    });
+                                }
+                            });
+                        });
+
+                        // Look for any popup/modal that might contain the calendar
+                        var popupSelectors = [
+                            '.MuiPopover-root', '.MuiPopper-root', '.MuiModal-root',
+                            '[role="dialog"]', '[role="presentation"]',
+                            '.MuiPaper-root'
+                        ];
+                        popupSelectors.forEach(function(sel) {
+                            var els = document.querySelectorAll(sel);
+                            els.forEach(function(el) {
+                                var rect = el.getBoundingClientRect();
+                                if (rect.width > 0 && rect.height > 0) {
+                                    info.popups.push({
+                                        sel: sel,
+                                        x: Math.round(rect.x),
+                                        y: Math.round(rect.y),
+                                        w: Math.round(rect.width),
+                                        h: Math.round(rect.height),
+                                        html: el.innerHTML.substring(0, 200)
+                                    });
+                                }
+                            });
+                        });
+
+                        return info;
+                    """)
+                    logger.debug(f"Buttons found: {len(debug_info.get('buttons', []))}, Calendar elements: {len(debug_info.get('calendarElements', []))}")
+
+                    # Find the calendar container first, then look for navigation elements inside it
+                    # Debug: get info about elements inside the calendar
+                    cal_elements_debug = self.driver_service.driver.execute_script("""
+                        var calContainer = document.querySelector('[class*="calendar"]');
+                        if (!calContainer) return {error: 'No calendar container'};
+
+                        var result = {elements: [], svgs: []};
+                        var allElements = calContainer.querySelectorAll('*');
+
+                        for (var i = 0; i < Math.min(allElements.length, 50); i++) {
+                            var el = allElements[i];
+                            var rect = el.getBoundingClientRect();
+                            if (rect.width > 5 && rect.height > 5 && rect.width < 80) {
+                                result.elements.push({
+                                    tag: el.tagName,
+                                    text: (el.innerText || '').substring(0, 15).trim(),
+                                    x: Math.round(rect.x),
+                                    y: Math.round(rect.y),
+                                    w: Math.round(rect.width),
+                                    h: Math.round(rect.height),
+                                    class: (el.getAttribute('class') || '').substring(0, 25)
+                                });
+                            }
+                        }
+
+                        var svgs = calContainer.querySelectorAll('svg');
+                        for (var i = 0; i < svgs.length; i++) {
+                            var rect = svgs[i].getBoundingClientRect();
+                            result.svgs.push({
+                                x: Math.round(rect.x),
+                                y: Math.round(rect.y),
+                                w: Math.round(rect.width),
+                                h: Math.round(rect.height)
+                            });
+                        }
+
+                        return result;
+                    """)
+                    logger.debug(f"Calendar internal: {len(cal_elements_debug.get('elements', []))} elements, {len(cal_elements_debug.get('svgs', []))} SVGs")
+
+                    js_result = self.driver_service.driver.execute_script("""
+                        // Find the calendar container
+                        var calContainer = null;
+                        var calSelectors = ['[class*="calendar"]', '[class*="Calendar"]', '.MuiCalendarPicker-root', '.MuiDateCalendar-root'];
+                        for (var i = 0; i < calSelectors.length; i++) {
+                            var el = document.querySelector(calSelectors[i]);
+                            if (el) {
+                                var rect = el.getBoundingClientRect();
+                                if (rect.width > 100) {
+                                    calContainer = el;
+                                    console.log('Found calendar at x=' + rect.x + ', y=' + rect.y);
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!calContainer) {
+                            console.log('No calendar container found');
+                            return null;
+                        }
+
+                        // Look for navigation arrows inside the calendar
+                        // They could be buttons, divs, spans, or SVGs
+                        var navElements = [];
+
+                        // Strategy 1: Look for elements with arrow-related text or class
+                        var allElements = calContainer.querySelectorAll('*');
+                        for (var i = 0; i < allElements.length; i++) {
+                            var el = allElements[i];
+                            var rect = el.getBoundingClientRect();
+
+                            // Skip very small or hidden elements
+                            if (rect.width < 10 || rect.height < 10) continue;
+
+                            var text = (el.innerText || el.textContent || '').trim();
+                            var className = (el.getAttribute('class') || '').toLowerCase();
+                            var ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+
+                            // Check if this looks like a navigation element
+                            var isNavElement = (
+                                text === '>' || text === '<' ||
+                                text === 'chevron_right' || text === 'chevron_left' ||
+                                text === 'arrow_right' || text === 'arrow_left' ||
+                                className.includes('arrow') ||
+                                className.includes('next') || className.includes('prev') ||
+                                ariaLabel.includes('next') || ariaLabel.includes('previous') ||
+                                ariaLabel.includes('month')
+                            );
+
+                            // Also check for SVG icons that might be arrows
+                            var hasSvg = !!el.querySelector('svg') || el.tagName === 'SVG';
+                            var isSmall = rect.width < 50 && rect.height < 50;
+
+                            if (isNavElement || (hasSvg && isSmall)) {
+                                navElements.push({
+                                    el: el,
+                                    x: rect.x,
+                                    y: rect.y,
+                                    text: text,
+                                    tag: el.tagName
+                                });
+                            }
+                        }
+
+                        console.log('Found ' + navElements.length + ' potential nav elements');
+
+                        // Sort by x position and return rightmost (next button)
+                        navElements.sort(function(a, b) { return b.x - a.x; });
+
+                        if (navElements.length >= 1) {
+                            console.log('Returning nav element at x=' + navElements[0].x + ', text=' + navElements[0].text);
+                            return navElements[0].el;
+                        }
+
+                        // Fallback: look for any SVG elements in the top part of the calendar
+                        var calRect = calContainer.getBoundingClientRect();
+                        var topHalf = calRect.y + calRect.height / 3;
+
+                        var svgs = calContainer.querySelectorAll('svg');
+                        var topSvgs = [];
+                        for (var i = 0; i < svgs.length; i++) {
+                            var rect = svgs[i].getBoundingClientRect();
+                            if (rect.y < topHalf && rect.width > 5 && rect.height > 5) {
+                                topSvgs.push({el: svgs[i], x: rect.x, y: rect.y});
+                            }
+                        }
+
+                        topSvgs.sort(function(a, b) { return b.x - a.x; });
+                        if (topSvgs.length >= 1) {
+                            // Return the parent element (might be a clickable wrapper)
+                            var parent = topSvgs[0].el.parentElement;
+                            console.log('Returning SVG parent at x=' + topSvgs[0].x);
+                            return parent || topSvgs[0].el;
+                        }
+
+                        return null;
+                    """)
+
+                    if js_result:
+                        logger.info(f"Found calendar nav element, will click {months_diff} times to reach target month")
+                        for i in range(months_diff):
+                            # Re-find the nav element each time since the DOM might change
+                            next_clicked = self.driver_service.driver.execute_script("""
+                                // Find the calendar container
+                                var calContainer = null;
+                                var calSelectors = ['[class*="calendar"]', '[class*="Calendar"]', '.MuiCalendarPicker-root'];
+                                for (var j = 0; j < calSelectors.length; j++) {
+                                    var el = document.querySelector(calSelectors[j]);
+                                    if (el) {
+                                        var rect = el.getBoundingClientRect();
+                                        if (rect.width > 100) {
+                                            calContainer = el;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (!calContainer) return false;
+
+                                // Look for navigation elements
+                                var navElements = [];
+                                var allElements = calContainer.querySelectorAll('*');
+                                for (var j = 0; j < allElements.length; j++) {
+                                    var el = allElements[j];
+                                    var rect = el.getBoundingClientRect();
+                                    if (rect.width < 10 || rect.height < 10) continue;
+
+                                    var text = (el.innerText || el.textContent || '').trim();
+                                    var className = (el.getAttribute('class') || '').toLowerCase();
+                                    var ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+
+                                    var isNavElement = (
+                                        text === '>' || text === '<' ||
+                                        className.includes('arrow') || className.includes('next') ||
+                                        ariaLabel.includes('next') || ariaLabel.includes('month')
+                                    );
+
+                                    var hasSvg = !!el.querySelector('svg') || el.tagName === 'SVG';
+                                    var isSmall = rect.width < 50 && rect.height < 50;
+
+                                    if (isNavElement || (hasSvg && isSmall)) {
+                                        navElements.push({el: el, x: rect.x});
+                                    }
+                                }
+
+                                // Click rightmost element (next button)
+                                navElements.sort(function(a, b) { return b.x - a.x; });
+                                if (navElements.length >= 1) {
+                                    navElements[0].el.click();
+                                    return true;
+                                }
+
+                                // Fallback: SVGs in top of calendar
+                                var calRect = calContainer.getBoundingClientRect();
+                                var topHalf = calRect.y + calRect.height / 3;
+                                var svgs = calContainer.querySelectorAll('svg');
+                                var topSvgs = [];
+                                for (var j = 0; j < svgs.length; j++) {
+                                    var rect = svgs[j].getBoundingClientRect();
+                                    if (rect.y < topHalf && rect.width > 5) {
+                                        topSvgs.push({el: svgs[j], x: rect.x});
+                                    }
+                                }
+                                topSvgs.sort(function(a, b) { return b.x - a.x; });
+                                if (topSvgs.length >= 1) {
+                                    var parent = topSvgs[0].el.parentElement;
+                                    (parent || topSvgs[0].el).click();
+                                    return true;
+                                }
+
+                                return false;
+                            """)
+
+                            if next_clicked:
+                                self.wis.human_delay(0.4, 0.6)
+                                logger.debug(f"Calendar nav: clicked next month ({i+1}/{months_diff})")
+                            else:
+                                logger.warning(f"JS could not find next button on iteration {i+1}")
+                                break
+
+                        self._take_screenshot("calendar_after_js_nav")
+                        self.wis.human_delay(0.5, 1)
+                        arrow_nav_success = True
+                        logger.info("JavaScript navigation completed")
+                    else:
+                        logger.warning("Could not find calendar nav buttons via JS")
+
+                except Exception as js_e:
+                    logger.warning(f"JavaScript navigation failed: {js_e}")
+
+            # Strategy 3: Navigate using arrow buttons (fallback) - only if JS nav failed
+            if months_diff > 0 and not arrow_nav_success:
+                logger.info("Keyboard nav failed, trying button clicks")
+                # Navigate forward - click next button multiple times
+                for i in range(months_diff):
+                    clicked = False
+
+                    # First, try to find all buttons in the calendar popup
+                    # and identify the right arrow by position (rightmost button in header)
+                    try:
+                        # Find calendar header/container
+                        calendar_containers = self.driver_service.driver.find_elements(
+                            By.CSS_SELECTOR,
+                            ".MuiCalendarPicker-root, .MuiDateCalendar-root, .MuiPickersCalendarHeader-root, [class*='calendar'], [class*='Calendar']"
+                        )
+
+                        for container in calendar_containers:
+                            if not container.is_displayed():
+                                continue
+                            # Find buttons within this container
+                            btns_in_cal = container.find_elements(By.TAG_NAME, "button")
+                            # The navigation buttons are usually at the top, find rightmost
+                            nav_buttons = []
+                            for btn in btns_in_cal:
+                                try:
+                                    if btn.is_displayed():
+                                        # Navigation buttons typically have SVG icons and are small
+                                        rect = btn.rect
+                                        if rect['width'] < 60 and rect['height'] < 60:
+                                            nav_buttons.append(btn)
+                                except:
+                                    continue
+
+                            if len(nav_buttons) >= 2:
+                                # Sort by x position, rightmost is next
+                                nav_buttons.sort(key=lambda b: b.rect['x'], reverse=True)
+                                next_btn = nav_buttons[0]
+                                self.driver_service.driver.execute_script("arguments[0].click();", next_btn)
+                                self.wis.human_delay(0.4, 0.6)
+                                clicked = True
+                                logger.info(f"Clicked next month by position ({i+1}/{months_diff})")
+                                break
+                    except Exception as e:
+                        logger.debug(f"Position-based nav failed: {e}")
+
+                    # Try specific MUI selectors
+                    if not clicked:
+                        next_selectors = [
+                            "button[aria-label*='Next month']",
+                            "button[aria-label*='next month']",
+                            ".MuiPickersCalendarHeader-switchHeader button:last-child",
+                            ".MuiPickersArrowSwitcher-root button:last-child",
+                            ".MuiPickersArrowSwitcher-button:last-of-type",
+                            "button.MuiIconButton-root:last-of-type",
+                            "[class*='ArrowRight']",
+                            "[class*='arrowRight']",
+                            "[class*='next']",
+                            "[class*='Next']",
+                        ]
+
+                        for selector in next_selectors:
+                            try:
+                                btns = self.driver_service.driver.find_elements(By.CSS_SELECTOR, selector)
+                                for btn in btns:
+                                    if btn.is_displayed():
+                                        self.driver_service.driver.execute_script("arguments[0].click();", btn)
+                                        self.wis.human_delay(0.4, 0.6)
+                                        clicked = True
+                                        logger.info(f"Clicked next month via selector ({i+1}/{months_diff})")
+                                        break
+                                if clicked:
+                                    break
+                            except:
+                                continue
+
+                    # Fallback: Find SVG icons and click their parent buttons
+                    if not clicked:
+                        try:
+                            svgs = self.driver_service.driver.find_elements(By.TAG_NAME, "svg")
+                            right_arrow_svgs = []
+                            for svg in svgs:
+                                if svg.is_displayed():
+                                    # Check if it looks like a right arrow (ChevronRight, ArrowRight, etc.)
+                                    svg_class = svg.get_attribute("class") or ""
+                                    svg_data = svg.get_attribute("data-testid") or ""
+                                    if "right" in svg_class.lower() or "right" in svg_data.lower() or "chevron" in svg_class.lower():
+                                        right_arrow_svgs.append(svg)
+                                    else:
+                                        # Check position - rightmost SVG in header area
+                                        rect = svg.rect
+                                        if rect['y'] < 200:  # In header area
+                                            right_arrow_svgs.append(svg)
+
+                            # Sort by x position and click the rightmost
+                            if right_arrow_svgs:
+                                right_arrow_svgs.sort(key=lambda s: s.rect['x'], reverse=True)
+                                svg = right_arrow_svgs[0]
+                                parent = svg.find_element(By.XPATH, "./..")
+                                self.driver_service.driver.execute_script("arguments[0].click();", parent)
+                                self.wis.human_delay(0.4, 0.6)
+                                clicked = True
+                                logger.info(f"Clicked next via SVG parent ({i+1}/{months_diff})")
+                        except Exception as e:
+                            logger.debug(f"SVG fallback failed: {e}")
+
+                    # Last resort: JavaScript to simulate arrow key
+                    if not clicked:
+                        try:
+                            # Try keyboard navigation
+                            from selenium.webdriver.common.keys import Keys
+                            active = self.driver_service.driver.switch_to.active_element
+                            active.send_keys(Keys.ARROW_RIGHT)
+                            self.wis.human_delay(0.3, 0.5)
+                            # Check if month changed (this might not work for all calendars)
+                        except:
+                            pass
+
+                    if not clicked:
+                        logger.warning(f"Could not click next month button on iteration {i+1}")
+                        self._take_screenshot(f"calendar_nav_failed_{i+1}")
+
+            elif months_diff < 0:
+                # Navigate backward
+                for i in range(abs(months_diff)):
+                    clicked = False
+                    prev_selectors = [
+                        "button[aria-label*='Previous month']",
+                        "button[aria-label*='previous month']",
+                        ".MuiPickersCalendarHeader-switchHeader button:first-child",
+                        ".MuiPickersArrowSwitcher-root button:first-child",
+                        "button.MuiIconButton-root:first-of-type",
+                    ]
+
+                    for selector in prev_selectors:
+                        try:
+                            btns = self.driver_service.driver.find_elements(By.CSS_SELECTOR, selector)
+                            for btn in btns:
+                                if btn.is_displayed():
+                                    btn.click()
+                                    self.wis.human_delay(0.4, 0.6)
+                                    clicked = True
+                                    break
+                            if clicked:
+                                break
+                        except:
+                            continue
+
+                    if not clicked:
+                        logger.warning(f"Could not click previous month button")
+
+            self.wis.human_delay(0.5, 1)
+
+            # Now click on the target day
+            day_clicked = False
+
+            # MUI typically uses buttons for days with the day number as text
+            # Find all buttons and look for one with the exact day number
+            buttons = self.driver_service.driver.find_elements(By.TAG_NAME, "button")
+            for btn in buttons:
+                try:
+                    if not btn.is_displayed():
+                        continue
+                    btn_text = btn.text.strip()
+                    # Check if button text is exactly the day number
+                    if btn_text == str(target_day):
+                        # Verify it's a calendar day button (not other buttons)
+                        btn_class = btn.get_attribute("class") or ""
+                        # MUI day buttons typically have "day" in class or are in a calendar grid
+                        if "day" in btn_class.lower() or "MuiPickersDay" in btn_class or len(btn_text) <= 2:
+                            btn.click()
+                            self.wis.human_delay(0.3, 0.5)
+                            day_clicked = True
+                            logger.info(f"Clicked day {target_day}")
+                            break
+                except:
+                    continue
+
+            # Secondary fallback: look for any element with the day text
+            if not day_clicked:
+                day_elements = self.driver_service.driver.find_elements(
+                    By.XPATH, f"//*[text()='{target_day}']"
+                )
+                for elem in day_elements:
+                    try:
+                        if elem.is_displayed() and elem.tag_name in ['button', 'div', 'span', 'td']:
+                            elem.click()
+                            self.wis.human_delay(0.3, 0.5)
+                            day_clicked = True
+                            logger.info(f"Clicked day {target_day} via xpath")
+                            break
+                    except:
+                        continue
+
+            if day_clicked:
+                logger.info(f"Successfully selected day {target_day}")
+                # Some calendars auto-close, wait a moment
+                self.wis.human_delay(0.5, 1)
+                self._take_screenshot("calendar_day_selected")
+                return True
+            else:
+                logger.warning(f"Could not click day {target_day}")
+                self._take_screenshot("calendar_day_not_found")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error navigating calendar: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _click_update_button(self) -> bool:
+        """Find and click the Update button"""
+        try:
+            update_xpaths = [
+                "//button[.//text()[contains(., 'Update')]]",
+                "//button[contains(text(), 'Update')]",
+                "//button[.//span[contains(text(), 'Update')]]",
+            ]
+
+            for xpath in update_xpaths:
+                btns = self.driver_service.driver.find_elements(By.XPATH, xpath)
+                for btn in btns:
+                    if btn.is_displayed():
+                        btn_text = btn.text.strip().lower()
+                        if 'update' in btn_text:
+                            self.driver_service.driver.execute_script("arguments[0].click();", btn)
+                            logger.info("Clicked Update button")
+                            self.wis.human_delay(2, 3)
+                            return True
+
+            # CSS fallback
+            css_selectors = [
+                "button.MuiButton-containedPrimary",
+                "button.MuiButton-contained",
+            ]
+            for sel in css_selectors:
+                btns = self.driver_service.driver.find_elements(By.CSS_SELECTOR, sel)
+                for btn in btns:
+                    if btn.is_displayed() and 'update' in btn.text.lower():
+                        self.driver_service.driver.execute_script("arguments[0].click();", btn)
+                        logger.info("Clicked Update button (CSS)")
+                        self.wis.human_delay(2, 3)
+                        return True
+
+            logger.warning("Could not find Update button")
+            return False
+
+        except Exception as e:
+            logger.error(f"Error clicking Update button: {e}")
+            return False

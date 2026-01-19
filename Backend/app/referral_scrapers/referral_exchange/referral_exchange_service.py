@@ -51,12 +51,25 @@ class ReferralExchangeService(BaseReferralService):
             try:
                 from app.service.lead_source_settings_service import LeadSourceSettingsSingleton
                 settings_service = LeadSourceSettingsSingleton.get_instance()
-                source_settings = settings_service.get_by_source_name("ReferralExchange")
+                # Try different source name variations
+                source_settings = None
+                for name_variant in ["ReferralExchange", "Referral Exchange", "referralexchange"]:
+                    source_settings = settings_service.get_by_source_name(name_variant)
+                    if source_settings:
+                        break
                 if source_settings and source_settings.metadata:
-                    creds = source_settings.metadata.get('credentials', {})
+                    metadata = source_settings.metadata
+                    if isinstance(metadata, str):
+                        import json
+                        try:
+                            metadata = json.loads(metadata)
+                        except (json.JSONDecodeError, TypeError):
+                            metadata = {}
+                    creds = metadata.get('credentials', {}) if isinstance(metadata, dict) else {}
                     if creds:
                         self.email = self.email or creds.get('email')
                         self.password = self.password or creds.get('password')
+                        self.logger.info(f"Loaded credentials from database for {source_settings.source_name}")
             except Exception as e:
                 self.logger.warning(f"Could not load credentials from database: {e}")
 
@@ -162,38 +175,78 @@ class ReferralExchangeService(BaseReferralService):
                 self.logger.error(f"Login failed: {error_msg}")
                 return False
 
+            print(f"[LOGIN] Navigating to {LOGIN_URL}...")
             self.driver_service.get_page(LOGIN_URL)
             wis.human_delay(3, 5)
 
+            print(f"[LOGIN] Looking for email field...")
             # Enter email
             email_field = self.driver_service.find_element(By.ID, "email")
+            if not email_field:
+                print("[LOGIN] Could not find email field by ID='email'")
+                return False
             wis.human_delay(1, 2)
+            print(f"[LOGIN] Entering email: {self.email[:3]}***")
             wis.simulated_typing(email_field, self.email)
 
+            print(f"[LOGIN] Looking for password field...")
             # Enter password
             password_field = self.driver_service.find_element(By.ID, "password")
+            if not password_field:
+                print("[LOGIN] Could not find password field by ID='password'")
+                return False
             wis.human_delay(1, 2)
+            print(f"[LOGIN] Entering password...")
             wis.simulated_typing(password_field, self.password)
 
+            print(f"[LOGIN] Looking for submit button...")
             # Click login button
             login_button = self.driver_service.find_element(By.ID, "submit")
+            if not login_button:
+                print("[LOGIN] Could not find submit button by ID='submit'")
+                return False
+            print(f"[LOGIN] Clicking submit button...")
             self.driver_service.safe_click(login_button)
-            wis.human_delay(1, 2)
+            wis.human_delay(2, 3)
 
-            print("Login successful")
+            # Check for login errors on page
+            try:
+                error_elem = self.driver_service.driver.find_elements(By.CSS_SELECTOR, ".error, .alert-error, .login-error")
+                if error_elem:
+                    error_text = error_elem[0].text.strip()
+                    if error_text:
+                        print(f"[LOGIN] Page shows error: {error_text}")
+                        return False
+            except Exception:
+                pass
+
+            print("[LOGIN] Login successful")
+            self.is_logged_in = True
             return True
 
         except Exception as e:
-            print(f"Login failed: {str(e)}")
+            print(f"[LOGIN] Login failed with exception: {str(e)}")
             self.logger.error(f"Login failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
 
-    def update_customers(self, status_to_select: Any = None) -> bool:
+    def update_customers(self, status_to_select: Any = None, comment: str = None) -> bool:
+        """
+        Update customer status on ReferralExchange.
+
+        Args:
+            status_to_select: The status to set. Can be dict, list, tuple, or string.
+            comment: Optional comment to add with the status update.
+
+        Returns:
+            True if update successful, False otherwise.
+        """
         try:
             # Use self.status if status_to_select is not provided
             if status_to_select is None:
                 status_to_select = self.status
-            
+
             # Ensure status_to_select is a list/tuple
             if isinstance(status_to_select, dict):
                 main_option = status_to_select.get("status", status_to_select.get("main_option", ""))
@@ -367,6 +420,53 @@ class ReferralExchangeService(BaseReferralService):
                     return False
 
                 wis.human_delay(1, 2)
+
+            # Fill in comment if provided
+            if comment:
+                try:
+                    print(f"[UPDATE] Attempting to add comment: '{comment[:50]}...'")
+                    # Try multiple selectors for the comment/note textarea
+                    comment_selectors = [
+                        (By.CSS_SELECTOR, "textarea[name='comment']"),
+                        (By.CSS_SELECTOR, "textarea[name='note']"),
+                        (By.CSS_SELECTOR, "textarea[name='notes']"),
+                        (By.CSS_SELECTOR, "textarea.comment-input"),
+                        (By.CSS_SELECTOR, "textarea.note-input"),
+                        (By.CSS_SELECTOR, ".status-update-modal textarea"),
+                        (By.CSS_SELECTOR, ".modal textarea"),
+                        (By.XPATH, "//textarea[contains(@placeholder, 'comment')]"),
+                        (By.XPATH, "//textarea[contains(@placeholder, 'note')]"),
+                        (By.XPATH, "//textarea[contains(@placeholder, 'Note')]"),
+                        (By.CSS_SELECTOR, "textarea"),  # Last resort - any textarea
+                    ]
+
+                    comment_field = None
+                    for selector_type, selector_value in comment_selectors:
+                        try:
+                            elements = self.driver_service.driver.find_elements(selector_type, selector_value)
+                            for elem in elements:
+                                if elem.is_displayed() and elem.is_enabled():
+                                    comment_field = elem
+                                    print(f"[UPDATE] Found comment field with selector: {selector_value}")
+                                    break
+                            if comment_field:
+                                break
+                        except Exception:
+                            continue
+
+                    if comment_field:
+                        # Clear any existing content and type the comment
+                        comment_field.clear()
+                        wis.human_delay(0.5, 1)
+                        wis.simulated_typing(comment_field, comment)
+                        print(f"[UPDATE] Added comment successfully")
+                        wis.human_delay(1, 2)
+                    else:
+                        print("[UPDATE] No comment field found in modal")
+
+                except Exception as e:
+                    print(f"[UPDATE] Error adding comment: {str(e)}")
+                    # Continue even if comment fails - status update is more important
 
             # Find and click the Update button
             update_button = self.driver_service.wait.until(
@@ -737,10 +837,15 @@ class ReferralExchangeService(BaseReferralService):
     def _process_need_action_sweep(self, leads_data: List[Tuple[Lead, Any]], results: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process all leads in Need Action status as a final sweep.
-        Updates ALL leads to "is open to working with me" - no database lookup needed.
+        Uses FUB data to intelligently determine status and comment for each lead.
+
+        Priority for status selection:
+        1. FUB mapped stage (from lead's current FUB status)
+        2. Last known status (from metadata)
+        3. Default: "We are in contact" -> "is open to working with me"
 
         Args:
-            leads_data: Original list of leads (not used anymore)
+            leads_data: Original list of leads (used for context, but we process all Need Action leads)
             results: Current results dictionary
 
         Returns:
@@ -748,9 +853,17 @@ class ReferralExchangeService(BaseReferralService):
         """
         try:
             print("\n" + "="*60)
-            print("[NEED ACTION] Starting Need Action sweep...")
-            print("[NEED ACTION] All leads will be set to: 'We are in contact' -> 'is open to working with me'")
+            print("[NEED ACTION] Starting Need Action sweep with FUB integration...")
+            print("[NEED ACTION] Will use FUB data when available, fallback to default otherwise")
             print("="*60)
+
+            # Import FUB data helper
+            from app.referral_scrapers.utils.fub_data_helper import get_fub_data_helper
+            from app.service.lead_source_settings_service import LeadSourceSettingsSingleton
+
+            fub_helper = get_fub_data_helper()
+            settings_service = LeadSourceSettingsSingleton.get_instance()
+            source_settings = settings_service.get_by_source_name("ReferralExchange")
 
             # Navigate to referrals page first
             self._navigate_to_referrals()
@@ -775,9 +888,10 @@ class ReferralExchangeService(BaseReferralService):
                     return results
 
                 need_action_updated = 0
-                status_for_service = DEFAULT_NEEDS_ACTION_STATUS.copy()
+                need_action_fub_used = 0
+                need_action_default_used = 0
 
-                # Process each Need Action lead - no database lookup needed
+                # Process each Need Action lead with FUB integration
                 for i in range(need_action_count):
                     try:
                         # Re-get the rows (they might change after updates)
@@ -792,15 +906,66 @@ class ReferralExchangeService(BaseReferralService):
 
                         print(f"\n[NEED ACTION] Processing {i+1}/{need_action_count}: {display_name}")
 
+                        # Try to look up lead in database
+                        db_lead = fub_helper.lookup_lead_by_name(display_name, "ReferralExchange")
+
+                        # Determine status and comment using FUB data
+                        status_to_use = DEFAULT_NEEDS_ACTION_STATUS.copy()
+                        comment_to_use = None
+                        used_fub = False
+
+                        if db_lead and source_settings:
+                            # Use FUB helper to determine status and comment
+                            fub_status, fub_comment = fub_helper.determine_status_for_lead(
+                                lead=db_lead,
+                                source_settings=source_settings,
+                                platform_name="referralexchange",
+                                default_status=DEFAULT_NEEDS_ACTION_STATUS
+                            )
+
+                            if fub_status and fub_status != DEFAULT_NEEDS_ACTION_STATUS:
+                                # FUB gave us a mapped status - parse it
+                                if isinstance(fub_status, str):
+                                    if "::" in fub_status:
+                                        parts = fub_status.split("::", 1)
+                                        status_to_use = [parts[0].strip(), parts[1].strip() if len(parts) > 1 else ""]
+                                    else:
+                                        status_to_use = [fub_status, ""]
+                                elif isinstance(fub_status, (list, tuple)):
+                                    status_to_use = list(fub_status)
+                                print(f"[NEED ACTION] Using FUB mapped status: {status_to_use}")
+                                used_fub = True
+                                need_action_fub_used += 1
+                            else:
+                                print(f"[NEED ACTION] No FUB mapping, using default: {status_to_use}")
+                                need_action_default_used += 1
+
+                            comment_to_use = fub_comment
+                            if comment_to_use:
+                                print(f"[NEED ACTION] Will add comment from FUB: '{comment_to_use[:50]}...'")
+                        else:
+                            if not db_lead:
+                                print(f"[NEED ACTION] Lead not found in database, using default status")
+                            need_action_default_used += 1
+
                         # Click and update
                         try:
                             row.click()
                             wis.human_delay(2, 3)
 
-                            self.status = status_for_service.copy()
-                            if self.update_customers():
-                                print(f"[NEED ACTION] SUCCESS! Updated to '{status_for_service[0]}' -> '{status_for_service[1]}'")
+                            self.status = status_to_use
+                            if self.update_customers(comment=comment_to_use):
+                                status_display = f"{status_to_use[0]}" + (f" -> {status_to_use[1]}" if len(status_to_use) > 1 and status_to_use[1] else "")
+                                print(f"[NEED ACTION] SUCCESS! Updated to '{status_display}'")
                                 need_action_updated += 1
+
+                                # Save last known status to metadata if we have the lead
+                                if db_lead:
+                                    fub_helper.save_last_status_to_metadata(
+                                        lead=db_lead,
+                                        platform_name="referralexchange",
+                                        status=status_to_use
+                                    )
                             else:
                                 print(f"[NEED ACTION] FAILED to update")
 
@@ -821,6 +986,7 @@ class ReferralExchangeService(BaseReferralService):
                 print("\n" + "="*60)
                 print("[NEED ACTION] Sweep completed!")
                 print(f"[NEED ACTION] Updated: {need_action_updated}/{need_action_count}")
+                print(f"[NEED ACTION] Used FUB data: {need_action_fub_used}, Used default: {need_action_default_used}")
                 print("="*60)
 
             except Exception as e:
@@ -885,7 +1051,12 @@ class ReferralExchangeService(BaseReferralService):
     def run_standalone_need_action_sweep(self) -> Dict[str, Any]:
         """
         Run the Need Action sweep as a standalone operation.
-        Logs in, navigates to Need Action, and updates ALL leads to "is open to working with me".
+        Uses FUB data to intelligently determine status and comment for each lead.
+
+        Priority for status selection:
+        1. FUB mapped stage (from lead's current FUB status)
+        2. Last known status (from metadata)
+        3. Default: "We are in contact" -> "is open to working with me"
 
         Returns:
             Dict with sweep results
@@ -894,15 +1065,25 @@ class ReferralExchangeService(BaseReferralService):
             "total_checked": 0,
             "updated": 0,
             "errors": 0,
+            "fub_used": 0,
+            "default_used": 0,
             "updated_leads": [],
             "details": []
         }
 
         try:
             print("\n" + "="*60)
-            print("[STANDALONE SWEEP] Starting Need Action sweep...")
-            print("[STANDALONE SWEEP] All leads will be set to: 'We are in contact' -> 'is open to working with me'")
+            print("[STANDALONE SWEEP] Starting Need Action sweep with FUB integration...")
+            print("[STANDALONE SWEEP] Will use FUB data when available, fallback to default otherwise")
             print("="*60)
+
+            # Import FUB data helper
+            from app.referral_scrapers.utils.fub_data_helper import get_fub_data_helper
+            from app.service.lead_source_settings_service import LeadSourceSettingsSingleton
+
+            fub_helper = get_fub_data_helper()
+            settings_service = LeadSourceSettingsSingleton.get_instance()
+            source_settings = settings_service.get_by_source_name("ReferralExchange")
 
             # Login
             print("[STANDALONE SWEEP] Logging in...")
@@ -931,11 +1112,7 @@ class ReferralExchangeService(BaseReferralService):
                 print("[STANDALONE SWEEP] No leads in Need Action - all clear!")
                 return results
 
-            # All Needs Action leads get set to "is open to working with me"
-            status_for_service = DEFAULT_NEEDS_ACTION_STATUS.copy()
-            print(f"[STANDALONE SWEEP] Target status for all: {status_for_service}")
-
-            # Process each lead - no database lookup needed
+            # Process each lead with FUB integration
             for i in range(len(lead_rows)):
                 try:
                     # Re-get rows (they change after updates)
@@ -950,16 +1127,65 @@ class ReferralExchangeService(BaseReferralService):
 
                     print(f"\n[{i+1}/{results['total_checked']}] Processing: {display_name}")
 
+                    # Try to look up lead in database
+                    db_lead = fub_helper.lookup_lead_by_name(display_name, "ReferralExchange")
+
+                    # Determine status and comment using FUB data
+                    status_to_use = DEFAULT_NEEDS_ACTION_STATUS.copy()
+                    comment_to_use = None
+
+                    if db_lead and source_settings:
+                        # Use FUB helper to determine status and comment
+                        fub_status, fub_comment = fub_helper.determine_status_for_lead(
+                            lead=db_lead,
+                            source_settings=source_settings,
+                            platform_name="referralexchange",
+                            default_status=DEFAULT_NEEDS_ACTION_STATUS
+                        )
+
+                        if fub_status and fub_status != DEFAULT_NEEDS_ACTION_STATUS:
+                            # FUB gave us a mapped status - parse it
+                            if isinstance(fub_status, str):
+                                if "::" in fub_status:
+                                    parts = fub_status.split("::", 1)
+                                    status_to_use = [parts[0].strip(), parts[1].strip() if len(parts) > 1 else ""]
+                                else:
+                                    status_to_use = [fub_status, ""]
+                            elif isinstance(fub_status, (list, tuple)):
+                                status_to_use = list(fub_status)
+                            print(f"  Using FUB mapped status: {status_to_use}")
+                            results["fub_used"] += 1
+                        else:
+                            print(f"  No FUB mapping, using default: {status_to_use}")
+                            results["default_used"] += 1
+
+                        comment_to_use = fub_comment
+                        if comment_to_use:
+                            print(f"  Will add comment from FUB: '{comment_to_use[:50]}...'")
+                    else:
+                        if not db_lead:
+                            print(f"  Lead not found in database, using default status")
+                        results["default_used"] += 1
+
                     # Click the lead row to open details
                     row.click()
                     wis.human_delay(2, 3)
 
-                    # Set status (no lead object needed, just use the status)
-                    self.status = status_for_service.copy()
-                    if self.update_customers():
-                        print(f"  SUCCESS! Updated to '{status_for_service[0]}' -> '{status_for_service[1]}'")
+                    # Set status and update with comment
+                    self.status = status_to_use
+                    if self.update_customers(comment=comment_to_use):
+                        status_display = f"{status_to_use[0]}" + (f" -> {status_to_use[1]}" if len(status_to_use) > 1 and status_to_use[1] else "")
+                        print(f"  SUCCESS! Updated to '{status_display}'")
                         results["updated"] += 1
                         results["updated_leads"].append(display_name)
+
+                        # Save last known status to metadata if we have the lead
+                        if db_lead:
+                            fub_helper.save_last_status_to_metadata(
+                                lead=db_lead,
+                                platform_name="referralexchange",
+                                status=status_to_use
+                            )
                     else:
                         print(f"  FAILED to update status")
                         results["errors"] += 1
@@ -981,6 +1207,8 @@ class ReferralExchangeService(BaseReferralService):
             print("[STANDALONE SWEEP] COMPLETED!")
             print(f"  Total in Need Action: {results['total_checked']}")
             print(f"  Successfully updated: {results['updated']}")
+            print(f"  Used FUB data: {results['fub_used']}")
+            print(f"  Used default: {results['default_used']}")
             print(f"  Errors: {results['errors']}")
             if results["updated_leads"]:
                 print(f"  Updated leads: {', '.join(results['updated_leads'])}")

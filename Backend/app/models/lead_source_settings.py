@@ -22,6 +22,7 @@ class LeadSourceSettings(BaseModel):
         self.sync_interval_days: Optional[int] = None
         self.last_sync_at: Optional[datetime] = None
         self.next_sync_at: Optional[datetime] = None
+        self.last_sync_results: Dict[str, Any] = {}  # Stores the last sync results for persistence
         self.user_id: Optional[str] = None
         self.auto_discovered: bool = False
         self.same_status_note: Optional[str] = "Same as previous update. Continuing to communicate and assist the referral as best as possible."
@@ -40,6 +41,7 @@ class LeadSourceSettings(BaseModel):
             'sync_interval_days': self.sync_interval_days,
             'last_sync_at': self.last_sync_at,
             'next_sync_at': self.next_sync_at,
+            'last_sync_results': self.last_sync_results,
             'user_id': self.user_id,
             'auto_discovered': self.auto_discovered,
             'same_status_note': self.same_status_note
@@ -72,7 +74,7 @@ class LeadSourceSettings(BaseModel):
                             value = datetime.fromisoformat(value.replace('Z', '+00:00'))
                         except ValueError:
                             pass
-                if key in ['metadata', 'assignment_rules', 'options', 'fub_stage_mapping'] and isinstance(value, str):
+                if key in ['metadata', 'assignment_rules', 'options', 'fub_stage_mapping', 'last_sync_results'] and isinstance(value, str):
                     try:
                         value = json.loads(value)
                     except (json.JSONDecodeError, TypeError):
@@ -82,11 +84,46 @@ class LeadSourceSettings(BaseModel):
         
         return instance
     
-    def get_mapped_stage(self, fub_stage_name: str) -> Optional[str]:
+    def get_mapped_stage(self, fub_stage_name: str, lead_type: Optional[str] = None) -> Optional[str]:
+        """
+        Get the mapped stage for a FUB stage name.
+
+        Args:
+            fub_stage_name: The FUB stage name to map
+            lead_type: Optional lead type ('buyer' or 'seller') for platforms with type-specific mappings
+
+        Returns:
+            The mapped stage string, or None if no mapping exists
+        """
         if not self.fub_stage_mapping or not isinstance(self.fub_stage_mapping, dict):
             return None
-        
-        return self.fub_stage_mapping.get(fub_stage_name)
+
+        mapping = self.fub_stage_mapping.get(fub_stage_name)
+
+        if mapping is None:
+            return None
+
+        # If mapping is a dict with buyer/seller keys, extract the appropriate one
+        if isinstance(mapping, dict):
+            # Normalize lead_type to lowercase
+            if lead_type:
+                lead_type = lead_type.lower()
+
+            # Try to get the specific type mapping
+            if lead_type and lead_type in mapping:
+                return mapping[lead_type]
+
+            # Fallback: try 'seller' first (most common), then 'buyer'
+            if 'seller' in mapping:
+                return mapping['seller']
+            if 'buyer' in mapping:
+                return mapping['buyer']
+
+            # If dict doesn't have buyer/seller keys, return None
+            return None
+
+        # Direct string mapping (backwards compatible)
+        return mapping
     
     def get_available_options(self) -> List[str]:
         if isinstance(self.options, list):

@@ -52,6 +52,27 @@ class LeadSourceSettingsService:
         # Thread pool for running blocking operations in async context
         self._executor = ThreadPoolExecutor(max_workers=5)
 
+    def _get_lead_type_from_tags(self, lead) -> Optional[str]:
+        """Extract lead type (buyer/seller) from lead tags"""
+        try:
+            tags = getattr(lead, 'tags', None) or []
+            if isinstance(tags, str):
+                try:
+                    tags = json.loads(tags)
+                except (json.JSONDecodeError, TypeError):
+                    tags = []
+
+            for tag in tags:
+                tag_lower = str(tag).lower()
+                if 'seller' in tag_lower:
+                    return 'seller'
+                elif 'buyer' in tag_lower:
+                    return 'buyer'
+
+            return None
+        except Exception:
+            return None
+
     def create(self, settings: LeadSourceSettings) -> LeadSourceSettings:
         """Create a new lead source setting"""
         settings.created_at = datetime.now()
@@ -223,8 +244,8 @@ class LeadSourceSettingsService:
 
         return due_sources
 
-    def mark_sync_completed(self, source_id: str, sync_interval_days: Optional[int]) -> Optional[LeadSourceSettings]:
-        """Update last_sync_at and next_sync_at after a scheduled sync"""
+    def mark_sync_completed(self, source_id: str, sync_interval_days: Optional[int], sync_results: Dict[str, Any] = None) -> Optional[LeadSourceSettings]:
+        """Update last_sync_at, next_sync_at, and last_sync_results after a sync"""
         now = datetime.now(timezone.utc)
         update_data = {
             "last_sync_at": now.isoformat(),
@@ -235,6 +256,24 @@ class LeadSourceSettingsService:
             update_data["next_sync_at"] = (now + timedelta(days=sync_interval_days)).isoformat()
         else:
             update_data["next_sync_at"] = None
+
+        # Save sync results for persistence
+        if sync_results is not None:
+            # Prepare the results for storage - keep essential data, limit details to avoid bloat
+            persisted_results = {
+                "completed_at": now.isoformat(),
+                "status": sync_results.get("status", "completed"),
+                "successful": sync_results.get("successful", 0),
+                "failed": sync_results.get("failed", 0),
+                "skipped": sync_results.get("skipped", 0),
+                "total_leads": sync_results.get("total_leads", 0),
+                "processed": sync_results.get("processed", 0),
+                "filter_summary": sync_results.get("filter_summary"),
+                "error": sync_results.get("error"),
+                # Store limited details (last 50 entries to avoid bloat)
+                "details": (sync_results.get("details") or [])[-50:]
+            }
+            update_data["last_sync_results"] = json.dumps(persisted_results)
 
         result = (
             self.supabase.table(self.table_name)
@@ -820,7 +859,7 @@ class LeadSourceSettingsService:
             
             filtered_leads = []
             skipped_leads = []
-            
+
             for lead in leads:
                 # Check if lead was recently synced
                 last_synced = None
@@ -836,7 +875,7 @@ class LeadSourceSettingsService:
                                 last_synced = last_synced.replace(tzinfo=timezone.utc)
                         except Exception as e:
                             last_synced = None
-                
+
                 # Skip if synced recently
                 if last_synced and last_synced > cutoff_time:
                     hours_since = (now - last_synced).total_seconds() / 3600
@@ -847,18 +886,21 @@ class LeadSourceSettingsService:
                         "reason": f"Synced {hours_since:.1f} hours ago (min interval: {min_sync_interval_hours}h)"
                     })
                     continue
-                
+
+                # Extract lead type (buyer/seller) from tags for proper mapping
+                lead_type = self._get_lead_type_from_tags(lead)
+
                 # Get the mapped stage for this platform
-                mapped_stage = source_settings.get_mapped_stage(lead.status)
+                mapped_stage = source_settings.get_mapped_stage(lead.status, lead_type)
                 if mapped_stage:
                     filtered_leads.append((lead, mapped_stage))
-            
+
             tracker.update_progress(
                 sync_id,
                 skipped=len(skipped_leads),
                 message=f"Filtered: {len(filtered_leads)} to process, {len(skipped_leads)} skipped"
             )
-            
+
             if not filtered_leads:
                 tracker.complete_sync(
                     sync_id,
@@ -1212,12 +1254,15 @@ class LeadSourceSettingsService:
                         "reason": f"Synced {hours_since:.1f} hours ago (min interval: {min_sync_interval_hours}h)"
                     })
                     continue
-                
+
+                # Extract lead type (buyer/seller) from tags for proper mapping
+                lead_type = self._get_lead_type_from_tags(lead)
+
                 # Get the mapped stage for this platform
-                mapped_stage = source_settings.get_mapped_stage(lead.status)
+                mapped_stage = source_settings.get_mapped_stage(lead.status, lead_type)
                 if mapped_stage:
                     filtered_leads.append((lead, mapped_stage))
-            
+
             print(f"\n[FILTER] Total leads: {len(leads)}")
             print(f"[FILTER] Skipped (recently synced): {len(skipped_leads)}")
             print(f"[FILTER] Will process: {len(filtered_leads)}")
@@ -1421,11 +1466,55 @@ class LeadSourceSettingsService:
                 message=f"Preparing My Agent Finder bulk sync ({len(leads)} leads)"
             )
 
-            # Build leads_data with mapped stages
+            # Get min_sync_interval from settings
+            min_sync_interval_hours_setting = min_sync_interval_hours
+            if source_settings.metadata and isinstance(source_settings.metadata, dict):
+                min_sync_interval_hours_setting = source_settings.metadata.get("min_sync_interval_hours", min_sync_interval_hours)
+
+            # PRE-FILTER: Check recently synced BEFORE opening browser (optimization)
+            now = datetime.now(timezone.utc)
+            cutoff_time = now - timedelta(hours=min_sync_interval_hours_setting)
+
+            # Build leads_data with mapped stages AND filter out recently synced
             leads_data = []
             skipped_no_mapping = []
+            skipped_recently_synced = []
 
             for lead in leads:
+                lead_name = f"{lead.first_name} {lead.last_name}"
+
+                # Check if lead was recently synced
+                if lead.metadata:
+                    metadata = lead.metadata
+                    if isinstance(metadata, str):
+                        import json
+                        try:
+                            metadata = json.loads(metadata)
+                        except:
+                            metadata = {}
+
+                    last_synced_str = metadata.get("myagentfinder_last_updated") if metadata else None
+                    if last_synced_str:
+                        try:
+                            if isinstance(last_synced_str, str):
+                                last_synced = datetime.fromisoformat(last_synced_str.replace('Z', '+00:00'))
+                            else:
+                                last_synced = last_synced_str
+                            if last_synced.tzinfo is None:
+                                last_synced = last_synced.replace(tzinfo=timezone.utc)
+
+                            if last_synced > cutoff_time:
+                                hours_since = (now - last_synced).total_seconds() / 3600
+                                skipped_recently_synced.append({
+                                    "lead_id": lead.id,
+                                    "name": lead_name,
+                                    "reason": f"Recently synced ({hours_since:.1f}h ago)"
+                                })
+                                continue  # Skip this lead - don't add to leads_data
+                        except Exception as e:
+                            self.logger.debug(f"Could not parse last_synced for {lead_name}: {e}")
+
+                # Check for stage mapping
                 mapped_stage = source_settings.get_mapped_stage(lead.status)
                 if mapped_stage:
                     leads_data.append((lead, mapped_stage))
@@ -1433,30 +1522,60 @@ class LeadSourceSettingsService:
                     skipped_no_mapping.append({
                         "lead_id": lead.id,
                         "fub_person_id": lead.fub_person_id,
-                        "name": f"{lead.first_name} {lead.last_name}",
+                        "name": lead_name,
                         "reason": f"No mapping for FUB status: {lead.status}"
                     })
 
             tracker.update_progress(
                 sync_id,
-                message=f"Found {len(leads_data)} leads to process, {len(skipped_no_mapping)} with no mapping"
+                message=f"Pre-filtered: {len(leads_data)} to process, {len(skipped_recently_synced)} recently synced, {len(skipped_no_mapping)} no mapping"
             )
 
+            # If all leads are already synced or have no mapping, complete without opening browser
             if not leads_data:
+                # Build details for skipped leads
+                skipped_details = []
+                for skip in skipped_recently_synced:
+                    skipped_details.append({
+                        "name": skip["name"],
+                        "status": "skipped",
+                        "reason": "Recently synced"
+                    })
+                for skip in skipped_no_mapping:
+                    skipped_details.append({
+                        "name": skip["name"],
+                        "status": "skipped",
+                        "reason": skip["reason"]
+                    })
+
                 tracker.complete_sync(
                     sync_id,
                     results={
                         "successful": 0,
                         "failed": 0,
-                        "skipped": 0,
+                        "skipped": len(skipped_recently_synced),
                         "filter_summary": {
                             "total_leads": len(leads),
+                            "skipped_recently_synced": len(skipped_recently_synced),
                             "skipped_no_mapping": len(skipped_no_mapping),
                             "will_process": 0
                         },
-                        "details": []
+                        "details": skipped_details
                     }
                 )
+
+                # Persist the "all skipped" result
+                self.mark_sync_completed(source_settings.id, source_settings.sync_interval_days, sync_results={
+                    "status": "completed",
+                    "successful": 0,
+                    "failed": 0,
+                    "skipped": len(skipped_recently_synced),
+                    "total_leads": len(leads),
+                    "filter_summary": {
+                        "skipped_recently_synced": len(skipped_recently_synced),
+                        "skipped_no_mapping": len(skipped_no_mapping)
+                    }
+                })
                 return
 
             # Create service and run bulk sync
@@ -1491,18 +1610,60 @@ class LeadSourceSettingsService:
             tracker.update_progress(sync_id, message="Starting My Agent Finder login...")
 
             # Run bulk update with tracker for cancellation support
+            # Note: leads_data only contains leads that need processing (pre-filtered)
             bulk_results = service.update_multiple_leads(leads_data, tracker=tracker, sync_id=sync_id)
+
+            # Add pre-filtered skipped leads to results
+            bulk_results["skipped"] = bulk_results.get("skipped", 0) + len(skipped_recently_synced)
+
+            # Add details for pre-filtered leads
+            if "details" not in bulk_results:
+                bulk_results["details"] = []
+            for skip in skipped_recently_synced:
+                bulk_results["details"].insert(0, {
+                    "name": skip["name"],
+                    "status": "skipped",
+                    "reason": "Recently synced"
+                })
 
             # Add filter summary
             bulk_results["filter_summary"] = {
                 "total_leads": len(leads),
+                "skipped_recently_synced": len(skipped_recently_synced),
                 "skipped_no_mapping": len(skipped_no_mapping),
                 "will_process": len(leads_data)
             }
             if skipped_no_mapping:
                 bulk_results["skipped_no_mapping"] = skipped_no_mapping
 
+            # Process overdue leads after bulk sync (if enabled in settings)
+            process_overdue = True  # Default to enabled
+            if source_settings and source_settings.metadata:
+                metadata = source_settings.metadata
+                if isinstance(metadata, str):
+                    import json
+                    metadata = json.loads(metadata)
+                process_overdue = metadata.get("process_overdue_after_sync", True)
+
+            if process_overdue:
+                tracker.update_progress(sync_id, message="Processing overdue leads...")
+                self.logger.info("Starting overdue leads processing after bulk sync...")
+                try:
+                    overdue_results = service.process_overdue_leads(max_leads=50)
+                    bulk_results["overdue_processing"] = {
+                        "successful": overdue_results.get("successful", 0),
+                        "failed": overdue_results.get("failed", 0),
+                    }
+                    self.logger.info(f"Overdue processing: {overdue_results.get('successful', 0)} success, {overdue_results.get('failed', 0)} failed")
+                except Exception as overdue_error:
+                    self.logger.error(f"Error processing overdue leads: {overdue_error}")
+                    bulk_results["overdue_processing"] = {"error": str(overdue_error)}
+
             tracker.complete_sync(sync_id, results=bulk_results)
+
+            # Persist sync results to database
+            bulk_results["status"] = "completed"
+            self.mark_sync_completed(source_settings.id, source_settings.sync_interval_days, sync_results=bulk_results)
 
         except Exception as e:
             import traceback
@@ -1510,6 +1671,14 @@ class LeadSourceSettingsService:
             self.logger.error(f"Error in My Agent Finder bulk sync: {error_msg}", exc_info=True)
             traceback.print_exc()
             tracker.complete_sync(sync_id, error=error_msg)
+
+            # Persist error state to database
+            if source_settings:
+                self.mark_sync_completed(
+                    source_settings.id,
+                    source_settings.sync_interval_days,
+                    sync_results={"status": "failed", "error": error_msg}
+                )
 
     def sync_all_sources_bulk_with_tracker(
         self,
@@ -1785,12 +1954,24 @@ class LeadSourceSettingsService:
                 results["skipped_leads"] = skipped_leads
             
             tracker.complete_sync(sync_id, results=results)
-            
+
+            # Persist sync results to database
+            results["status"] = "completed"
+            self.mark_sync_completed(source_settings.id, source_settings.sync_interval_days, sync_results=results)
+
         except Exception as e:
             import traceback
             error_msg = str(e)
             self.logger.error(f"Error in bulk sync for {source_name}: {error_msg}", exc_info=True)
             tracker.complete_sync(sync_id, error=error_msg)
+
+            # Persist error state to database
+            if source_settings:
+                self.mark_sync_completed(
+                    source_settings.id,
+                    source_settings.sync_interval_days,
+                    sync_results={"status": "failed", "error": error_msg}
+                )
 
 
 DependencyContainer.get_instance().register_lazy_initializer(

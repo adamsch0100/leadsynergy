@@ -25,8 +25,22 @@ from app.utils.constants import Credentials
 from app.utils.dependency_container import DependencyContainer
 from app.utils.webhook_cache import WebhookCache
 from typing import Dict, List, Optional, Any
+import os
 
 app = Flask(__name__)
+
+# Initialize webhook cache for idempotency
+# Uses 1-hour expiry to prevent duplicate processing of the same webhook
+try:
+    webhook_cache = WebhookCache(
+        redis_host=os.getenv('REDIS_HOST', 'localhost'),
+        redis_port=int(os.getenv('REDIS_PORT', 6379)),
+        redis_password=os.getenv('REDIS_PASSWORD'),
+        expiration_hours=1.0,  # 1 hour expiry for idempotency
+    )
+except Exception as e:
+    print(f"Warning: Could not initialize webhook cache (Redis may not be available): {e}")
+    webhook_cache = None
 
 # API Key for an Admin user in the Follow Up Boss Account
 CREDS = Credentials()
@@ -657,14 +671,16 @@ async def webhook_tag_handler():
     try:
         # Get the raw webhook data
         webhook_data = request.get_json()
-        # print(webhook_data)
 
         print('\n\n')
-        # print(webhook_data)
 
         # Extract event and URI
         event = webhook_data.get('event')
         resource_uri = webhook_data.get('uri')
+
+        # Generate a unique webhook ID for idempotency
+        # Use event + URI hash as unique identifier
+        webhook_id = f"{event}:{resource_uri}" if event and resource_uri else None
 
         event = event.lower()
         person_id = None
@@ -685,8 +701,19 @@ async def webhook_tag_handler():
                 person_id = person[0].get('id')
                 print(f"Person ID: {person_id}")
                 if not person_id:
-                    # print("No person ID found in webhook data")
                     return Response("No person ID found in webhook data", status=200)
+
+                # ===== IDEMPOTENCY CHECK =====
+                # Prevent duplicate processing if webhook fires multiple times
+                if webhook_cache and person_id:
+                    is_new = webhook_cache.check_and_mark(
+                        lead_id=str(person_id),
+                        event_type=f"tag_{event}"
+                    )
+                    if not is_new:
+                        print(f"⚠️ Duplicate webhook detected for person {person_id}, skipping...")
+                        return Response("Duplicate webhook - already processed", status=200)
+                # ===========================
 
                 # Get fresh data from FUB API
                 fresh_person_data = api_client.get_person(person_id)
@@ -764,6 +791,29 @@ async def process_tag_webhook2(lead: Lead, lead_service: LeadService):
                     if mapping and hasattr(mapping, 'id'):
                         print(f"Created new Mapping with ID: {mapping.id}")
                         lead = saved_lead
+
+                        # ==========================================================
+                        # NEW: INSTANT AI RESPONSE - Speed-to-Lead (< 1 minute)
+                        # Research: MIT study - 21x higher conversion within 5 min
+                        # ==========================================================
+                        try:
+                            from app.scheduler.ai_tasks import trigger_instant_ai_response
+                            print(f"🚀 Triggering INSTANT AI response for new lead {person_id}")
+
+                            # Queue the instant response task (runs immediately)
+                            trigger_instant_ai_response.delay(
+                                fub_person_id=person_id,
+                                source=lead.source,
+                                organization_id=None,  # Will be determined from settings
+                                user_id=None,
+                            )
+                            print(f"✅ Instant AI response queued for person {person_id}")
+
+                        except Exception as ai_error:
+                            # Don't fail the webhook if AI trigger fails
+                            print(f"⚠️ AI trigger error (non-fatal): {ai_error}")
+                        # ==========================================================
+
                     else:
                         lead_service.delete(saved_lead.id)
                         print("Failed to create mapping, deleting lead data from DB...")

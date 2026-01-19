@@ -10,7 +10,16 @@
       "Bash(python.exe:*)",
       "Bash(npx tsc:*)",
       "Bash(timeout:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: LeadSynergy lead management platform\n\nFull-stack application with Python/FastAPI backend and Next.js frontend\nfor real estate lead management and CRM integration.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(move \"c:\\\\Users\\\\adamm\\\\Projects\\\\LeadSynergy\\\\railway.json\" \"c:\\\\Users\\\\adamm\\\\Projects\\\\LeadSynergy\\\\Backend\\\\railway.json\")",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: support both env var naming conventions\n\n- FUB_API_KEY or FOLLOWUPBOSS_API_KEY\n- SUPABASE_SECRET_KEY or SUPABASE_JWT_SECRET\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: support SUPABASE_JWT_SECRET in all database files\n\n- Updated supabase_client.py\n- Updated auth.py\n- Updated migrations.py\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)"
     ]
   }
 }

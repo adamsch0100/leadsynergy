@@ -410,6 +410,28 @@ class AppointmentScheduler:
             except Exception as e:
                 logger.error(f"Failed to send confirmation email: {e}")
 
+        # Schedule appointment reminders (24h and 1h before)
+        try:
+            from app.scheduler.tasks import schedule_appointment_reminders
+
+            # Map appointment type to simple string for reminders
+            appt_type_str = "listing" if context.appointment_type in [
+                AppointmentType.LISTING_PRESENTATION,
+            ] else "showing"
+
+            reminder_results = schedule_appointment_reminders(
+                fub_person_id=context.fub_person_id,
+                lead_name=context.lead_name,
+                lead_phone=context.lead_phone,
+                appointment_time=slot.start,
+                appointment_type=appt_type_str,
+                agent_name=context.agent_name,
+                property_address=context.location,
+            )
+            logger.info(f"Scheduled reminders for appointment: {reminder_results}")
+        except Exception as e:
+            logger.warning(f"Could not schedule reminders: {e}")
+
         # Clear from cache
         self._scheduling_contexts.pop(context.fub_person_id, None)
 
@@ -706,6 +728,200 @@ class AppointmentScheduler:
     def has_active_scheduling(self, fub_person_id: int) -> bool:
         """Check if lead has active scheduling session."""
         return fub_person_id in self._scheduling_contexts
+
+    # =========================================================================
+    # PROACTIVE APPOINTMENT OFFERING - "Assumptive Close" Technique
+    # Research: AI chatbots that proactively offer appointments convert 5-7x
+    # more leads than those that wait for the lead to ask.
+    # =========================================================================
+
+    async def generate_assumptive_close(
+        self,
+        lead_name: str,
+        agent_name: str = "I",
+        agent_user_id: str = "",
+        supabase_client=None,
+        num_slots: int = 2,
+    ) -> Dict[str, Any]:
+        """
+        Generate an "assumptive close" appointment offer.
+
+        Instead of asking "Would you like to schedule?", this uses the
+        assumptive close technique: "I have Thursday at 3pm open - does that work?"
+
+        Research backing:
+        - Assumptive close works 30-40% better than open-ended asks
+        - Offering specific times reduces decision paralysis
+        - 2-3 options is optimal (too many = analysis paralysis)
+
+        Args:
+            lead_name: Lead's first name for personalization
+            agent_name: Agent name (default "I" for first-person)
+            agent_user_id: Agent user ID for calendar lookup
+            supabase_client: Database client
+            num_slots: Number of slots to suggest (default 2)
+
+        Returns:
+            Dict with suggested text and slot details
+
+        Example output:
+            {
+                "text": "I have Thursday at 3pm and Friday at 10am open - would either work for a quick call?",
+                "slots": [TimeSlot, TimeSlot],
+                "has_availability": True
+            }
+        """
+        try:
+            # Get available slots from calendar
+            slots = await self.calendar.get_available_slots(
+                agent_user_id=agent_user_id,
+                duration_minutes=self.DEFAULT_DURATION,
+                supabase_client=supabase_client,
+            )
+
+            if not slots:
+                return {
+                    "text": f"{lead_name}, I'd love to set up a quick call. What day this week works best for you?",
+                    "slots": [],
+                    "has_availability": False,
+                }
+
+            # Take the requested number of slots
+            suggested_slots = slots[:num_slots]
+
+            # Format the assumptive close message
+            if len(suggested_slots) == 1:
+                slot = suggested_slots[0]
+                day = slot.start.strftime("%A")
+                time_str = slot.start.strftime("%I:%M %p").lstrip("0").lower()
+                text = f"{lead_name}, I have {day} at {time_str} open - would that work for a quick call?"
+
+            elif len(suggested_slots) == 2:
+                slot1 = suggested_slots[0]
+                slot2 = suggested_slots[1]
+                day1 = slot1.start.strftime("%A")
+                time1 = slot1.start.strftime("%I:%M %p").lstrip("0").lower()
+                day2 = slot2.start.strftime("%A")
+                time2 = slot2.start.strftime("%I:%M %p").lstrip("0").lower()
+
+                # Same day or different days
+                if slot1.start.date() == slot2.start.date():
+                    text = f"{lead_name}, I have {day1} at {time1} or {time2} open - would either work for a quick call?"
+                else:
+                    text = f"{lead_name}, I have {day1} at {time1} and {day2} at {time2} open - would either work for a quick call?"
+
+            else:  # 3+ slots
+                formatted = []
+                for slot in suggested_slots[:3]:
+                    day = slot.start.strftime("%A")
+                    time_str = slot.start.strftime("%I:%M %p").lstrip("0").lower()
+                    formatted.append(f"{day} at {time_str}")
+
+                slots_text = ", ".join(formatted[:-1]) + f", or {formatted[-1]}"
+                text = f"{lead_name}, I have {slots_text} open - which works best for you?"
+
+            return {
+                "text": text,
+                "slots": suggested_slots,
+                "has_availability": True,
+            }
+
+        except Exception as e:
+            logger.error(f"Error generating assumptive close: {e}")
+            return {
+                "text": f"{lead_name}, I'd love to set up a quick call. What day works best for you?",
+                "slots": [],
+                "has_availability": False,
+                "error": str(e),
+            }
+
+    def generate_proactive_cta(
+        self,
+        lead_name: str,
+        context: str = "general",
+        suggested_day: str = None,
+        suggested_time: str = None,
+    ) -> str:
+        """
+        Generate a proactive call-to-action for appointment.
+
+        Used in follow-up messages to softly push toward scheduling
+        without being too salesy.
+
+        Args:
+            lead_name: Lead's first name
+            context: Context of the message (general, value_add, market_update)
+            suggested_day: Optional specific day to suggest
+            suggested_time: Optional specific time to suggest
+
+        Returns:
+            CTA text to append to a message
+        """
+        import random
+
+        # Use suggested day/time if provided
+        if suggested_day and suggested_time:
+            return f"Would {suggested_day} at {suggested_time} work for a quick chat?"
+
+        if suggested_day:
+            return f"Would {suggested_day} afternoon work for a quick call?"
+
+        # Generic CTAs by context
+        ctas = {
+            "general": [
+                "Got a few minutes this week for a quick call?",
+                "Want to hop on a quick call to chat strategy?",
+                "I've got some time this week if you want to chat!",
+            ],
+            "value_add": [
+                "Happy to walk you through what I'm seeing - got 10 minutes?",
+                "Want me to send you some options? Or we could chat through them quick!",
+                "I can share more details on a quick call if you're interested!",
+            ],
+            "market_update": [
+                "Want to discuss what this means for your search?",
+                "Happy to break this down for you - got time for a quick call?",
+                "Let me know if you want to chat strategy based on this!",
+            ],
+            "first_contact": [
+                "Would love to chat when you have a few minutes!",
+                "Let me know if you want to hop on a quick call this week!",
+                "I'm around this week if you want to chat!",
+            ],
+        }
+
+        context_ctas = ctas.get(context, ctas["general"])
+        return random.choice(context_ctas)
+
+    def get_suggested_day_and_time(self) -> Tuple[str, str]:
+        """
+        Get a suggested day and time for the next few days.
+
+        Returns Tuesday-Thursday at 2pm or 3pm for optimal contact rates.
+        Avoids Monday (busy) and Friday (people checking out).
+
+        Returns:
+            Tuple of (day_name, time_str)
+        """
+        today = datetime.now()
+        current_weekday = today.weekday()
+
+        # Prefer Tuesday, Wednesday, Thursday
+        preferred_days = [1, 2, 3]  # Mon=0, so Tue=1, Wed=2, Thu=3
+
+        # Find next preferred day
+        for day_offset in range(1, 8):
+            future_date = today + timedelta(days=day_offset)
+            if future_date.weekday() in preferred_days:
+                day_name = future_date.strftime("%A")
+                # Afternoon is best - 2pm or 3pm
+                import random
+                time_str = random.choice(["2pm", "3pm", "2:30pm"])
+                return day_name, time_str
+
+        # Fallback to tomorrow
+        tomorrow = today + timedelta(days=1)
+        return tomorrow.strftime("%A"), "2pm"
 
 
 class AppointmentSchedulerSingleton:

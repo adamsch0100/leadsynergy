@@ -1,0 +1,119 @@
+{
+  "cookies": [
+    {
+      "name": "richdesk",
+      "value": "1fdf0f5f1ab317b5c8471872bc6fe17b",
+      "domain": "app.followupboss.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "richdesk",
+      "value": "90a0f3c88481b704dbb0106a5e079ff1",
+      "domain": "saahomes.followupboss.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "rdtb",
+      "value": "ee3b375e3eb41654d85a5305da67deacbdef1fa3357e82e769084d8442091b9d",
+      "domain": ".saahomes.followupboss.com",
+      "path": "/",
+      "expires": 1800377269.710079,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Strict"
+    },
+    {
+      "name": "rdack2",
+      "value": "28538ec22e980eeda1c35368ffd83dd2c1d744ecf00040d9c35a09ead257d451",
+      "domain": ".saahomes.followupboss.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "rdpl2",
+      "value": "4dedc4e17203f399a0b044e6efba3a670fe89a1a52dedfd6c5a143c3d2c51ec4",
+      "domain": ".saahomes.followupboss.com",
+      "path": "/",
+      "expires": 1771433269.710205,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "rdpl_subdomain",
+      "value": "saahomes",
+      "domain": ".followupboss.com",
+      "path": "/",
+      "expires": 1771433269.710262,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "fs_lua",
+      "value": "1.1768841270554",
+      "domain": ".followupboss.com",
+      "path": "/",
+      "expires": 1768843070,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Strict"
+    },
+    {
+      "name": "fs_uid",
+      "value": "#W8E#99813fd4-42eb-4138-89b7-5f78d1fc08d0:8f81a81f-5ec3-47c8-88fd-b836d5ca50b5:1768841270554::1#8a3f3ba4#/1800377273",
+      "domain": ".followupboss.com",
+      "path": "/",
+      "expires": 1800377273,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Strict"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://saahomes.followupboss.com",
+      "localStorage": [
+        {
+          "name": "intercom.intercom-state-mfhsavoz",
+          "value": "{\"app\":{\"openConfig\":{\"unifiedStyling\":true,\"spaces\":[],\"userHasReceivedChecklists\":false,\"userHasLiveNewsfeed\":false,\"userHasTickets\":false},\"selfServeSuggestionsMatch\":false,\"features\":{\"anonymousInboundMessages\":false,\"googleAnalytics\":false,\"inboundMessages\":false,\"googleAnalytics4Integration\":false},\"isDeveloperWorkspace\":false},\"launcher\":{\"isLauncherEnabled\":false},\"launcherDiscoveryMode\":{\"hasDiscoveredLauncher\":false},\"launcherSettings\":{\"isLoading\":true},\"user\":{},\"message\":{},\"conversations\":{\"byId\":{}},\"openOnBoot\":{\"type\":null,\"metadata\":{},\"lastOpenAtTimestamp\":1768841274610},\"operator\":{\"lastComposerEvent\":0},\"router\":{\"isInitialized\":false,\"navigationQueue\":[]}}"
+        },
+        {
+          "name": "fs_intercom",
+          "value": "99813fd4-42eb-4138-89b7-5f78d1fc08d0:8f81a81f-5ec3-47c8-88fd-b836d5ca50b5"
+        },
+        {
+          "name": "pusherTransportEncrypted",
+          "value": "{\"timestamp\":1768841273388,\"transport\":\"ws\",\"latency\":792}"
+        },
+        {
+          "name": "loglevel",
+          "value": "WARN"
+        },
+        {
+          "name": "_fs_lua",
+          "value": "1.1768841270554"
+        },
+        {
+          "name": "FUB.desktopNotifications.enabled",
+          "value": "false"
+        },
+        {
+          "name": "_fs_uid",
+          "value": "#W8E#99813fd4-42eb-4138-89b7-5f78d1fc08d0:8f81a81f-5ec3-47c8-88fd-b836d5ca50b5:1768841270554::1#8a3f3ba4#/1800377273"
+        }
+      ]
+    }
+  ]
+}

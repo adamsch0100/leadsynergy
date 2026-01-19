@@ -33,6 +33,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubItem,
+  SidebarMenuSubButton,
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
@@ -325,17 +328,19 @@ function AppSidebar({ role }: { role: "admin" | "agent" }) {
                       <ChevronDown className={`h-4 w-4 transition-transform ${aiAgentOpen ? 'rotate-180' : ''}`} />
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
-                  <CollapsibleContent className="pl-4">
-                    {aiAgentSubMenuItems.map((item) => (
-                      <SidebarMenuItem key={item.href}>
-                        <SidebarMenuButton asChild isActive={pathname === item.href} tooltip={item.title} className="px-4 py-2">
-                          <Link href={item.href}>
-                            <item.icon className="h-4 w-4" />
-                            <span className="ml-3 text-sm">{item.title}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))}
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      {aiAgentSubMenuItems.map((item) => (
+                        <SidebarMenuSubItem key={item.href}>
+                          <SidebarMenuSubButton asChild isActive={pathname === item.href}>
+                            <Link href={item.href}>
+                              <item.icon className="h-4 w-4" />
+                              <span className="ml-3 text-sm">{item.title}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
                   </CollapsibleContent>
                 </Collapsible>
               </SidebarMenuItem>
@@ -356,17 +361,19 @@ function AppSidebar({ role }: { role: "admin" | "agent" }) {
                       <ChevronDown className={`h-4 w-4 transition-transform ${leadsOpen ? 'rotate-180' : ''}`} />
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
-                  <CollapsibleContent className="pl-4">
-                    {leadSubMenuItems.map((item) => (
-                      <SidebarMenuItem key={item.href}>
-                        <SidebarMenuButton asChild isActive={pathname === item.href} tooltip={item.title} className="px-4 py-2">
-                          <Link href={item.href}>
-                            <item.icon className="h-4 w-4" />
-                            <span className="ml-3 text-sm">{item.title}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))}
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      {leadSubMenuItems.map((item) => (
+                        <SidebarMenuSubItem key={item.href}>
+                          <SidebarMenuSubButton asChild isActive={pathname === item.href}>
+                            <Link href={item.href}>
+                              <item.icon className="h-4 w-4" />
+                              <span className="ml-3 text-sm">{item.title}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
                   </CollapsibleContent>
                 </Collapsible>
               </SidebarMenuItem>

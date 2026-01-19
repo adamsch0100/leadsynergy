@@ -7,6 +7,7 @@ from app.webhook.fub_webhook_f import (
     webhook_person_created_handler,
     webhook_person_updated_handler,
 )
+from app.webhook.ai_webhook_handlers import ai_webhook_bp
 from app.webhook.stripe_webhook_handler import register_stripe_webhook
 from app.integrations.stripe.service import create_checkout_session
 from flask_cors import CORS
@@ -116,6 +117,9 @@ app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
 
 # Register the lead source mappings blueprint
 app.register_blueprint(lead_source_mappings_bp, url_prefix='/api/lead-sources')
+
+# Register the AI webhook handlers (for real-time message processing)
+app.register_blueprint(ai_webhook_bp)  # Blueprint already has url_prefix='/webhooks/ai'
 
 # Register the webhook routes
 app.add_url_rule(

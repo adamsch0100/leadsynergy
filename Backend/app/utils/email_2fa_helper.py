@@ -408,6 +408,214 @@ class Email2FAHelper:
 
         return None
 
+    def get_verification_link(
+        self,
+        sender_contains: str = None,
+        subject_contains: str = None,
+        link_contains: str = None,
+        max_age_seconds: int = 180,
+        max_retries: int = 10,
+        retry_delay: float = 3.0
+    ) -> Optional[str]:
+        """
+        Get a verification link from recent emails (for magic link 2FA).
+
+        Args:
+            sender_contains: Filter by sender email/name (e.g., "google", "noreply")
+            subject_contains: Filter by subject line
+            link_contains: Filter links by URL pattern (e.g., "accounts.google.com")
+            max_age_seconds: Only check emails from the last N seconds (default: 180 = 3 minutes)
+            max_retries: Number of times to retry if link not found (default: 10)
+            retry_delay: Seconds to wait between retries (default: 3.0)
+
+        Returns:
+            The verification link URL as a string, or None if not found
+        """
+        for attempt in range(max_retries):
+            try:
+                link = self._fetch_link(
+                    sender_contains=sender_contains,
+                    subject_contains=subject_contains,
+                    link_contains=link_contains,
+                    max_age_seconds=max_age_seconds
+                )
+
+                if link:
+                    logger.info(f"Found verification link: {link[:80]}...")
+                    return link
+
+                if attempt < max_retries - 1:
+                    logger.info(f"Link not found yet, retrying in {retry_delay}s... ({attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+
+            except Exception as e:
+                logger.error(f"Error fetching link (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+
+        logger.warning("Verification link not found after all retries")
+        return None
+
+    def _fetch_link(
+        self,
+        sender_contains: str = None,
+        subject_contains: str = None,
+        link_contains: str = None,
+        max_age_seconds: int = 180
+    ) -> Optional[str]:
+        """Internal method to fetch a verification link from emails"""
+        if not self.connect():
+            return None
+
+        try:
+            # Select inbox
+            self._connection.select("INBOX")
+
+            # Search for recent emails
+            since_date = (datetime.now() - timedelta(seconds=max_age_seconds)).strftime("%d-%b-%Y")
+            search_criteria = f'(SINCE "{since_date}")'
+
+            status, message_ids = self._connection.search(None, search_criteria)
+
+            if status != "OK" or not message_ids[0]:
+                logger.debug("No recent emails found")
+                return None
+
+            # Get message IDs (most recent first)
+            ids = message_ids[0].split()
+            ids.reverse()
+
+            logger.debug(f"Found {len(ids)} recent emails to check for links")
+
+            # Check each email
+            for msg_id in ids[:20]:
+                try:
+                    status, msg_data = self._connection.fetch(msg_id, "(RFC822)")
+
+                    if status != "OK":
+                        continue
+
+                    raw_email = msg_data[0][1]
+                    msg = email.message_from_bytes(raw_email)
+
+                    # Check sender
+                    from_header = msg.get("From", "")
+                    if sender_contains and sender_contains.lower() not in from_header.lower():
+                        continue
+
+                    # Check subject
+                    subject = self._decode_header(msg.get("Subject", ""))
+                    if subject_contains and subject_contains.lower() not in subject.lower():
+                        continue
+
+                    # Check date
+                    date_str = msg.get("Date", "")
+                    msg_date = email.utils.parsedate_to_datetime(date_str)
+                    if msg_date:
+                        now = datetime.now(msg_date.tzinfo) if msg_date.tzinfo else datetime.now()
+                        age = (now - msg_date).total_seconds()
+                        if age > max_age_seconds:
+                            continue
+
+                    logger.info(f"Checking email for links from: {from_header}, subject: {subject[:50]}")
+
+                    # Extract body (prefer HTML for links)
+                    body = self._get_email_body_html(msg)
+
+                    # Find verification links
+                    link = self._extract_verification_link(body, link_contains)
+                    if link:
+                        return link
+
+                except Exception as e:
+                    logger.debug(f"Error parsing email {msg_id}: {e}")
+                    continue
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error searching emails for links: {e}")
+            return None
+
+    def _get_email_body_html(self, msg) -> str:
+        """Extract HTML body from email (for link extraction)"""
+        body = ""
+
+        if msg.is_multipart():
+            for part in msg.walk():
+                content_type = part.get_content_type()
+                if content_type == "text/html":
+                    try:
+                        payload = part.get_payload(decode=True)
+                        charset = part.get_content_charset() or "utf-8"
+                        body = payload.decode(charset, errors="ignore")
+                        break
+                    except:
+                        pass
+                elif content_type == "text/plain" and not body:
+                    try:
+                        payload = part.get_payload(decode=True)
+                        charset = part.get_content_charset() or "utf-8"
+                        body = payload.decode(charset, errors="ignore")
+                    except:
+                        pass
+        else:
+            try:
+                payload = msg.get_payload(decode=True)
+                charset = msg.get_content_charset() or "utf-8"
+                body = payload.decode(charset, errors="ignore")
+            except:
+                pass
+
+        return body
+
+    def _extract_verification_link(self, text: str, link_contains: str = None) -> Optional[str]:
+        """Extract verification link from email body"""
+        if not text:
+            return None
+
+        # Common patterns for verification links
+        link_patterns = [
+            r'href=["\']([^"\']+)["\']',  # HTML href
+            r'(https?://[^\s<>"\']+)',  # Plain URLs
+        ]
+
+        # Keywords that indicate a verification link
+        verification_keywords = [
+            'verify', 'confirm', 'approve', 'signin', 'sign-in', 'login',
+            'auth', 'authenticate', 'validation', 'activate', 'account'
+        ]
+
+        all_links = []
+        for pattern in link_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            all_links.extend(matches)
+
+        # Filter and prioritize links
+        for link in all_links:
+            link_lower = link.lower()
+
+            # Skip obviously non-verification links
+            if any(skip in link_lower for skip in ['unsubscribe', 'privacy', 'terms', 'help', 'support', '.css', '.js', '.png', '.jpg']):
+                continue
+
+            # If link_contains is specified, filter by it
+            if link_contains and link_contains.lower() not in link_lower:
+                continue
+
+            # Check for verification keywords
+            if any(keyword in link_lower for keyword in verification_keywords):
+                logger.debug(f"Found verification link: {link[:100]}")
+                return link
+
+        # If no verification keyword found but we have link_contains filter, return first match
+        if link_contains:
+            for link in all_links:
+                if link_contains.lower() in link.lower():
+                    return link
+
+        return None
+
     def __enter__(self):
         self.connect()
         return self

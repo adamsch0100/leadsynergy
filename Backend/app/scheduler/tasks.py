@@ -104,11 +104,37 @@ def process_scheduled_lead_sync() -> Dict[str, Any]:
     return {"processed_sources": len(summary), "details": summary}
 
 
+def _get_lead_type_from_tags(lead) -> str:
+    """Extract lead type (buyer/seller) from lead tags"""
+    import json
+    try:
+        tags = getattr(lead, 'tags', None) or []
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags)
+            except (json.JSONDecodeError, TypeError):
+                tags = []
+
+        for tag in tags:
+            tag_lower = str(tag).lower()
+            if 'seller' in tag_lower:
+                return 'seller'
+            elif 'buyer' in tag_lower:
+                return 'buyer'
+
+        return None
+    except Exception:
+        return None
+
+
 def _sync_lead_to_source(settings_service, lead_service, lead, source_settings) -> Dict[str, Any]:
     """Sync a single lead to a specific external source."""
 
     platform = source_settings.source_name
-    mapped_stage = source_settings.get_mapped_stage(lead.status)
+
+    # Extract lead type for buyer/seller specific mappings
+    lead_type = _get_lead_type_from_tags(lead)
+    mapped_stage = source_settings.get_mapped_stage(lead.status, lead_type)
 
     if not mapped_stage:
         return {
@@ -428,4 +454,144 @@ def weekly_process_tags():
 
     # clean up:
     redis_service.delete('friday_schedule:tag')
+
+
+# Appointment Reminder Tasks
+
+@celery.task(bind=True, max_retries=3, default_retry_delay=60)
+def send_appointment_reminder(
+    self,
+    fub_person_id: int,
+    lead_name: str,
+    lead_phone: str,
+    appointment_time: str,
+    appointment_type: str,
+    reminder_type: str,  # "24h" or "1h"
+    agent_name: str = "",
+    property_address: str = "",
+):
+    """
+    Send appointment reminder SMS to lead.
+
+    Args:
+        fub_person_id: FUB person ID
+        lead_name: Lead's first name
+        lead_phone: Lead's phone number
+        appointment_time: ISO format appointment datetime
+        appointment_type: "showing" or "listing"
+        reminder_type: "24h" or "1h"
+        agent_name: Agent's name
+        property_address: Property address if applicable
+    """
+    from app.messaging.fub_sms_service import FUBSMSServiceSingleton
+    from datetime import datetime
+
+    try:
+        appt_dt = datetime.fromisoformat(appointment_time)
+        time_str = appt_dt.strftime("%I:%M %p")
+        date_str = appt_dt.strftime("%A")
+
+        # Build reminder message based on type
+        if reminder_type == "24h":
+            if appointment_type == "listing":
+                message = f"Hi {lead_name}! Just a reminder - we have your listing consultation tomorrow at {time_str}. Looking forward to seeing your home!"
+            else:
+                message = f"Hi {lead_name}! Just a reminder - we have showings scheduled for tomorrow at {time_str}. See you then!"
+        else:  # 1h
+            if appointment_type == "listing":
+                message = f"Hi {lead_name}! I'll be there in about an hour for our listing consultation. See you soon!"
+            else:
+                message = f"Hi {lead_name}! I'll be there in about an hour for our showing. See you soon!"
+
+        if property_address and reminder_type == "24h":
+            message = message.replace("!", f" at {property_address}!")
+
+        # Send the reminder
+        sms_service = FUBSMSServiceSingleton.get_instance()
+        result = asyncio.run(sms_service.send_text_message_async(
+            person_id=fub_person_id,
+            message=message[:160],
+        ))
+
+        if result.get("success"):
+            logger.info(f"Sent {reminder_type} reminder to {lead_name} (person {fub_person_id})")
+            return {"success": True, "message": message}
+        else:
+            logger.warning(f"Failed to send reminder: {result.get('error')}")
+            return {"success": False, "error": result.get("error")}
+
+    except Exception as e:
+        logger.error(f"Error sending appointment reminder: {e}")
+        raise self.retry(exc=e)
+
+
+def schedule_appointment_reminders(
+    fub_person_id: int,
+    lead_name: str,
+    lead_phone: str,
+    appointment_time: datetime,
+    appointment_type: str,
+    agent_name: str = "",
+    property_address: str = "",
+) -> Dict[str, Any]:
+    """
+    Schedule 24h and 1h reminder tasks for an appointment.
+
+    Args:
+        fub_person_id: FUB person ID
+        lead_name: Lead's first name
+        lead_phone: Lead's phone number
+        appointment_time: Appointment datetime
+        appointment_type: "showing" or "listing"
+        agent_name: Agent's name
+        property_address: Property address if applicable
+
+    Returns:
+        Dict with task IDs for the scheduled reminders
+    """
+    from datetime import timedelta
+
+    results = {"24h_task_id": None, "1h_task_id": None}
+    now = datetime.utcnow()
+    appt_time_str = appointment_time.isoformat()
+
+    # Schedule 24-hour reminder
+    reminder_24h_time = appointment_time - timedelta(hours=24)
+    if reminder_24h_time > now:
+        task = send_appointment_reminder.apply_async(
+            kwargs={
+                "fub_person_id": fub_person_id,
+                "lead_name": lead_name,
+                "lead_phone": lead_phone,
+                "appointment_time": appt_time_str,
+                "appointment_type": appointment_type,
+                "reminder_type": "24h",
+                "agent_name": agent_name,
+                "property_address": property_address,
+            },
+            eta=reminder_24h_time,
+        )
+        results["24h_task_id"] = task.id
+        logger.info(f"Scheduled 24h reminder for {lead_name} at {reminder_24h_time}")
+
+    # Schedule 1-hour reminder
+    reminder_1h_time = appointment_time - timedelta(hours=1)
+    if reminder_1h_time > now:
+        task = send_appointment_reminder.apply_async(
+            kwargs={
+                "fub_person_id": fub_person_id,
+                "lead_name": lead_name,
+                "lead_phone": lead_phone,
+                "appointment_time": appt_time_str,
+                "appointment_type": appointment_type,
+                "reminder_type": "1h",
+                "agent_name": agent_name,
+                "property_address": property_address,
+            },
+            eta=reminder_1h_time,
+        )
+        results["1h_task_id"] = task.id
+        logger.info(f"Scheduled 1h reminder for {lead_name} at {reminder_1h_time}")
+
+    return results
 

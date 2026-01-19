@@ -1248,3 +1248,333 @@ NURTURE_SEQUENCES = {
         ],
     },
 }
+
+
+# ============================================================================
+# NEXT BEST ACTION SCAN TASK (Runs every 15 minutes)
+# ============================================================================
+
+@shared_task(bind=True)
+def run_nba_scan_task(
+    self,
+    organization_id: str = None,
+    execute: bool = True,
+    batch_size: int = 50,
+):
+    """
+    Run the Next Best Action scan to find leads needing attention.
+
+    This task should be scheduled to run every 15 minutes via Celery Beat.
+    It proactively scans all leads and determines the optimal action to take.
+
+    Actions include:
+    - First contact for new leads
+    - Follow-up for leads that went silent
+    - Re-engagement for dormant leads
+    - Processing scheduled follow-ups
+
+    Args:
+        organization_id: Filter by organization (optional)
+        execute: Whether to execute recommended actions
+        batch_size: Number of leads to process per run
+
+    Schedule via Celery Beat:
+        'run-nba-scan': {
+            'task': 'app.scheduler.ai_tasks.run_nba_scan_task',
+            'schedule': crontab(minute='*/15'),  # Every 15 minutes
+        }
+    """
+    logger.info(f"Starting NBA scan task (execute={execute}, batch_size={batch_size})")
+
+    try:
+        from app.ai_agent.next_best_action import run_nba_scan
+
+        # Run the scan
+        result = asyncio.run(run_nba_scan(
+            organization_id=organization_id,
+            execute=execute,
+            batch_size=batch_size,
+        ))
+
+        logger.info(
+            f"NBA scan complete: {result['recommendations_count']} recommendations, "
+            f"{result['executed_count']} executed, {result['skipped_count']} skipped"
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error in NBA scan task: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@shared_task(bind=True)
+def trigger_new_lead_followup(
+    self,
+    fub_person_id: int,
+    source: str = None,
+    organization_id: str = None,
+):
+    """
+    Trigger follow-up sequence for a new lead.
+
+    Call this when a new lead is created (via webhook or sync).
+
+    Args:
+        fub_person_id: FUB person ID
+        source: Lead source (e.g., 'MyAgentFinder', 'Redfin')
+        organization_id: Organization ID
+    """
+    logger.info(f"Triggering new lead follow-up for person {fub_person_id} (source: {source})")
+
+    try:
+        from app.ai_agent.next_best_action import get_nba_engine, RecommendedAction, ActionType
+        from app.ai_agent.followup_manager import FollowUpTrigger
+
+        engine = get_nba_engine()
+
+        # Create first contact action
+        action = RecommendedAction(
+            fub_person_id=fub_person_id,
+            action_type=ActionType.FIRST_CONTACT_SMS,
+            priority_score=90,  # New leads are high priority
+            reason=f"New lead from {source or 'Unknown'}",
+            message_context={
+                "source": source,
+                "trigger": FollowUpTrigger.NEW_LEAD.value,
+            }
+        )
+
+        # Execute the action
+        result = asyncio.run(engine.execute_action(action))
+
+        logger.info(f"New lead follow-up triggered: {result}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error triggering new lead follow-up: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+# ============================================================================
+# INSTANT RESPONSE TASK - Speed-to-Lead (< 1 minute)
+# Research: MIT study - 21x higher conversion within 5 minutes
+# ============================================================================
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=10,  # Quick retry for speed
+    autoretry_for=(Exception,),
+)
+def trigger_instant_ai_response(
+    self,
+    fub_person_id: int,
+    source: str = None,
+    organization_id: str = None,
+    user_id: str = None,
+):
+    """
+    INSTANT response for new leads - triggered immediately by webhook.
+
+    This is the speed-to-lead critical path:
+    - Bypasses the 15-minute NBA scan
+    - Sends first contact within 60 seconds
+    - Schedules the full aggressive follow-up sequence
+
+    Research backing:
+    - MIT Study: 21x higher conversion within 5 minutes
+    - 78% of sales go to first responder (LeadSimple)
+    - 391% higher conversion within 1 minute
+
+    Args:
+        fub_person_id: FUB person ID
+        source: Lead source (e.g., 'MyAgentFinder', 'Redfin')
+        organization_id: Organization ID
+        user_id: User ID for settings lookup
+    """
+    logger.info(
+        f"🚀 INSTANT AI response triggered for person {fub_person_id} "
+        f"(source: {source})"
+    )
+
+    try:
+        from app.database.supabase_client import get_supabase_client
+        from app.ai_agent.settings_service import get_settings_service
+        from app.ai_agent.followup_manager import get_followup_manager, FollowUpTrigger
+        from app.ai_agent.compliance_checker import ComplianceChecker
+        from app.messaging.fub_sms_service import FUBSMSService
+        from app.fub.fub_client import FUBClient
+        import random
+
+        supabase = get_supabase_client()
+
+        # Load settings for channel toggles and configuration
+        settings_service = get_settings_service(supabase)
+        settings = asyncio.run(settings_service.get_settings(user_id, organization_id))
+
+        # Check if instant response is enabled
+        if not settings.instant_response_enabled:
+            logger.info(f"Instant response disabled for org {organization_id}")
+            return {"success": False, "reason": "instant_response_disabled"}
+
+        # Get person data from FUB
+        fub = FUBClient()
+        person_data = fub.get_person(fub_person_id)
+
+        if not person_data:
+            logger.error(f"Person {fub_person_id} not found in FUB")
+            return {"success": False, "error": "Person not found"}
+
+        # Extract contact info
+        first_name = person_data.get("firstName", "there")
+        phones = person_data.get("phones", [])
+        phone = phones[0].get("value") if phones else None
+
+        # Check if we can send SMS
+        if not phone:
+            logger.warning(f"No phone number for person {fub_person_id}")
+            return {"success": False, "error": "No phone number"}
+
+        # Check compliance
+        compliance = ComplianceChecker(supabase)
+        compliance_result = asyncio.run(
+            compliance.check_send_allowed(
+                phone_number=phone,
+                fub_person_id=fub_person_id,
+            )
+        )
+
+        if compliance_result.status.value != "allowed":
+            logger.warning(f"Compliance blocked instant response: {compliance_result.reason}")
+            return {"success": False, "error": f"Compliance: {compliance_result.reason}"}
+
+        # ================================================================
+        # INTELLIGENT FIRST CONTACT - Use AI for context-aware message
+        # ================================================================
+        from app.ai_agent.response_generator import AIResponseGenerator, LeadProfile
+        from app.ai_agent.followup_manager import FollowUpManager, MessageType
+
+        # Build rich lead profile for intelligent context
+        lead_profile = LeadProfile.from_fub_data(person_data)
+
+        # Try to use AI for intelligent first contact
+        message = None
+        try:
+            response_generator = AIResponseGenerator(
+                personality=settings.personality_tone,
+                agent_name=settings.agent_name,
+                brokerage_name=settings.brokerage_name,
+            )
+
+            # Generate AI-powered first contact with full lead context
+            ai_response = asyncio.run(
+                response_generator.generate_response(
+                    incoming_message="",  # Empty for first contact
+                    conversation_history=[],
+                    lead_context={
+                        "first_name": first_name,
+                        "score": lead_profile.score,
+                        "source": source or lead_profile.source,
+                    },
+                    current_state="initial",
+                    qualification_data={},
+                    lead_profile=lead_profile,
+                )
+            )
+
+            if ai_response.quality.value in ["excellent", "good", "acceptable"]:
+                message = ai_response.response_text
+                logger.info(f"AI-generated intelligent first contact for {fub_person_id}")
+            else:
+                logger.warning(f"AI response quality insufficient, using template fallback")
+
+        except Exception as ai_error:
+            logger.warning(f"AI first contact failed, using template: {ai_error}")
+
+        # Fallback to templates if AI failed
+        if not message:
+            templates = FollowUpManager.MESSAGE_TEMPLATES.get(MessageType.FIRST_CONTACT, [])
+            if templates:
+                template = random.choice(templates)
+                # Determine area from profile
+                area = (
+                    lead_profile.preferred_neighborhoods[0] if lead_profile.preferred_neighborhoods
+                    else lead_profile.preferred_cities[0] if lead_profile.preferred_cities
+                    else person_data.get("addresses", [{}])[0].get("city", "your area") if person_data.get("addresses")
+                    else "your area"
+                )
+                message = template.format(
+                    first_name=first_name,
+                    agent_name=settings.agent_name,
+                    brokerage=settings.brokerage_name,
+                    area=area,
+                )
+            else:
+                message = f"Hey {first_name}! {settings.agent_name} here. Saw you were looking at homes - exciting! When are you thinking of making a move?"
+
+        # SEND THE MESSAGE IMMEDIATELY
+        sms_service = FUBSMSService()
+        result = sms_service.send_text_message(
+            person_id=fub_person_id,
+            message=message,
+        )
+
+        if result.get("success"):
+            logger.info(f"✅ Instant first contact sent to person {fub_person_id}")
+
+            # Mark first AI contact timestamp
+            supabase.table("ai_conversations").upsert({
+                "fub_person_id": fub_person_id,
+                "organization_id": organization_id,
+                "first_ai_contact_at": datetime.utcnow().isoformat(),
+                "last_ai_message_at": datetime.utcnow().isoformat(),
+                "state": "initial",
+            }, on_conflict="fub_person_id").execute()
+
+            # Log the message
+            supabase.table("ai_message_log").insert({
+                "fub_person_id": fub_person_id,
+                "direction": "outbound",
+                "channel": "sms",
+                "message_content": message,
+                "intent_detected": "first_contact_instant",
+                "created_at": datetime.utcnow().isoformat(),
+            }).execute()
+
+            # Now schedule the REST of the aggressive sequence (skip step 0)
+            # The remaining steps: 30min, Day 1, Day 2, etc.
+            # Pass lead_profile for intelligent qualification skip logic
+            followup_manager = get_followup_manager(supabase)
+            sequence_result = asyncio.run(
+                followup_manager.schedule_followup_sequence(
+                    fub_person_id=fub_person_id,
+                    organization_id=organization_id,
+                    trigger=FollowUpTrigger.NEW_LEAD,
+                    start_delay_hours=0,  # Immediate
+                    preferred_channel="sms",
+                    lead_timezone=person_data.get("timezone", "America/New_York"),
+                    settings=settings,
+                    lead_profile=lead_profile,  # For intelligent qualification skip
+                )
+            )
+
+            logger.info(
+                f"Scheduled {sequence_result['total_scheduled']} follow-ups "
+                f"(skipped {sequence_result.get('total_skipped', 0)} voice steps)"
+            )
+
+            return {
+                "success": True,
+                "fub_person_id": fub_person_id,
+                "message_sent": True,
+                "sequence_scheduled": sequence_result["total_scheduled"],
+            }
+
+        else:
+            logger.error(f"Failed to send instant message: {result.get('error')}")
+            return {"success": False, "error": result.get("error")}
+
+    except Exception as e:
+        logger.error(f"Error in instant AI response: {e}", exc_info=True)
+        raise  # Let Celery retry

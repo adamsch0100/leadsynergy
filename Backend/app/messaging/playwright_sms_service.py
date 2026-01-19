@@ -1,0 +1,238 @@
+"""Playwright SMS Service - Send SMS via FUB web interface."""
+
+from playwright.async_api import async_playwright, Browser, Playwright
+from typing import Dict, Optional
+import asyncio
+import logging
+import os
+
+from .session_store import SessionStore
+from .fub_browser_session import FUBBrowserSession
+
+logger = logging.getLogger(__name__)
+
+
+class PlaywrightSMSService:
+    """Send SMS via FUB web interface using Playwright browser automation."""
+
+    def __init__(self):
+        self.playwright: Optional[Playwright] = None
+        self.browser: Optional[Browser] = None
+        self.sessions: Dict[str, FUBBrowserSession] = {}  # agent_id -> session
+        self.session_store = SessionStore()
+        self._initialized = False
+        self._lock = asyncio.Lock()
+
+    async def initialize(self):
+        """Initialize Playwright and browser instance."""
+        async with self._lock:
+            if self._initialized:
+                return
+
+            logger.info("Initializing Playwright SMS Service")
+
+            self.playwright = await async_playwright().start()
+
+            # Browser launch options
+            headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+
+            self.browser = await self.playwright.chromium.launch(
+                headless=headless,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-gpu',
+                    '--disable-web-security',
+                    '--disable-features=IsolateOrigins,site-per-process'
+                ]
+            )
+
+            self._initialized = True
+            logger.info(f"Playwright initialized (headless={headless})")
+
+    async def get_or_create_session(self, agent_id: str, credentials: dict) -> FUBBrowserSession:
+        """Get existing session or create new one for agent."""
+        async with self._lock:
+            if agent_id in self.sessions:
+                session = self.sessions[agent_id]
+                if await session.is_valid():
+                    logger.debug(f"Reusing existing session for agent {agent_id}")
+                    return session
+                else:
+                    # Session expired, close and remove it
+                    await session.close()
+                    del self.sessions[agent_id]
+
+            # Create new session
+            if not self._initialized:
+                await self.initialize()
+
+            logger.info(f"Creating new session for agent {agent_id}")
+            session = FUBBrowserSession(self.browser, agent_id, self.session_store)
+            await session.login(credentials)
+            self.sessions[agent_id] = session
+            return session
+
+    async def send_sms(
+        self,
+        agent_id: str,
+        person_id: int,
+        message: str,
+        credentials: dict
+    ) -> dict:
+        """Send SMS to lead via FUB web interface.
+
+        Args:
+            agent_id: The agent's unique identifier (for session management)
+            person_id: The FUB person ID to send SMS to
+            message: The message content
+            credentials: Dict with 'type' (email/google/microsoft), 'email', 'password'
+
+        Returns:
+            Dict with 'success', 'message_id' or 'error'
+        """
+        try:
+            session = await self.get_or_create_session(agent_id, credentials)
+            result = await session.send_text_message(person_id, message)
+            return {
+                "success": True,
+                "message_id": f"playwright_{person_id}_{asyncio.get_event_loop().time()}",
+                "person_id": person_id,
+                "agent_id": agent_id
+            }
+        except Exception as e:
+            logger.error(f"Failed to send SMS to person {person_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def close_session(self, agent_id: str):
+        """Close a specific agent's session."""
+        async with self._lock:
+            if agent_id in self.sessions:
+                await self.sessions[agent_id].close()
+                del self.sessions[agent_id]
+                logger.info(f"Session closed for agent {agent_id}")
+
+    async def close_all_sessions(self):
+        """Close all sessions."""
+        async with self._lock:
+            for agent_id, session in self.sessions.items():
+                try:
+                    await session.close()
+                except Exception as e:
+                    logger.warning(f"Error closing session for {agent_id}: {e}")
+            self.sessions.clear()
+            logger.info("All sessions closed")
+
+    async def shutdown(self):
+        """Shutdown the service and cleanup resources."""
+        await self.close_all_sessions()
+
+        if self.browser:
+            await self.browser.close()
+            self.browser = None
+
+        if self.playwright:
+            await self.playwright.stop()
+            self.playwright = None
+
+        self._initialized = False
+        logger.info("Playwright SMS Service shutdown complete")
+
+    def get_active_sessions(self) -> list:
+        """Get list of active session agent IDs."""
+        return list(self.sessions.keys())
+
+
+class PlaywrightSMSServiceSingleton:
+    """Singleton accessor for PlaywrightSMSService."""
+
+    _instance: Optional[PlaywrightSMSService] = None
+    _lock = asyncio.Lock()
+
+    @classmethod
+    async def get_instance(cls) -> PlaywrightSMSService:
+        """Get or create the singleton instance."""
+        async with cls._lock:
+            if cls._instance is None:
+                cls._instance = PlaywrightSMSService()
+                await cls._instance.initialize()
+            return cls._instance
+
+    @classmethod
+    async def shutdown(cls):
+        """Shutdown the singleton instance."""
+        async with cls._lock:
+            if cls._instance:
+                await cls._instance.shutdown()
+                cls._instance = None
+
+
+# Convenience function for one-off sends
+async def send_sms_via_browser(
+    agent_id: str,
+    person_id: int,
+    message: str,
+    credentials: dict
+) -> dict:
+    """Convenience function to send SMS via browser.
+
+    Args:
+        agent_id: Agent identifier for session management
+        person_id: FUB person ID
+        message: SMS content
+        credentials: Dict with 'type', 'email', 'password'
+
+    Returns:
+        Dict with 'success' and either 'message_id' or 'error'
+    """
+    service = await PlaywrightSMSServiceSingleton.get_instance()
+    return await service.send_sms(agent_id, person_id, message, credentials)
+
+
+async def send_sms_with_auto_credentials(
+    person_id: int,
+    message: str,
+    user_id: str = None,
+    organization_id: str = None,
+    supabase_client=None,
+) -> dict:
+    """
+    Send SMS via browser with automatic credential lookup.
+
+    This function automatically retrieves FUB browser credentials from:
+    1. User-specific settings in database
+    2. Organization settings in database
+    3. Environment variables (fallback)
+
+    Args:
+        person_id: FUB person ID to send SMS to
+        message: SMS content
+        user_id: Optional user ID for credential lookup
+        organization_id: Optional org ID for credential lookup
+        supabase_client: Optional Supabase client for DB lookup
+
+    Returns:
+        Dict with 'success' and either 'message_id' or 'error'
+    """
+    from app.ai_agent.settings_service import get_fub_browser_credentials
+
+    # Get credentials from settings or environment
+    credentials = await get_fub_browser_credentials(
+        supabase_client=supabase_client,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+
+    if not credentials:
+        return {
+            "success": False,
+            "error": "No FUB browser credentials configured. Set FUB_LOGIN_EMAIL and FUB_LOGIN_PASSWORD in environment or database settings."
+        }
+
+    # Get agent_id from credentials or generate one
+    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+
+    service = await PlaywrightSMSServiceSingleton.get_instance()
+    return await service.send_sms(agent_id, person_id, message, credentials)

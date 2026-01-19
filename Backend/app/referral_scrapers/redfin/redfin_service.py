@@ -336,24 +336,37 @@ class RedfinService(BaseReferralService):
     def _handle_google_oauth(self) -> bool:
         """Handle the Google OAuth flow"""
         try:
-            # Check if we're on Google's login page
-            self.wis.human_delay(2, 3)
+            # Wait for popup or redirect to Google
+            print("[Google OAuth] Waiting for Google sign-in page...")
+            self.wis.human_delay(3, 5)
             current_url = self.driver_service.get_current_url()
             print(f"[Google OAuth] Current URL: {current_url}")
 
             # Handle popup window if opened
             original_window = self.driver_service.driver.current_window_handle
             all_windows = self.driver_service.driver.window_handles
+            print(f"[Google OAuth] Number of windows: {len(all_windows)}")
 
+            popup_window = None
             if len(all_windows) > 1:
                 # Switch to popup
                 for window in all_windows:
                     if window != original_window:
                         self.driver_service.driver.switch_to.window(window)
+                        popup_window = window
                         print("[Google OAuth] Switched to popup window")
+                        self.wis.human_delay(2, 3)
                         break
 
             current_url = self.driver_service.get_current_url()
+            print(f"[Google OAuth] After popup check, URL: {current_url}")
+
+            # Wait longer if not on Google yet
+            if "google.com" not in current_url:
+                print("[Google OAuth] Not on Google yet, waiting...")
+                self.wis.human_delay(5, 8)
+                current_url = self.driver_service.get_current_url()
+                print(f"[Google OAuth] After wait, URL: {current_url}")
 
             # If we're on Google's login page
             if "accounts.google.com" in current_url or "google.com/signin" in current_url:
@@ -546,30 +559,47 @@ class RedfinService(BaseReferralService):
                         print("[Google 2FA] Selected email verification option")
                         self.wis.human_delay(3, 5)
 
-            # Now try to get code from email
-            print("[Google 2FA] Retrieving code from email...")
-
             # Check if we have 2FA credentials
             if not self.twofa_email or not self.twofa_app_password:
                 print("[Google 2FA] ERROR: No 2FA email credentials configured!")
                 return False
 
-            # Get the 2FA code from email
+            # First try to get a magic link from email (Google often sends these)
+            print("[Google 2FA] Checking for magic link in email...")
             helper = Email2FAHelper(
                 email_address=self.twofa_email,
                 app_password=self.twofa_app_password
             )
 
+            # Try to get verification link first
+            magic_link = helper.get_verification_link(
+                sender_contains="google",
+                link_contains="accounts.google.com",
+                max_age_seconds=180,
+                max_retries=10,
+                retry_delay=3.0
+            )
+
+            if magic_link:
+                print(f"[Google 2FA] Found magic link, navigating...")
+                # Open the magic link in the browser
+                self.driver_service.get_page(magic_link)
+                self.wis.human_delay(5, 8)
+                print("[Google 2FA] Clicked magic link from email")
+                return True
+
+            # If no magic link, try to get a 6-digit code
+            print("[Google 2FA] No magic link found, trying verification code...")
             code = helper.get_verification_code(
                 sender_contains="google",
                 max_age_seconds=180,
-                max_retries=15,
+                max_retries=10,
                 retry_delay=2.0,
                 code_length=6
             )
 
             if not code:
-                print("[Google 2FA] ERROR: Could not retrieve 2FA code from email")
+                print("[Google 2FA] ERROR: Could not retrieve 2FA code or link from email")
                 print("[Google 2FA] You may need to manually approve on your phone")
                 return False
 

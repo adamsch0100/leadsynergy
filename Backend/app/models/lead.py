@@ -29,6 +29,7 @@ class Lead(BaseModel):
         self.fub_stage_name: Optional[str] = None
         self.organization_id: Optional[str] = None
         self.user_id: Optional[str] = None
+        self.lead_type: Optional[str] = None  # "Seller", "Buyer", or None
         self.metadata: Dict[str, Any] = {}
 
     @classmethod
@@ -45,6 +46,7 @@ class Lead(BaseModel):
         lead.tags = data.get("tags")
         lead.price = data.get("price")
         lead.fub_person_id = str(data.get("id")) if data.get("id") else None
+        lead.lead_type = data.get("type")  # FUB sends "Seller" or "Buyer"
         lead.created_at = cls._parse_datetime(data.get("created"))
         lead.updated_at = cls._parse_datetime(data.get("updated"))
 

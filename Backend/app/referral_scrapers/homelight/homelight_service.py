@@ -166,7 +166,15 @@ class HomelightService(BaseReferralService):
                                 continue
 
                             # VALIDATE: Must have stage keywords in text (assigned agent won't have these)
-                            stage_keywords = ['agent left', 'agent right', 'voicemail', 'connected', 'meeting', 'listing', 'escrow', 'closed', 'left voicemail', 'right voicemail', 'vm/email', 'vm']
+                            # Include all possible HomeLight stages to ensure detection
+                            stage_keywords = [
+                                'agent left', 'agent right', 'voicemail', 'connected', 'meeting',
+                                'listing', 'escrow', 'closed', 'left voicemail', 'right voicemail',
+                                'vm/email', 'vm', 'met', 'met with', 'buyer', 'seller', 'person',
+                                'showing', 'scheduled', 'appointment', 'consulting', 'pre-approval',
+                                'offer', 'pending', 'active', 'new', 'qualified', 'nurture',
+                                'dead', 'lost', 'not interested', 'unresponsive', 'working'
+                            ]
                             has_stage_keyword = any(keyword in candidate_text_lower for keyword in stage_keywords)
                             
                             if not has_stage_keyword:
@@ -2008,6 +2016,65 @@ class HomelightService(BaseReferralService):
     def login(self) -> bool:
         """Legacy login method - delegates to login_once() for consistency"""
         return self.login_once()
+
+    def _should_skip_lead(self, lead: Lead) -> bool:
+        """Check if lead was recently synced and should be skipped"""
+        try:
+            if not lead.metadata:
+                return False
+
+            last_synced_str = lead.metadata.get("homelight_last_updated")
+            if not last_synced_str:
+                return False
+
+            last_synced = datetime.fromisoformat(last_synced_str.replace('Z', '+00:00'))
+            if last_synced.tzinfo is None:
+                from datetime import timezone
+                last_synced = last_synced.replace(tzinfo=timezone.utc)
+
+            from datetime import timezone
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=self.min_sync_interval_hours)
+            return last_synced > cutoff
+
+        except Exception as e:
+            print(f"[WARNING] Error checking sync status: {e}")
+            return False
+
+    def _get_hours_since_sync(self, lead: Lead) -> Optional[float]:
+        """Get hours since last sync for display purposes"""
+        try:
+            if not lead.metadata:
+                return None
+
+            last_synced_str = lead.metadata.get("homelight_last_updated")
+            if not last_synced_str:
+                return None
+
+            last_synced = datetime.fromisoformat(last_synced_str.replace('Z', '+00:00'))
+            if last_synced.tzinfo is None:
+                from datetime import timezone
+                last_synced = last_synced.replace(tzinfo=timezone.utc)
+
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+            return (now - last_synced).total_seconds() / 3600
+
+        except Exception:
+            return None
+
+    def _mark_lead_synced(self, lead: Lead) -> None:
+        """Update lead metadata with sync timestamp"""
+        try:
+            if not lead.metadata:
+                lead.metadata = {}
+
+            from datetime import timezone
+            lead.metadata["homelight_last_updated"] = datetime.now(timezone.utc).isoformat()
+            self.lead_service.update(lead)
+            print(f"[TRACK] Recorded sync time for {lead.first_name} {lead.last_name}")
+
+        except Exception as e:
+            print(f"[WARNING] Failed to update lead sync timestamp: {e}")
 
     def find_and_click_customer_by_name(self, target_name: str) -> bool:
         try:

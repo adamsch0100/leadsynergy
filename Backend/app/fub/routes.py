@@ -1388,3 +1388,763 @@ def sync_lead():
     except Exception as e:
         logger.error(f"Error syncing lead: {e}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
+
+
+# =============================================================================
+# AI Agent Settings Routes
+# =============================================================================
+
+def _get_user_context_from_request():
+    """Helper to get user_id and organization_id from request headers."""
+    user_id = None
+    organization_id = None
+    supabase = SupabaseClientSingleton.get_instance()
+
+    # First try X-User-ID header (from frontend)
+    direct_user_id = request.headers.get('X-User-ID')
+    logger.info(f"_get_user_context_from_request: X-User-ID header = {direct_user_id}")
+
+    if direct_user_id:
+        try:
+            # Query user with organization_id (column now exists after migration)
+            user_result = supabase.table('users').select('id, organization_id').eq('id', direct_user_id).limit(1).execute()
+            logger.info(f"User query result: {user_result.data}")
+            if user_result.data and len(user_result.data) > 0:
+                user_id = user_result.data[0]['id']
+                organization_id = user_result.data[0].get('organization_id')
+                logger.info(f"Found user_id={user_id}, organization_id={organization_id}")
+        except Exception as e:
+            logger.error(f"Error querying user by ID: {e}")
+            # Fall back to trusting the header if query fails
+            user_id = direct_user_id
+
+    # Fall back to X-FUB-Context header (from FUB embedded app)
+    if not user_id:
+        fub_context_str = request.headers.get('X-FUB-Context', '{}')
+        try:
+            fub_context = json.loads(fub_context_str)
+            user_email = fub_context.get('user', {}).get('email')
+            if user_email:
+                user_result = supabase.table('users').select('id, organization_id').eq('email', user_email).limit(1).execute()
+                if user_result.data and len(user_result.data) > 0:
+                    user_id = user_result.data[0]['id']
+                    organization_id = user_result.data[0].get('organization_id')
+        except Exception as e:
+            logger.error(f"Error querying user by email: {e}")
+
+    logger.info(f"_get_user_context_from_request returning: user_id={user_id}, organization_id={organization_id}")
+    return user_id, organization_id
+
+
+@fub_bp.route('/ai/settings/fub-login', methods=['GET'])
+def get_fub_login_settings():
+    """
+    Get FUB browser login settings for Playwright SMS.
+
+    Returns:
+        - fub_login_email: The email/username
+        - fub_login_type: Login type (email, google, microsoft)
+        - has_password: Whether password is configured (never return actual password)
+    """
+    try:
+        # Get user from context
+        user_id, organization_id = _get_user_context_from_request()
+
+        supabase = SupabaseClientSingleton.get_instance()
+
+        # Try user-level settings first
+        settings_data = None
+        if user_id:
+            result = supabase.table('ai_agent_settings').select(
+                'fub_login_email, fub_login_password, fub_login_type'
+            ).eq('user_id', user_id).execute()
+            if result.data:
+                settings_data = result.data[0]
+
+        # Fall back to organization settings
+        if not settings_data and organization_id:
+            result = supabase.table('ai_agent_settings').select(
+                'fub_login_email, fub_login_password, fub_login_type'
+            ).eq('organization_id', organization_id).is_('user_id', 'null').execute()
+            if result.data:
+                settings_data = result.data[0]
+
+        if settings_data:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "fub_login_email": settings_data.get('fub_login_email'),
+                    "fub_login_type": settings_data.get('fub_login_type') or 'email',
+                    "has_password": bool(settings_data.get('fub_login_password'))
+                }
+            })
+
+        # Check environment variables as fallback
+        import os
+        env_email = os.getenv('FUB_LOGIN_EMAIL')
+        env_password = os.getenv('FUB_LOGIN_PASSWORD')
+        env_type = os.getenv('FUB_LOGIN_TYPE', 'email')
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "fub_login_email": env_email,
+                "fub_login_type": env_type,
+                "has_password": bool(env_password),
+                "source": "environment" if env_email else None
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting FUB login settings: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@fub_bp.route('/ai/settings/fub-login', methods=['POST'])
+def save_fub_login_settings():
+    """
+    Save FUB browser login settings for Playwright SMS.
+
+    Body:
+        - fub_login_email: The email/username for FUB login
+        - fub_login_password: The password (will be stored, should be encrypted)
+        - fub_login_type: Login type - 'email', 'google', or 'microsoft'
+    """
+    try:
+        data = request.get_json()
+        fub_login_email = data.get('fub_login_email')
+        fub_login_password = data.get('fub_login_password')
+        fub_login_type = data.get('fub_login_type', 'email')
+
+        if not fub_login_email:
+            return jsonify({
+                "success": False,
+                "message": "FUB login email is required"
+            }), 400
+
+        if fub_login_type not in ('email', 'google', 'microsoft'):
+            return jsonify({
+                "success": False,
+                "message": "Invalid login type. Must be 'email', 'google', or 'microsoft'"
+            }), 400
+
+        # Get user from context
+        user_id, organization_id = _get_user_context_from_request()
+
+        supabase = SupabaseClientSingleton.get_instance()
+
+        # Build update data
+        update_data = {
+            'fub_login_email': fub_login_email,
+            'fub_login_type': fub_login_type,
+            'updated_at': datetime.utcnow().isoformat()
+        }
+
+        # Only update password if provided
+        if fub_login_password:
+            update_data['fub_login_password'] = fub_login_password
+
+        # Try to update existing settings or create new
+        if user_id:
+            existing = supabase.table('ai_agent_settings').select('id').eq('user_id', user_id).execute()
+            if existing.data:
+                supabase.table('ai_agent_settings').update(update_data).eq('user_id', user_id).execute()
+            else:
+                update_data['user_id'] = user_id
+                if organization_id:
+                    update_data['organization_id'] = organization_id
+                supabase.table('ai_agent_settings').insert(update_data).execute()
+        elif organization_id:
+            existing = supabase.table('ai_agent_settings').select('id').eq(
+                'organization_id', organization_id
+            ).is_('user_id', 'null').execute()
+            if existing.data:
+                supabase.table('ai_agent_settings').update(update_data).eq(
+                    'organization_id', organization_id
+                ).is_('user_id', 'null').execute()
+            else:
+                update_data['organization_id'] = organization_id
+                supabase.table('ai_agent_settings').insert(update_data).execute()
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Could not determine user or organization context"
+            }), 400
+
+        # Auto-register webhooks for AI agent after saving FUB settings
+        webhook_result = None
+        try:
+            fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+            if fub_api_key:
+                from app.database.fub_api_client import FUBApiClient
+                client = FUBApiClient(api_key=fub_api_key)
+                base_url = os.getenv(
+                    'WEBHOOK_BASE_URL',
+                    'https://referral-link-backend-production.up.railway.app'
+                )
+                webhook_result = client.ensure_ai_webhooks(base_url)
+                logger.info(f"Auto-registered AI webhooks: {webhook_result}")
+        except Exception as e:
+            logger.warning(f"Could not auto-register webhooks: {e}")
+
+        return jsonify({
+            "success": True,
+            "message": "FUB login settings saved successfully",
+            "webhooks_registered": webhook_result.get('registered', []) if webhook_result else [],
+            "webhooks_existing": webhook_result.get('existing', []) if webhook_result else [],
+        })
+
+    except Exception as e:
+        logger.error(f"Error saving FUB login settings: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@fub_bp.route('/ai/settings/fub-login/test', methods=['POST'])
+def test_fub_login():
+    """
+    Test FUB browser login with Playwright.
+
+    This endpoint will attempt to log in to FUB using the provided or saved credentials.
+
+    Body (optional - if not provided, uses saved settings):
+        - fub_login_email: The email/username
+        - fub_login_password: The password
+        - fub_login_type: Login type (email, google, microsoft)
+
+    Returns:
+        - success: Whether the login was successful
+        - message: Status message
+        - session_valid: Whether the session is valid after login
+    """
+    try:
+        import asyncio
+        data = request.get_json() or {}
+
+        # Get user context first (needed for both credential lookup and test session)
+        user_id, organization_id = _get_user_context_from_request()
+
+        # Get credentials from request or fall back to saved settings
+        fub_login_email = data.get('fub_login_email')
+        fub_login_password = data.get('fub_login_password')
+        fub_login_type = data.get('fub_login_type', 'email')
+
+        # If no credentials provided, try to get from settings
+        if not fub_login_email or not fub_login_password:
+            from app.ai_agent.settings_service import get_fub_browser_credentials
+
+            # Get credentials from settings/environment
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                credentials = loop.run_until_complete(
+                    get_fub_browser_credentials(
+                        supabase_client=SupabaseClientSingleton.get_instance(),
+                        user_id=user_id,
+                        organization_id=organization_id
+                    )
+                )
+                loop.close()
+            except Exception as e:
+                logger.error(f"Error getting FUB credentials: {e}")
+                credentials = None
+
+            if not credentials:
+                return jsonify({
+                    "success": False,
+                    "message": "No FUB login credentials configured. Please save credentials first."
+                }), 400
+
+            fub_login_email = credentials.get('email')
+            fub_login_password = credentials.get('password')
+            fub_login_type = credentials.get('type', 'email')
+
+        if not fub_login_email or not fub_login_password:
+            return jsonify({
+                "success": False,
+                "message": "FUB login email and password are required"
+            }), 400
+
+        # Store in local vars for closure
+        test_email = fub_login_email
+        test_password = fub_login_password
+        test_type = fub_login_type
+        test_user_id = user_id
+
+        # Test login with Playwright
+        async def _test_login():
+            from app.messaging.playwright_sms_service import PlaywrightSMSServiceSingleton
+
+            try:
+                service = await PlaywrightSMSServiceSingleton.get_instance()
+
+                # Create a test session
+                creds = {
+                    'type': test_type,
+                    'email': test_email,
+                    'password': test_password
+                }
+
+                # Try to get/create a session (this will attempt login)
+                test_agent_id = f"test_{test_user_id or 'default'}"
+                session = await service.get_or_create_session(test_agent_id, creds)
+
+                # Verify session is valid
+                is_valid = await session.is_valid()
+
+                # Clean up test session
+                await service.close_session(test_agent_id)
+
+                return {
+                    "success": True,
+                    "session_valid": is_valid,
+                    "message": "Login successful! FUB browser session is working."
+                }
+            except Exception as e:
+                logger.error(f"FUB login test failed: {e}", exc_info=True)
+                return {
+                    "success": False,
+                    "session_valid": False,
+                    "message": f"Login failed: {str(e)}"
+                }
+
+        # Run the async test
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(_test_login())
+            loop.close()
+        except RuntimeError:
+            # Event loop already running (e.g., in async context)
+            result = asyncio.get_event_loop().run_until_complete(_test_login())
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error testing FUB login: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Test failed: {str(e)}"
+        }), 500
+
+
+@fub_bp.route('/ai/webhooks/register', methods=['POST'])
+def register_ai_webhooks():
+    """
+    Register all required AI agent webhooks with FUB.
+
+    This endpoint ensures all necessary webhooks are configured for the AI agent
+    to receive real-time notifications about:
+    - Incoming text messages (for AI response generation)
+    - New leads (for welcome sequences)
+
+    PREREQUISITES:
+    1. FUB system registration at https://apps.followupboss.com/system-registration
+    2. FUB_SYSTEM_KEY environment variable set
+
+    Body (optional):
+        - base_url: Override the base URL for webhook endpoints
+                    (defaults to production URL)
+
+    Returns:
+        - success: Whether registration was successful
+        - registered: List of newly registered webhooks
+        - existing: List of already registered webhooks
+        - failed: List of webhooks that failed to register
+    """
+    try:
+        from app.database.fub_api_client import FUBApiClient
+
+        data = request.get_json() or {}
+
+        # Check for system key first
+        fub_system_key = os.getenv('FUB_SYSTEM_KEY')
+        if not fub_system_key:
+            return jsonify({
+                "success": False,
+                "message": "FUB System Key not configured",
+                "setup_required": True,
+                "instructions": {
+                    "step1": "Go to https://apps.followupboss.com/system-registration",
+                    "step2": "Register 'LeadSynergy' as your system name",
+                    "step3": "Copy the System Key you receive",
+                    "step4": "Add FUB_SYSTEM_KEY=your_key_here to your environment variables",
+                    "step5": "Restart the server and try again"
+                }
+            }), 400
+
+        # Determine base URL for webhooks
+        # Default to Railway production URL, allow override
+        default_base_url = os.getenv(
+            'WEBHOOK_BASE_URL',
+            'https://referral-link-backend-production.up.railway.app'
+        )
+        base_url = data.get('base_url', default_base_url)
+
+        # Get FUB API key
+        fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+        if not fub_api_key:
+            return jsonify({
+                "success": False,
+                "message": "FUB API key not configured"
+            }), 400
+
+        # Register webhooks
+        client = FUBApiClient(api_key=fub_api_key)
+        result = client.ensure_ai_webhooks(base_url)
+
+        if result.get('error'):
+            return jsonify({
+                "success": False,
+                "message": f"Failed to register webhooks: {result['error']}",
+                "result": result
+            }), 500
+
+        return jsonify({
+            "success": True,
+            "message": f"Webhooks configured successfully",
+            "registered": result.get('registered', []),
+            "existing": result.get('existing', []),
+            "failed": result.get('failed', []),
+            "total_active": len(result.get('webhooks', []))
+        })
+
+    except ValueError as e:
+        # System key missing error from FUBApiClient
+        return jsonify({
+            "success": False,
+            "message": str(e),
+            "setup_required": True,
+            "instructions": {
+                "step1": "Go to https://apps.followupboss.com/system-registration",
+                "step2": "Register 'LeadSynergy' as your system name",
+                "step3": "Copy the System Key you receive",
+                "step4": "Add FUB_SYSTEM_KEY=your_key_here to your environment variables",
+                "step5": "Restart the server and try again"
+            }
+        }), 400
+    except Exception as e:
+        logger.error(f"Error registering AI webhooks: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Registration failed: {str(e)}"
+        }), 500
+
+
+@fub_bp.route('/ai/webhooks', methods=['GET'])
+def get_ai_webhooks():
+    """
+    Get all registered webhooks for the FUB account.
+
+    Requires FUB system registration at https://apps.followupboss.com/system-registration
+
+    Returns:
+        - success: Whether the request was successful
+        - webhooks: List of registered webhooks
+    """
+    try:
+        from app.database.fub_api_client import FUBApiClient
+
+        # Check for system key first
+        fub_system_key = os.getenv('FUB_SYSTEM_KEY')
+        if not fub_system_key:
+            return jsonify({
+                "success": False,
+                "message": "FUB System Key not configured",
+                "setup_required": True,
+                "instructions": {
+                    "step1": "Go to https://apps.followupboss.com/system-registration",
+                    "step2": "Register 'LeadSynergy' as your system name",
+                    "step3": "Copy the System Key you receive",
+                    "step4": "Add FUB_SYSTEM_KEY=your_key_here to your environment variables",
+                    "step5": "Restart the server and try again"
+                }
+            }), 400
+
+        # Get FUB API key
+        fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+        if not fub_api_key:
+            return jsonify({
+                "success": False,
+                "message": "FUB API key not configured"
+            }), 400
+
+        client = FUBApiClient(api_key=fub_api_key)
+        webhooks = client.get_webhooks()
+
+        # Filter to show AI-related webhooks
+        ai_webhooks = [
+            w for w in webhooks
+            if 'LeadSynergy' in w.get('system', '') or
+               w.get('event') in ('textMessagesCreated', 'peopleCreated')
+        ]
+
+        return jsonify({
+            "success": True,
+            "webhooks": webhooks,
+            "ai_webhooks": ai_webhooks,
+            "total": len(webhooks),
+            "ai_total": len(ai_webhooks)
+        })
+
+    except ValueError as e:
+        # System key missing error from FUBApiClient
+        return jsonify({
+            "success": False,
+            "message": str(e),
+            "setup_required": True
+        }), 400
+    except Exception as e:
+        logger.error(f"Error getting webhooks: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Failed to get webhooks: {str(e)}"
+        }), 500
+
+
+@fub_bp.route('/ai/config/status', methods=['GET'])
+def get_ai_config_status():
+    """
+    Get the current configuration status for AI agent features.
+
+    Returns the status of all required configurations:
+    - FUB API key
+    - FUB System registration (for webhooks)
+    - FUB Browser login (for SMS via Playwright)
+
+    Returns:
+        - success: Always True
+        - config: Dict with configuration status for each component
+        - ready: Boolean indicating if all required configs are present
+    """
+    try:
+        fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+        fub_system_key = os.getenv('FUB_SYSTEM_KEY')
+        fub_system_name = os.getenv('FUB_SYSTEM_NAME', 'LeadSynergy')
+        fub_login_email = os.getenv('FUB_LOGIN_EMAIL')
+        fub_login_password = os.getenv('FUB_LOGIN_PASSWORD')
+
+        config_status = {
+            "fub_api": {
+                "configured": bool(fub_api_key),
+                "description": "FUB API Key for data access"
+            },
+            "fub_system": {
+                "configured": bool(fub_system_key),
+                "system_name": fub_system_name if fub_system_key else None,
+                "description": "FUB System registration for webhook API access",
+                "setup_url": "https://apps.followupboss.com/system-registration" if not fub_system_key else None
+            },
+            "fub_browser_login": {
+                "configured": bool(fub_login_email and fub_login_password),
+                "email": fub_login_email if fub_login_email else None,
+                "description": "FUB browser credentials for SMS via Playwright"
+            }
+        }
+
+        # Check for database-stored credentials too
+        try:
+            user_id, organization_id = _get_user_context_from_request()
+            if user_id:
+                supabase = SupabaseClientSingleton.get_instance()
+                result = supabase.table('ai_agent_settings').select(
+                    'fub_login_email, fub_login_password'
+                ).eq('user_id', user_id).execute()
+                if result.data and result.data[0].get('fub_login_email'):
+                    config_status["fub_browser_login"]["configured"] = True
+                    config_status["fub_browser_login"]["email"] = result.data[0].get('fub_login_email')
+                    config_status["fub_browser_login"]["source"] = "database"
+        except Exception:
+            pass
+
+        # Determine overall readiness
+        ready_for_sms = config_status["fub_browser_login"]["configured"]
+        ready_for_webhooks = config_status["fub_api"]["configured"] and config_status["fub_system"]["configured"]
+
+        return jsonify({
+            "success": True,
+            "config": config_status,
+            "ready": {
+                "sms_sending": ready_for_sms,
+                "webhook_registration": ready_for_webhooks,
+                "full_ai_agent": ready_for_sms and ready_for_webhooks
+            },
+            "next_steps": _get_next_steps(config_status)
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting config status: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Failed to get config status: {str(e)}"
+        }), 500
+
+
+def _get_next_steps(config_status: dict) -> list:
+    """Generate list of next steps based on missing configuration."""
+    steps = []
+
+    if not config_status["fub_api"]["configured"]:
+        steps.append({
+            "priority": 1,
+            "action": "Add FUB_API_KEY to environment variables",
+            "description": "Get your API key from FUB Admin > API"
+        })
+
+    if not config_status["fub_system"]["configured"]:
+        steps.append({
+            "priority": 2,
+            "action": "Register LeadSynergy as a FUB System",
+            "description": "Go to https://apps.followupboss.com/system-registration",
+            "url": "https://apps.followupboss.com/system-registration"
+        })
+
+    if not config_status["fub_browser_login"]["configured"]:
+        steps.append({
+            "priority": 3,
+            "action": "Configure FUB browser login credentials",
+            "description": "POST to /fub/ai/settings/fub-login with your FUB login credentials"
+        })
+
+    return steps
+
+
+@fub_bp.route('/ai/nba/scan', methods=['POST'])
+def run_nba_scan():
+    """
+    Manually trigger the Next Best Action scan.
+
+    This scans all leads and determines the next best action for each,
+    prioritizing by urgency and opportunity. Use for testing or manual intervention.
+
+    Body (optional):
+        - execute: Whether to actually execute the actions (default: False for dry run)
+        - batch_size: Number of leads to process (default: 50)
+        - organization_id: Specific organization to scan (default: all)
+
+    Returns:
+        - success: Whether the scan completed
+        - actions: List of recommended/executed actions
+        - stats: Summary statistics
+    """
+    import asyncio
+
+    try:
+        data = request.get_json() or {}
+        execute = data.get('execute', False)  # Default to dry run
+        batch_size = min(data.get('batch_size', 50), 100)  # Cap at 100
+        organization_id = data.get('organization_id')
+
+        logger.info(f"NBA scan triggered: execute={execute}, batch_size={batch_size}")
+
+        # Import and run the NBA engine
+        from app.ai_agent.next_best_action import run_nba_scan
+
+        # Run the scan
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                run_nba_scan(
+                    organization_id=organization_id,
+                    execute=execute,
+                    batch_size=batch_size
+                )
+            )
+        finally:
+            loop.close()
+
+        return jsonify({
+            "success": True,
+            "dry_run": not execute,
+            "actions": result.get('actions', []),
+            "stats": result.get('stats', {}),
+            "total_actions": len(result.get('actions', []))
+        })
+
+    except Exception as e:
+        logger.error(f"Error running NBA scan: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"NBA scan failed: {str(e)}"
+        }), 500
+
+
+@fub_bp.route('/ai/nba/trigger-lead', methods=['POST'])
+def trigger_lead_followup():
+    """
+    Manually trigger follow-up for a specific lead.
+
+    Body:
+        - fub_person_id: Required - The FUB person ID
+        - action_type: Optional - Type of action (default: first_contact_sms)
+        - execute: Optional - Whether to execute immediately (default: False)
+
+    Returns:
+        - success: Whether the action was triggered
+        - action: The recommended/executed action
+    """
+    import asyncio
+
+    try:
+        data = request.get_json()
+        if not data or not data.get('fub_person_id'):
+            return jsonify({
+                "success": False,
+                "message": "fub_person_id is required"
+            }), 400
+
+        fub_person_id = data['fub_person_id']
+        action_type = data.get('action_type', 'first_contact_sms')
+        execute = data.get('execute', False)
+
+        logger.info(f"Manual trigger for lead {fub_person_id}: action={action_type}, execute={execute}")
+
+        from app.ai_agent.next_best_action import get_nba_engine, RecommendedAction, ActionType
+
+        # Map action type string to enum
+        action_type_map = {
+            'first_contact_sms': ActionType.FIRST_CONTACT_SMS,
+            'followup_sms': ActionType.FOLLOWUP_SMS,
+            'reengagement_sms': ActionType.REENGAGEMENT_SMS,
+            'first_contact_email': ActionType.FIRST_CONTACT_EMAIL,
+            'followup_email': ActionType.FOLLOWUP_EMAIL,
+            'channel_switch_email': ActionType.CHANNEL_SWITCH_EMAIL,
+        }
+
+        action_enum = action_type_map.get(action_type, ActionType.FIRST_CONTACT_SMS)
+
+        # Create recommended action
+        action = RecommendedAction(
+            fub_person_id=fub_person_id,
+            action_type=action_enum,
+            priority_score=100,  # High priority for manual trigger
+            reason=f"Manual trigger via API",
+            days_since_contact=0,
+            lead_score=0,
+            source="manual_trigger"
+        )
+
+        result = {"action": action.__dict__}
+
+        if execute:
+            engine = get_nba_engine()
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                exec_result = loop.run_until_complete(engine.execute_action(action))
+                result['execution'] = exec_result
+            finally:
+                loop.close()
+
+        return jsonify({
+            "success": True,
+            "executed": execute,
+            "result": result
+        })
+
+    except Exception as e:
+        logger.error(f"Error triggering lead follow-up: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Trigger failed: {str(e)}"
+        }), 500
