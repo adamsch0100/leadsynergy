@@ -254,7 +254,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             fub_person_id=person_id,
         )
 
-        if agent_response and agent_response.response:
+        if agent_response and agent_response.response_text:
             # Send response via FUB - AS the assigned agent (not system user)
             from app.messaging.fub_sms_service import FUBSMSService
             sms_service = FUBSMSService()
@@ -264,13 +264,13 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
 
             result = sms_service.send_text_message(
                 person_id=person_id,
-                message=agent_response.response,
+                message=agent_response.response_text,
                 from_user_id=fub_user_id,  # Messages appear from assigned agent's phone
             )
 
             if result.get('success'):
                 # Record outbound message
-                context.add_message("outbound", agent_response.response, "sms")
+                context.add_message("outbound", agent_response.response_text, "sms")
 
                 # Update context from agent response
                 if agent_response.lead_score_delta:
@@ -312,13 +312,13 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                     fub_person_id=person_id,
                     direction="outbound",
                     channel="sms",
-                    message_content=agent_response.response,
+                    message_content=agent_response.response_text,
                     lead_score_delta=agent_response.lead_score_delta or 0,
                     extracted_data=agent_response.extracted_info or {},
                     intent_detected=agent_response.detected_intent.value if agent_response.detected_intent else None,
                 )
 
-                logger.info(f"AI response sent to person {person_id}: {agent_response.response[:50]}...")
+                logger.info(f"AI response sent to person {person_id}: {agent_response.response_text[:50]}...")
 
         else:
             logger.warning(f"No AI response generated for person {person_id}")
