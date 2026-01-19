@@ -52,7 +52,11 @@ def get_agent_service():
     global _agent_service
     if _agent_service is None:
         from app.ai_agent import create_agent_service
-        _agent_service = create_agent_service()
+        import os
+        _agent_service = create_agent_service(
+            supabase_client=supabase,
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),  # Falls back to env var
+        )
     return _agent_service
 
 

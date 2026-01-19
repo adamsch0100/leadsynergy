@@ -303,6 +303,22 @@ class AIAgentService:
             self.response_generator.brokerage_name = settings.brokerage_name
             self.response_generator.use_assigned_agent_name = settings.use_assigned_agent_name
 
+            # Update LLM provider/model settings from database
+            if settings.llm_provider:
+                import os
+                self.response_generator.use_openrouter = settings.llm_provider.lower() == "openrouter"
+                if self.response_generator.use_openrouter:
+                    self.response_generator.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+                    self.response_generator.api_key = self.response_generator.openrouter_api_key
+                    self.response_generator.primary_model = settings.llm_model or self.response_generator.DEFAULT_OPENROUTER_MODEL
+                    self.response_generator.fallback_model = settings.llm_model_fallback or self.response_generator.DEFAULT_OPENROUTER_FALLBACK
+                    logger.info(f"Updated to use OpenRouter with model: {self.response_generator.primary_model}")
+                else:
+                    self.response_generator.api_key = os.getenv("ANTHROPIC_API_KEY")
+                    self.response_generator.primary_model = settings.llm_model or self.response_generator.DEFAULT_ANTHROPIC_MODEL
+                    self.response_generator.fallback_model = settings.llm_model_fallback or self.response_generator.DEFAULT_ANTHROPIC_FALLBACK
+                    logger.info(f"Updated to use Anthropic with model: {self.response_generator.primary_model}")
+
         return settings
 
     async def process_message(
