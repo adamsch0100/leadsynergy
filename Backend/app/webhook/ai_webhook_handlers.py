@@ -278,8 +278,8 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 if agent_response.lead_score_delta:
                     context.lead_score += agent_response.lead_score_delta
 
-                if agent_response.next_state:
-                    context.state = ConversationState(agent_response.next_state)
+                if agent_response.state_changed and agent_response.conversation_state:
+                    context.state = ConversationState(agent_response.conversation_state)
 
                 # Update qualification data
                 if agent_response.extracted_info:
@@ -399,57 +399,48 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
     # Get agent info
     agent_info = await get_agent_info_for_org(organization_id)
 
-    # Build the profile
+    # Calculate score label
+    lead_score = person_data.get('leadScore', 0)
+    if lead_score >= 70:
+        score_label = "Hot"
+    elif lead_score >= 40:
+        score_label = "Warm"
+    else:
+        score_label = "Cold"
+
+    # Build the profile using correct LeadProfile fields
     profile = LeadProfile(
         # Identity
         first_name=first_name,
         last_name=last_name,
-        email=emails[0].get('value') if emails else None,
-        phone=phones[0].get('value') if phones else None,
-        city=city,
-        state=state,
+        full_name=f"{first_name} {last_name}".strip(),
+        email=emails[0].get('value', '') if emails else "",
+        phone=phones[0].get('value', '') if phones else "",
 
-        # Scoring
-        lead_score=person_data.get('leadScore', 0),
-        lead_temperature="warm",  # Will be calculated
+        # Lead scoring and status
+        score=lead_score,
+        score_label=score_label,
+        stage_name=stage_name,
+        assigned_agent=agent_info.get('agent_name', ''),
 
         # Source
         source=source,
-        source_type=categorize_source(source),
 
         # Property interests
-        property_type_interest=property_type,
-        location_interests=[city] if city else [],
-        budget_min=budget_min,
-        budget_max=budget_max,
+        interested_property_type=property_type,
+        preferred_cities=[city] if city else [],
+
+        # Financial profile
+        price_min=budget_min,
+        price_max=budget_max,
+        is_pre_approved=pre_approved,
 
         # Timeline
-        timeline=timeline,
-        pre_approved=pre_approved,
+        timeline=timeline or "",
 
-        # Engagement
-        days_in_system=days_in_system,
-        total_messages=0,  # Would need to count from history
-        response_rate=0.0,
-
-        # Current state
-        current_stage=stage_name,
-        tags=tags,
-
-        # Agent info
-        agent_name=agent_info.get('agent_name', 'Sarah'),
-        agent_email=agent_info.get('agent_email', ''),
-        agent_phone=agent_info.get('agent_phone', ''),
-        brokerage_name=agent_info.get('brokerage_name', 'our team'),
+        # Tags
+        tags=tags if tags else [],
     )
-
-    # Calculate lead temperature
-    if profile.lead_score >= 70:
-        profile.lead_temperature = "hot"
-    elif profile.lead_score >= 40:
-        profile.lead_temperature = "warm"
-    else:
-        profile.lead_temperature = "cold"
 
     return profile
 
