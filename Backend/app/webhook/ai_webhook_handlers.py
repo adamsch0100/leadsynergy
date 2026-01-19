@@ -44,6 +44,9 @@ fub_client = FUBApiClient()
 # AI Agent Service (lazy loaded)
 _agent_service = None
 
+# Playwright SMS Service (lazy loaded)
+_playwright_sms_service = None
+
 def get_agent_service():
     """Lazy load the AI agent service."""
     global _agent_service
@@ -180,13 +183,28 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 organization_id=organization_id,
                 reason="STOP keyword received",
             )
-            # Send confirmation
-            from app.messaging.fub_sms_service import FUBSMSService
-            sms_service = FUBSMSService()
-            sms_service.send_text_message(
-                person_id=person_id,
-                message="You've been unsubscribed and won't receive any more messages from us. Reply START to opt back in.",
+            # Send confirmation via browser automation
+            from app.messaging.playwright_sms_service import PlaywrightSMSService
+            from app.ai_agent.settings_service import get_fub_browser_credentials
+
+            credentials = await get_fub_browser_credentials(
+                supabase_client=supabase,
+                user_id=user_id,
+                organization_id=organization_id,
             )
+
+            if credentials:
+                global _playwright_sms_service
+                if '_playwright_sms_service' not in globals() or _playwright_sms_service is None:
+                    _playwright_sms_service = PlaywrightSMSService()
+
+                agent_id = credentials.get("agent_id", user_id or "default")
+                await _playwright_sms_service.send_sms(
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    message="You've been unsubscribed and won't receive any more messages from us. Reply START to opt back in.",
+                    credentials=credentials,
+                )
             return
 
         # Check compliance before responding
@@ -257,17 +275,32 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         )
 
         if agent_response and agent_response.response_text:
-            # Send response via FUB - AS the assigned agent (not system user)
-            from app.messaging.fub_sms_service import FUBSMSService
-            sms_service = FUBSMSService()
+            # Send response via FUB browser automation (Playwright)
+            from app.messaging.playwright_sms_service import PlaywrightSMSService
+            from app.ai_agent.settings_service import get_fub_browser_credentials
 
-            # Get the FUB user ID for the assigned agent so messages come from their number
-            fub_user_id = await get_fub_user_id_for_user(user_id)
+            # Get FUB browser credentials for this user/org
+            credentials = await get_fub_browser_credentials(
+                supabase_client=supabase,
+                user_id=user_id,
+                organization_id=organization_id,
+            )
 
-            result = sms_service.send_text_message(
+            if not credentials:
+                logger.error(f"No FUB credentials found for user {user_id} / org {organization_id}")
+                return
+
+            # Get or create global playwright service
+            global _playwright_sms_service
+            if '_playwright_sms_service' not in globals() or _playwright_sms_service is None:
+                _playwright_sms_service = PlaywrightSMSService()
+
+            agent_id = credentials.get("agent_id", user_id or "default")
+            result = await _playwright_sms_service.send_sms(
+                agent_id=agent_id,
                 person_id=person_id,
                 message=agent_response.response_text,
-                from_user_id=fub_user_id,  # Messages appear from assigned agent's phone
+                credentials=credentials,
             )
 
             if result.get('success'):
@@ -291,16 +324,19 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 if agent_response.should_handoff:
                     context.handoff_reason = agent_response.handoff_reason or 'AI recommended handoff'
                     context.state = ConversationState.HANDED_OFF
-                    # Create task for human follow-up
-                    sms_service.create_task(
-                        person_id=person_id,
-                        description=f"AI Handoff: {context.handoff_reason}",
-                    )
-                    # Also add a note
-                    sms_service.add_note(
-                        person_id=person_id,
-                        note_content=f"<b>AI Agent Handoff</b><br>Reason: {context.handoff_reason}<br>Last message: {message_content}",
-                    )
+                    # Create task for human follow-up via FUB API
+                    try:
+                        fub_client.create_task(
+                            person_id=person_id,
+                            description=f"AI Handoff: {context.handoff_reason}",
+                        )
+                        # Also add a note
+                        fub_client.add_note(
+                            person_id=person_id,
+                            note_content=f"<b>AI Agent Handoff</b><br>Reason: {context.handoff_reason}<br>Last message: {message_content}",
+                        )
+                    except Exception as task_error:
+                        logger.warning(f"Could not create handoff task/note: {task_error}")
 
                 # Save updated context
                 await conversation_manager.save_context(context)
