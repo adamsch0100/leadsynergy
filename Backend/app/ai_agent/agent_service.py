@@ -388,13 +388,14 @@ class AIAgentService:
                     response.handoff_reason = stage_reason
 
             # Step 1: Compliance Check
-            if channel == "sms":
-                compliance_result = await self.compliance_checker.check_send_allowed(
-                    phone_number=lead_profile.phone,
+            if channel == "sms" and organization_id:
+                compliance_result = await self.compliance_checker.check_sms_compliance(
                     fub_person_id=fub_person_id,
+                    organization_id=organization_id,
+                    phone_number=lead_profile.phone or "",
                 )
 
-                if compliance_result.status != ComplianceStatus.ALLOWED:
+                if not compliance_result.can_send:
                     response.result = ProcessingResult.COMPLIANCE_BLOCKED
                     response.compliance_status = compliance_result.status
                     response.error_message = compliance_result.reason
@@ -443,9 +444,19 @@ class AIAgentService:
                         channel_reduction=response.channel_reduction_requested,
                     )
 
-            # Step 5: Get/create conversation manager
-            conv_manager = self._get_conversation_manager(lead_id, conversation_context)
+            # Step 5: Get qualification manager
             qual_manager = self._get_qualification_manager(lead_id)
+
+            # Use passed-in conversation_context for state tracking
+            # If no context passed, create a default one with all required fields
+            if not conversation_context:
+                import uuid
+                conversation_context = ConversationContext(
+                    conversation_id=str(uuid.uuid4()),
+                    fub_person_id=fub_person_id or 0,
+                    user_id=user_id or "",
+                    organization_id=organization_id or "",
+                )
 
             # Update qualification data from detected entities
             if detected.extracted_entities:
@@ -476,13 +487,13 @@ class AIAgentService:
                         response=response,
                         detected=detected,
                         qual_manager=qual_manager,
-                        conv_manager=conv_manager,
+                        conversation_context=conversation_context,
                         lead_profile=lead_profile,
                         start_time=start_time,
                     )
 
             # Step 7: Generate AI response
-            previous_state = conv_manager.current_state.value
+            previous_state = conversation_context.state.value
             ai_response = await self.response_generator.generate_response(
                 incoming_message=message,
                 conversation_history=conversation_history or [],
@@ -491,7 +502,7 @@ class AIAgentService:
                     "score": lead_profile.score,
                     "source": lead_profile.source,
                 },
-                current_state=conv_manager.current_state.value,
+                current_state=conversation_context.state.value,
                 qualification_data=qual_manager.data.to_dict(),
                 lead_profile=lead_profile,
             )
@@ -505,7 +516,7 @@ class AIAgentService:
                 # Update state from AI response
                 if ai_response.next_state:
                     new_state = ConversationState(ai_response.next_state)
-                    conv_manager.transition_to(new_state)
+                    conversation_context.state = new_state
 
                 # Update extracted info
                 if ai_response.extracted_info:
@@ -530,14 +541,14 @@ class AIAgentService:
             else:
                 # Use template fallback
                 response.response_text = self._get_fallback_response(
-                    conv_manager.current_state,
+                    conversation_context.state,
                     lead_profile,
                 )
                 response.used_fallback = True
 
             # Step 9: Update conversation state
             response.previous_state = previous_state
-            response.conversation_state = conv_manager.current_state.value
+            response.conversation_state = conversation_context.state.value
             response.state_changed = previous_state != response.conversation_state
 
             # Step 10: Finalize and return
@@ -545,7 +556,7 @@ class AIAgentService:
                 response=response,
                 detected=detected,
                 qual_manager=qual_manager,
-                conv_manager=conv_manager,
+                conversation_context=conversation_context,
                 lead_profile=lead_profile,
                 start_time=start_time,
                 fub_person_id=fub_person_id,
@@ -569,6 +580,7 @@ class AIAgentService:
         lead_profile: LeadProfile,
         channel: str = "sms",
         fub_person_id: int = None,
+        organization_id: str = None,
     ) -> AgentResponse:
         """
         Generate initial welcome message for a new lead.
@@ -579,6 +591,7 @@ class AIAgentService:
             lead_profile: Lead profile data
             channel: Communication channel
             fub_person_id: FUB person ID
+            organization_id: Organization ID for compliance checks
 
         Returns:
             AgentResponse with welcome message
@@ -586,13 +599,14 @@ class AIAgentService:
         lead_id = str(lead_profile.fub_person_id or fub_person_id or "unknown")
 
         # Check compliance first
-        if channel == "sms":
-            compliance_result = await self.compliance_checker.check_send_allowed(
-                phone_number=lead_profile.phone,
+        if channel == "sms" and organization_id:
+            compliance_result = await self.compliance_checker.check_sms_compliance(
                 fub_person_id=fub_person_id,
+                organization_id=organization_id,
+                phone_number=lead_profile.phone or "",
             )
 
-            if compliance_result.status != ComplianceStatus.ALLOWED:
+            if not compliance_result.can_send:
                 return AgentResponse(
                     response_text="",
                     result=ProcessingResult.COMPLIANCE_BLOCKED,
@@ -617,9 +631,8 @@ class AIAgentService:
             agent_name=self.settings.agent_name,
         )
 
-        # Initialize conversation state
-        conv_manager = self._get_conversation_manager(lead_id)
-        conv_manager.transition_to(ConversationState.INITIAL)
+        # Note: Conversation context will be created when lead first responds
+        # The initial state is returned in the response below
 
         return AgentResponse(
             response_text=welcome_text,
@@ -638,7 +651,7 @@ class AIAgentService:
         """Get or create conversation manager for a lead."""
         if lead_id not in self._conversation_managers:
             self._conversation_managers[lead_id] = ConversationManager(
-                context=context,
+                supabase_client=self.supabase,
             )
         return self._conversation_managers[lead_id]
 
@@ -916,7 +929,7 @@ class AIAgentService:
         response: AgentResponse,
         detected: DetectedIntent,
         qual_manager: QualificationFlowManager,
-        conv_manager: ConversationManager,
+        conversation_context: ConversationContext,
         lead_profile: LeadProfile,
         start_time: datetime,
         fub_person_id: int = None,
@@ -933,19 +946,19 @@ class AIAgentService:
         current_score = self.lead_scorer.calculate_score(
             qual_manager.data.to_dict()
         )
-        response.lead_score = current_score.total_score
+        response.lead_score = current_score.total
 
         # Check if should suggest scheduling
-        if (current_score.total_score >= self.settings.auto_schedule_score_threshold and
-            conv_manager.current_state == ConversationState.QUALIFYING and
+        if (current_score.total >= self.settings.auto_schedule_score_threshold and
+            conversation_context.state == ConversationState.QUALIFYING and
             progress.is_minimally_qualified):
             response.appointment_requested = True
-            conv_manager.transition_to(ConversationState.SCHEDULING)
+            conversation_context.state = ConversationState.SCHEDULING
             response.conversation_state = ConversationState.SCHEDULING.value
             response.state_changed = True
 
         # Check if should auto-handoff due to high score
-        if current_score.total_score >= self.settings.auto_handoff_score_threshold:
+        if current_score.total >= self.settings.auto_handoff_score_threshold:
             response.should_handoff = True
             response.handoff_reason = "Lead is highly qualified and ready for human agent"
 
@@ -1002,17 +1015,16 @@ class AIAgentService:
 
     async def get_conversation_state(self, lead_id: str) -> Optional[Dict[str, Any]]:
         """Get current conversation state for a lead."""
-        conv_manager = self._conversation_managers.get(lead_id)
         qual_manager = self._qualification_managers.get(lead_id)
 
-        if not conv_manager:
+        if not qual_manager:
             return None
 
-        progress = qual_manager.get_progress() if qual_manager else None
+        progress = qual_manager.get_progress()
 
         return {
-            "state": conv_manager.current_state.value,
-            "qualification_data": qual_manager.data.to_dict() if qual_manager else {},
+            "state": ConversationState.QUALIFYING.value,  # Default state
+            "qualification_data": qual_manager.data.to_dict(),
             "qualification_progress": progress.overall_percentage if progress else 0,
             "is_qualified": progress.is_minimally_qualified if progress else False,
         }
@@ -1084,9 +1096,17 @@ class AIAgentService:
                     "status": stage_status.value,
                 }
 
-        # Step 1: Get conversation manager for state
-        conv_manager = self._get_conversation_manager(lead_id)
+        # Step 1: Get qualification manager and create conversation context
         qual_manager = self._get_qualification_manager(lead_id)
+
+        # Create conversation context for state tracking
+        import uuid
+        conversation_context = ConversationContext(
+            conversation_id=str(uuid.uuid4()),
+            fub_person_id=fub_person_id or 0,
+            user_id=user_id or "",
+            organization_id=organization_id or "",
+        )
 
         try:
             # Step 2: Let Claude choose the action using tool use
@@ -1094,7 +1114,7 @@ class AIAgentService:
                 incoming_message=message,
                 conversation_history=conversation_history or [],
                 lead_profile=lead_profile,
-                current_state=conv_manager.current_state.value,
+                current_state=conversation_context.state.value,
                 qualification_data=qual_manager.data.to_dict(),
             )
 
@@ -1113,10 +1133,10 @@ class AIAgentService:
 
             # Step 4: Update conversation state based on action
             if tool_response.action == "schedule_showing":
-                conv_manager.transition_to(ConversationState.SCHEDULING)
+                conversation_context.state = ConversationState.SCHEDULING
             elif tool_response.action == "create_task":
                 # Task created may indicate handoff
-                conv_manager.transition_to(ConversationState.HANDED_OFF)
+                conversation_context.state = ConversationState.HANDED_OFF
             elif tool_response.action == "no_action":
                 # No state change for no_action
                 pass
@@ -1129,7 +1149,7 @@ class AIAgentService:
                 "action": tool_response.action,
                 "action_parameters": tool_response.parameters,
                 "execution_result": execution_result.to_dict(),
-                "conversation_state": conv_manager.current_state.value,
+                "conversation_state": conversation_context.state.value,
                 "tokens_used": tool_response.tokens_used,
                 "model_used": tool_response.model_used,
                 "response_time_ms": response_time_ms,
