@@ -114,6 +114,8 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
     5. Process through full AI Agent Service (intent detection, qualification, objection handling)
     6. Send response via FUB native texting
     """
+    global _playwright_sms_service
+
     try:
         import aiohttp
         import base64
@@ -194,8 +196,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             )
 
             if credentials:
-                global _playwright_sms_service
-                if '_playwright_sms_service' not in globals() or _playwright_sms_service is None:
+                if _playwright_sms_service is None:
                     _playwright_sms_service = PlaywrightSMSService()
 
                 agent_id = credentials.get("agent_id", user_id or "default")
@@ -291,8 +292,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 return
 
             # Get or create global playwright service
-            global _playwright_sms_service
-            if '_playwright_sms_service' not in globals() or _playwright_sms_service is None:
+            if _playwright_sms_service is None:
                 _playwright_sms_service = PlaywrightSMSService()
 
             agent_id = credentials.get("agent_id", user_id or "default")
