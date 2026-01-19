@@ -1944,17 +1944,29 @@ def get_ai_config_status():
         # Check for database-stored credentials too
         try:
             user_id, organization_id = _get_user_context_from_request()
+            supabase = SupabaseClientSingleton.get_instance()
+
+            # Try user-specific settings first
             if user_id:
-                supabase = SupabaseClientSingleton.get_instance()
                 result = supabase.table('ai_agent_settings').select(
                     'fub_login_email, fub_login_password'
                 ).eq('user_id', user_id).execute()
-                if result.data and result.data[0].get('fub_login_email'):
+                if result.data and result.data[0].get('fub_login_email') and result.data[0].get('fub_login_password'):
                     config_status["fub_browser_login"]["configured"] = True
                     config_status["fub_browser_login"]["email"] = result.data[0].get('fub_login_email')
                     config_status["fub_browser_login"]["source"] = "database"
-        except Exception:
-            pass
+
+            # If not found yet, check any available settings (single-user setup)
+            if not config_status["fub_browser_login"]["configured"]:
+                result = supabase.table('ai_agent_settings').select(
+                    'fub_login_email, fub_login_password'
+                ).limit(1).execute()
+                if result.data and result.data[0].get('fub_login_email') and result.data[0].get('fub_login_password'):
+                    config_status["fub_browser_login"]["configured"] = True
+                    config_status["fub_browser_login"]["email"] = result.data[0].get('fub_login_email')
+                    config_status["fub_browser_login"]["source"] = "database"
+        except Exception as db_err:
+            logger.debug(f"Error checking database credentials: {db_err}")
 
         # Determine overall readiness
         ready_for_sms = config_status["fub_browser_login"]["configured"]
