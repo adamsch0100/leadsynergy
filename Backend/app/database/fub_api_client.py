@@ -265,18 +265,102 @@ class FUBApiClient:
             self.creds.NOTE_CREATED_SYSTEM_NAME,
             self.creds.NOTE_SYSTEM_KEY
         )
-        
+
         url = f"{self.base_url}notes/{note_id}"
         data = {"body": content}
-        
+
         if is_private is not None:
             data["isPrivate"] = is_private
-        
+
         response = requests.put(url, headers=headers, json=data)
         response.raise_for_status()
-        
+
         return response.json()
-    
+
+    def update_person(self, person_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update a person's data in FUB.
+
+        Args:
+            person_id: FUB person ID
+            data: Dict of fields to update. Can include:
+                - customFields: Dict of custom field values
+                - stage: Stage ID
+                - assignedTo: User ID
+                - tags: List of tag names
+                - And other standard FUB person fields
+
+        Returns:
+            Updated person data from FUB
+        """
+        url = f"{self.base_url}people/{person_id}"
+
+        response = requests.put(url, headers=self.headers, json=data)
+        response.raise_for_status()
+
+        return response.json()
+
+    def add_note(self, person_id: int, note_content: str, is_private: bool = False) -> Dict[str, Any]:
+        """
+        Add a note to a person in FUB.
+
+        Args:
+            person_id: FUB person ID
+            note_content: HTML or plain text note content
+            is_private: If True, note is only visible to the user who created it
+
+        Returns:
+            Created note data from FUB
+        """
+        headers = self._add_system_headers(
+            self.creds.NOTE_CREATED_SYSTEM_NAME,
+            self.creds.NOTE_SYSTEM_KEY
+        )
+
+        url = f"{self.base_url}notes"
+        data = {
+            "personId": person_id,
+            "body": note_content,
+            "isPrivate": is_private,
+        }
+
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+
+        return response.json()
+
+    def create_task(self, person_id: int, description: str, due_date: str = None,
+                    assigned_to: int = None, is_completed: bool = False) -> Dict[str, Any]:
+        """
+        Create a task for a person in FUB.
+
+        Args:
+            person_id: FUB person ID
+            description: Task description
+            due_date: Optional due date in ISO format (YYYY-MM-DD)
+            assigned_to: Optional user ID to assign the task to
+            is_completed: If True, task is marked as completed
+
+        Returns:
+            Created task data from FUB
+        """
+        url = f"{self.base_url}tasks"
+        data = {
+            "personId": person_id,
+            "name": description,
+            "isCompleted": is_completed,
+        }
+
+        if due_date:
+            data["dueDate"] = due_date
+        if assigned_to:
+            data["assignedTo"] = assigned_to
+
+        response = requests.post(url, headers=self.headers, json=data)
+        response.raise_for_status()
+
+        return response.json()
+
     def get_stages(self, limit: int = 100):
         """Get all stages from FUB API
 

@@ -999,20 +999,25 @@ class AIAgentService:
         """
         Sync qualification data to FUB CRM custom fields.
 
-        This runs asynchronously to not block the response.
-        Note: CRM sync is optional - if modules aren't available, we skip silently.
+        This persists AI-extracted data (timeline, budget, location, etc.)
+        back to FUB so human agents can see it and it's available for future
+        conversations.
         """
         try:
             from app.ai_agent.crm_sync_service import get_crm_sync_service
-        except ImportError:
-            # CRM sync module not available - skip silently
-            logger.debug("CRM sync service not available - skipping sync")
+            from app.database.fub_api_client import FUBApiClient
+        except ImportError as e:
+            logger.warning(f"CRM sync modules not available: {e}")
             return
 
         try:
-            # Get CRM sync service (no FUB client dependency for now)
+            # Create FUB client for API calls
+            fub_client = FUBApiClient()
+
+            # Get CRM sync service with FUB client
             crm_service = get_crm_sync_service(
                 supabase_client=self.supabase,
+                fub_client=fub_client,
             )
 
             # Sync data to FUB
@@ -1025,13 +1030,15 @@ class AIAgentService:
             )
 
             if result.get("success"):
-                logger.info(f"Synced {result.get('synced_fields', 0)} fields to FUB for person {fub_person_id}")
+                synced = result.get('synced_fields', 0)
+                if synced > 0:
+                    logger.info(f"Synced {synced} fields to FUB for person {fub_person_id}")
             else:
-                logger.debug(f"CRM sync skipped: {result.get('error')}")
+                logger.warning(f"CRM sync failed for person {fub_person_id}: {result.get('error')}")
 
         except Exception as e:
-            # Log but don't fail the response - CRM sync is non-critical
-            logger.debug(f"CRM sync failed (non-critical): {e}")
+            # Log but don't fail the response - we still have data in ai_conversations table
+            logger.error(f"Error syncing to CRM for person {fub_person_id}: {e}")
 
     async def get_conversation_state(self, lead_id: str) -> Optional[Dict[str, Any]]:
         """Get current conversation state for a lead."""

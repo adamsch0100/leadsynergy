@@ -357,7 +357,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                     message_content=agent_response.response_text,
                     lead_score_delta=agent_response.lead_score_delta or 0,
                     extracted_data=agent_response.extracted_info or {},
-                    intent_detected=agent_response.detected_intent.value if agent_response.detected_intent else None,
+                    intent_detected=agent_response.detected_intent if agent_response.detected_intent else None,
                 )
 
                 logger.info(f"AI response sent to person {person_id}: {agent_response.response_text[:50]}...")
