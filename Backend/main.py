@@ -28,6 +28,15 @@ from app.lead_source_mappings import lead_source_mappings_bp
 
 from app.service.supabase_api_service import register_supabase_api
 from app.service.supabase_api_service_sse import sse_bp
+from app.voice import voice_bp, init_voice_socketio
+
+# Flask-SocketIO for voice AI WebSocket support
+try:
+    from flask_socketio import SocketIO
+    SOCKETIO_AVAILABLE = True
+except ImportError:
+    SOCKETIO_AVAILABLE = False
+    print("Warning: flask-socketio not installed. Voice AI WebSocket disabled.")
 
 # Load environment variables early
 load_dotenv()
@@ -49,13 +58,34 @@ app = Flask(__name__, template_folder='app/templates')
 app.logger.info("Starting Follow Up Boss webhook server...")
 app.logger.info(f"Server started at: {datetime.now()}")
 
-# Enable CORS to allow requests from our frontend
+# Enable CORS to allow requests from our frontend and FUB embedded app
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://leadsynergy.ai",
-    "https://www.leadsynergy.ai"
+    "https://www.leadsynergy.ai",
+    # FUB domains for embedded app
+    "https://app.followupboss.com",
+    "https://followupboss.com",
+    "https://eia.followupboss.com",
 ]
+
+# Also allow any FUB subdomain (team-specific domains like saahomes.followupboss.com)
+FUB_DOMAIN_PATTERN = ".followupboss.com"
+
+# Initialize SocketIO for voice AI WebSocket support
+socketio = None
+if SOCKETIO_AVAILABLE:
+    socketio = SocketIO(
+        app,
+        cors_allowed_origins=ALLOWED_ORIGINS + ["chrome-extension://*"],
+        async_mode='threading',
+        logger=False,  # Set to True for debugging
+        engineio_logger=False
+    )
+    # Initialize voice AI SocketIO handlers
+    init_voice_socketio(socketio)
+    app.logger.info("Voice AI WebSocket support enabled")
 
 CORS(app, resources={r"/*": {
     "origins": ALLOWED_ORIGINS,
@@ -68,11 +98,13 @@ CORS(app, resources={r"/*": {
 @app.after_request
 def add_cors_headers(response):
     origin = request.headers.get('Origin')
-    if origin in ALLOWED_ORIGINS:
+    # Allow explicit origins or any FUB subdomain
+    is_allowed = origin in ALLOWED_ORIGINS or (origin and FUB_DOMAIN_PATTERN in origin)
+    if is_allowed:
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Requested-With'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Requested-With, X-FUB-Context, X-System, X-System-Key'
     return response
 
 # Handle OPTIONS preflight requests explicitly
@@ -120,6 +152,9 @@ app.register_blueprint(lead_source_mappings_bp, url_prefix='/api/lead-sources')
 
 # Register the AI webhook handlers (for real-time message processing)
 app.register_blueprint(ai_webhook_bp)  # Blueprint already has url_prefix='/webhooks/ai'
+
+# Register the voice AI blueprint
+app.register_blueprint(voice_bp, url_prefix='/api/voice')
 
 # Register the webhook routes
 app.add_url_rule(
@@ -193,8 +228,13 @@ if __name__ == "__main__":
     is_production = os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("FLASK_ENV") == "production"
 
     print(f"Running in {'production' if is_production else 'development'} mode...")
+    print(f"  Voice AI WebSocket: {'Enabled' if socketio else 'Disabled'}")
     try:
-        app.run(host=host, port=port, debug=not is_production, use_reloader=False)
+        # Use SocketIO run if available for WebSocket support
+        if socketio:
+            socketio.run(app, host=host, port=port, debug=not is_production, use_reloader=False)
+        else:
+            app.run(host=host, port=port, debug=not is_production, use_reloader=False)
     except OSError as e:
         if "address already in use" in str(e).lower() or "Address already in use" in str(e):
             print(f"\nERROR: Port {port} is already in use!")

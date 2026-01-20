@@ -147,6 +147,10 @@ def embedded_app():
         - token: Combined token (base64.signature)
     """
     try:
+        # Debug logging for FUB embedded app
+        logger.info(f"FUB Embedded App Request - Args: {dict(request.args)}")
+        logger.info(f"FUB Embedded App Request - Headers Origin: {request.headers.get('Origin', 'none')}")
+
         # FUB sends context and signature as separate params
         context_b64 = request.args.get('context', '')
         signature = request.args.get('signature', '')
