@@ -193,6 +193,13 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             logger.info(f"Skipping outbound message for person {person_id}")
             return
 
+        # Check for FUB privacy-redacted messages
+        # FUB sometimes returns "* Body is hidden for privacy reasons *" instead of actual content
+        if "Body is hidden" in message_content or "hidden for privacy" in message_content.lower():
+            logger.warning(f"FUB returned privacy-redacted message for person {person_id}. Cannot process AI response.")
+            logger.warning(f"This may indicate API permission issues or old message access. Raw content: {message_content}")
+            return
+
         logger.info(f"Processing inbound text from person {person_id}: {message_content[:50]}...")
 
         # Import AI agent components
