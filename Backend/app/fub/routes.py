@@ -155,15 +155,35 @@ def embedded_app():
         context_b64 = request.args.get('context', '')
         signature = request.args.get('signature', '')
 
-        # If FUB format params exist, combine them for verification
-        if context_b64 and signature:
+        context = None
+
+        # First, try to decode context to check for debug/preview mode
+        if context_b64:
+            try:
+                # Add padding if needed for base64 decode
+                padded = context_b64 + '=' * (4 - len(context_b64) % 4) if len(context_b64) % 4 else context_b64
+                decoded_context = json.loads(base64.b64decode(padded))
+                logger.info(f"FUB Decoded context keys: {decoded_context.keys() if decoded_context else 'None'}")
+
+                # Check for FUB preview/debug mode (example=true or debugState present)
+                if decoded_context.get('example') or decoded_context.get('debugState'):
+                    logger.info(f"FUB Preview mode detected - debugState: {decoded_context.get('debugState')}")
+                    # In preview/debug mode, use the decoded context directly
+                    context = decoded_context
+            except Exception as e:
+                logger.warning(f"Failed to decode context for preview check: {e}")
+
+        # If not preview mode, verify signature
+        if not context and context_b64 and signature:
             signed_token = f"{context_b64}.{signature}"
-        else:
+            context = verify_fub_signature(signed_token)
+            if not context:
+                logger.warning("FUB signature verification failed")
+        elif not context:
             # Fall back to legacy combined token format
             signed_token = request.args.get('token', '')
-
-        # Verify and decode token
-        context = verify_fub_signature(signed_token)
+            if signed_token:
+                context = verify_fub_signature(signed_token)
 
         if not context:
             # For development/testing, allow without token
