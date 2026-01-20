@@ -37,12 +37,19 @@
         html, body {
             margin: 0;
             padding: 0;
+            height: 733px;
+            overflow: hidden;
         }
 
         .app-container {
-            max-width: 400px;
+            width: 100%;
+            max-width: 537px;
+            height: 733px;
             margin: 0 auto;
             background: #fff;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
         /* Header */
@@ -132,11 +139,12 @@
         .referral-source.redfin { background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #991b1b; }
         .referral-source.referral-exchange { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #065f46; }
 
-        /* Tab Navigation */
+        /* Tab Navigation - stays at bottom */
         .tab-nav {
             display: flex;
             border-top: 1px solid var(--gray-200);
             background: #fff;
+            flex-shrink: 0;
         }
 
         .tab-btn {
@@ -167,9 +175,11 @@
             margin-bottom: 2px;
         }
 
-        /* Content wrapper */
+        /* Content wrapper - scrollable middle area */
         .content-wrapper {
-            /* Natural flow - content determines height */
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
         }
 
         .tab-panel {
