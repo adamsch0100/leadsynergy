@@ -156,6 +156,7 @@ def embedded_app():
         signature = request.args.get('signature', '')
 
         context = None
+        signed_token = ''  # Initialize for template
 
         # First, try to decode context to check for debug/preview mode
         if context_b64:
