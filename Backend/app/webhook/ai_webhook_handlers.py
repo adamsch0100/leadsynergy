@@ -301,11 +301,14 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         )
 
         if agent_response and agent_response.response_text:
+            logger.info(f"AI generated response for person {person_id}: {agent_response.response_text[:100]}...")
+
             # Send response via FUB browser automation (Playwright)
             from app.messaging.playwright_sms_service import PlaywrightSMSService
             from app.ai_agent.settings_service import get_fub_browser_credentials
 
             # Get FUB browser credentials for this user/org
+            logger.info(f"Getting FUB credentials for user {user_id} / org {organization_id}")
             credentials = await get_fub_browser_credentials(
                 supabase_client=supabase,
                 user_id=user_id,
@@ -329,6 +332,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             )
 
             if result.get('success'):
+                logger.info(f"SMS sent successfully to person {person_id}: {agent_response.response_text[:50]}...")
                 # Record outbound message
                 context.add_message("outbound", agent_response.response_text, "sms")
 
@@ -380,8 +384,8 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                     extracted_data=agent_response.extracted_info or {},
                     intent_detected=agent_response.detected_intent if agent_response.detected_intent else None,
                 )
-
-                logger.info(f"AI response sent to person {person_id}: {agent_response.response_text[:50]}...")
+            else:
+                logger.error(f"SMS send FAILED for person {person_id}: {result.get('error', 'unknown error')}")
 
         else:
             logger.warning(f"No AI response generated for person {person_id}")
