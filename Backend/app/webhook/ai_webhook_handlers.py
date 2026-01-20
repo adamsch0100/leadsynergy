@@ -519,7 +519,7 @@ async def get_agent_info_for_org(organization_id: str) -> Dict[str, Any]:
     try:
         # Only select columns that exist in ai_agent_settings table
         result = supabase.table("ai_agent_settings").select(
-            "agent_name, brokerage_name, team_members"
+            "agent_name, brokerage_name"
         ).eq("organization_id", organization_id).limit(1).execute()
 
         if result.data:
@@ -527,7 +527,6 @@ async def get_agent_info_for_org(organization_id: str) -> Dict[str, Any]:
             return {
                 "agent_name": data.get("agent_name", "Sarah"),
                 "brokerage_name": data.get("brokerage_name", "our team"),
-                "team_members": data.get("team_members", ""),
             }
     except Exception as e:
         logger.error(f"Error fetching agent info: {e}")
@@ -535,7 +534,6 @@ async def get_agent_info_for_org(organization_id: str) -> Dict[str, Any]:
     return {
         "agent_name": "Sarah",
         "brokerage_name": "our team",
-        "team_members": "",
     }
 
 

@@ -236,26 +236,43 @@ class CRMSyncService:
                 return {"success": True, "synced_fields": 0}
 
             # Update FUB person with custom fields
-            update_result = self.fub.update_person(
-                person_id=fub_person_id,
-                data={"customFields": custom_fields},
-            )
-
-            if update_result:
-                logger.info(
-                    f"Synced {len(custom_fields)} fields to FUB person {fub_person_id}"
+            try:
+                update_result = self.fub.update_person(
+                    person_id=fub_person_id,
+                    data={"customFields": custom_fields},
                 )
-                return {
-                    "success": True,
-                    "synced_fields": len(custom_fields),
-                    "fields": list(custom_fields.keys()),
-                }
-            else:
-                logger.error(f"Failed to update FUB person {fub_person_id}")
-                return {"success": False, "error": "FUB update failed"}
+
+                if update_result:
+                    logger.info(
+                        f"Synced {len(custom_fields)} fields to FUB person {fub_person_id}"
+                    )
+                    return {
+                        "success": True,
+                        "synced_fields": len(custom_fields),
+                        "fields": list(custom_fields.keys()),
+                    }
+                else:
+                    logger.warning(f"FUB update returned empty for person {fub_person_id}")
+                    return {"success": False, "error": "FUB update returned empty"}
+
+            except Exception as fub_error:
+                error_msg = str(fub_error)
+                # 400 errors typically mean custom fields don't exist in FUB
+                if "400" in error_msg:
+                    logger.warning(
+                        f"FUB custom fields not configured for person {fub_person_id}. "
+                        f"Tried to sync fields: {list(custom_fields.keys())}. "
+                        f"Data is still saved in ai_conversations table."
+                    )
+                    return {
+                        "success": False,
+                        "error": "FUB custom fields not configured - create them in FUB first",
+                        "fields_attempted": list(custom_fields.keys()),
+                    }
+                raise  # Re-raise other errors
 
         except Exception as e:
-            logger.error(f"Error syncing to FUB: {e}", exc_info=True)
+            logger.error(f"Error syncing to FUB: {e}")
             return {"success": False, "error": str(e)}
 
     async def sync_from_fub(
