@@ -199,7 +199,8 @@ def embedded_app():
     </div>
 </body>
 </html>'''
-                return error_html, 401, {'Content-Type': 'text/html'}
+                # Return 200 so FUB iframe can detect the app (error shown in content)
+                return error_html, 200, {'Content-Type': 'text/html'}
 
         # Get user from context
         user_data = get_user_from_fub_context(context)
