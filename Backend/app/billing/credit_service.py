@@ -39,7 +39,7 @@ class CreditService:
         """
         try:
             result = self.supabase.table('users').select(
-                'id, user_type, broker_id, '
+                'id, user_type, '
                 'plan_enhancement_credits, plan_criminal_credits, plan_dnc_credits, '
                 'bundle_enhancement_credits, bundle_criminal_credits, bundle_dnc_credits, '
                 'allocated_enhancement_credits, allocated_criminal_credits, allocated_dnc_credits, '
@@ -87,7 +87,7 @@ class CreditService:
             return {
                 'user_id': user_id,
                 'user_type': user_type,
-                'broker_id': user.get('broker_id'),
+                'broker_id': None,  # broker_id column not in current schema
                 'credit_allocation_type': user.get('credit_allocation_type', 'shared'),
 
                 # Individual pools
