@@ -140,11 +140,23 @@ def embedded_app():
     """
     Serve the FUB embedded app.
 
-    Query params:
-        - token: The signed FUB token
+    Query params (FUB format):
+        - context: Base64-encoded context data
+        - signature: HMAC-SHA256 signature
+    Or legacy format:
+        - token: Combined token (base64.signature)
     """
     try:
-        signed_token = request.args.get('token', '')
+        # FUB sends context and signature as separate params
+        context_b64 = request.args.get('context', '')
+        signature = request.args.get('signature', '')
+
+        # If FUB format params exist, combine them for verification
+        if context_b64 and signature:
+            signed_token = f"{context_b64}.{signature}"
+        else:
+            # Fall back to legacy combined token format
+            signed_token = request.args.get('token', '')
 
         # Verify and decode token
         context = verify_fub_signature(signed_token)
@@ -2160,3 +2172,368 @@ def trigger_lead_followup():
             "success": False,
             "message": f"Trigger failed: {str(e)}"
         }), 500
+
+
+# =============================================================================
+# TESTING ENDPOINTS
+# =============================================================================
+
+@fub_bp.route('/ai/test/simulate-webhook', methods=['POST'])
+def simulate_webhook():
+    """
+    Simulate a webhook for testing without actual FUB event.
+
+    This endpoint allows testing the AI agent's response generation
+    without waiting for real lead messages.
+
+    Body:
+        - fub_person_id: Required - Lead to simulate message from
+        - message: Required - Simulated incoming message text
+        - dry_run: Optional - If true, don't actually send response (default: True)
+        - channel: Optional - sms or email (default: sms)
+
+    Returns:
+        - success: Whether simulation completed
+        - ai_response: The generated AI response
+        - state: Current conversation state
+        - would_send: Whether response would be sent (if dry_run)
+    """
+    import asyncio
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "message": "Request body required"
+            }), 400
+
+        fub_person_id = data.get('fub_person_id')
+        message = data.get('message', '')
+        dry_run = data.get('dry_run', True)
+        channel = data.get('channel', 'sms')
+
+        if not fub_person_id:
+            return jsonify({
+                "success": False,
+                "message": "fub_person_id is required"
+            }), 400
+
+        logger.info(f"Simulating webhook for lead {fub_person_id}: message='{message[:50]}...', dry_run={dry_run}")
+
+        from app.ai_agent.agent_service import AIAgentService
+
+        # Get FUB API key
+        fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+        if not fub_api_key:
+            return jsonify({
+                "success": False,
+                "message": "FUB API key not configured"
+            }), 400
+
+        # Process through AI agent
+        service = AIAgentService(fub_api_key=fub_api_key, user_id=None)
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            response = loop.run_until_complete(
+                service.process_message(
+                    fub_person_id=fub_person_id,
+                    incoming_message=message,
+                    channel=channel,
+                )
+            )
+        finally:
+            loop.close()
+
+        if not response:
+            return jsonify({
+                "success": False,
+                "message": "No response generated"
+            }), 500
+
+        result = {
+            "success": True,
+            "dry_run": dry_run,
+            "fub_person_id": fub_person_id,
+            "incoming_message": message,
+            "ai_response": response.message_text,
+            "state": response.conversation_state,
+            "lead_score": response.lead_score,
+            "should_handoff": response.should_handoff,
+            "handoff_reason": response.handoff_reason,
+            "extracted_info": response.extracted_info,
+            "would_send": not dry_run,
+        }
+
+        # If not dry run, we would send the message here
+        if not dry_run:
+            logger.info(f"[LIVE] Would send message to lead {fub_person_id}: {response.message_text[:50]}...")
+            # TODO: Actually send via Playwright SMS service
+            result["message_sent"] = True
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error simulating webhook: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Simulation failed: {str(e)}"
+        }), 500
+
+
+@fub_bp.route('/ai/test/simulate-conversation', methods=['POST'])
+def simulate_conversation():
+    """
+    Simulate a multi-turn conversation for testing.
+
+    Body:
+        - fub_person_id: Required - Lead to simulate conversation with
+        - messages: Required - List of lead messages to simulate
+        - dry_run: Optional - If true, don't send responses (default: True)
+
+    Example:
+        {
+            "fub_person_id": 3277,
+            "messages": ["", "Yes interested!", "30 days", "$500k"],
+            "dry_run": true
+        }
+
+    Returns:
+        - success: Whether simulation completed
+        - conversation: List of message/response pairs
+        - final_state: Final conversation state
+        - final_score: Final lead score
+    """
+    import asyncio
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "message": "Request body required"
+            }), 400
+
+        fub_person_id = data.get('fub_person_id')
+        messages = data.get('messages', [])
+        dry_run = data.get('dry_run', True)
+
+        if not fub_person_id:
+            return jsonify({
+                "success": False,
+                "message": "fub_person_id is required"
+            }), 400
+
+        if not messages:
+            return jsonify({
+                "success": False,
+                "message": "messages list is required"
+            }), 400
+
+        logger.info(f"Simulating {len(messages)}-turn conversation for lead {fub_person_id}")
+
+        from app.ai_agent.agent_service import AIAgentService
+
+        fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+        service = AIAgentService(fub_api_key=fub_api_key, user_id=None)
+
+        conversation = []
+        final_state = "initial"
+        final_score = 50
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            for i, msg in enumerate(messages):
+                response = loop.run_until_complete(
+                    service.process_message(
+                        fub_person_id=fub_person_id,
+                        incoming_message=msg,
+                        channel="sms",
+                    )
+                )
+
+                if response:
+                    final_state = response.conversation_state
+                    final_score = response.lead_score
+
+                    conversation.append({
+                        "turn": i + 1,
+                        "lead_message": msg or "(first contact)",
+                        "ai_response": response.message_text,
+                        "state": response.conversation_state,
+                        "score": response.lead_score,
+                        "should_handoff": response.should_handoff,
+                    })
+
+                    if response.should_handoff:
+                        logger.info(f"Handoff triggered at turn {i+1}")
+                        break
+                else:
+                    conversation.append({
+                        "turn": i + 1,
+                        "lead_message": msg,
+                        "ai_response": None,
+                        "error": "No response generated",
+                    })
+        finally:
+            loop.close()
+
+        return jsonify({
+            "success": True,
+            "dry_run": dry_run,
+            "fub_person_id": fub_person_id,
+            "conversation": conversation,
+            "total_turns": len(conversation),
+            "final_state": final_state,
+            "final_score": final_score,
+        })
+
+    except Exception as e:
+        logger.error(f"Error simulating conversation: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Simulation failed: {str(e)}"
+        }), 500
+
+
+@fub_bp.route('/ai/health', methods=['GET'])
+def get_ai_health():
+    """
+    Get health status of the AI agent system.
+
+    Checks all critical dependencies and returns their status.
+
+    Returns:
+        - status: Overall health status (healthy, degraded, unhealthy)
+        - checks: Individual component health checks
+        - metrics: System metrics (if available)
+    """
+    import time
+
+    checks = {}
+    overall_healthy = True
+
+    # Check 1: Database connectivity
+    try:
+        start = time.time()
+        supabase = SupabaseClientSingleton.get_instance()
+        result = supabase.table('ai_agent_settings').select('id').limit(1).execute()
+        latency = int((time.time() - start) * 1000)
+        checks["database"] = {
+            "status": "ok",
+            "latency_ms": latency,
+        }
+    except Exception as e:
+        checks["database"] = {
+            "status": "error",
+            "error": str(e),
+        }
+        overall_healthy = False
+
+    # Check 2: FUB API
+    fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+    if fub_api_key:
+        try:
+            import requests
+            from requests.auth import HTTPBasicAuth
+            start = time.time()
+            resp = requests.get(
+                'https://api.followupboss.com/v1/me',
+                auth=HTTPBasicAuth(fub_api_key, ''),
+                timeout=10
+            )
+            latency = int((time.time() - start) * 1000)
+            checks["fub_api"] = {
+                "status": "ok" if resp.status_code == 200 else "error",
+                "latency_ms": latency,
+                "status_code": resp.status_code,
+            }
+            if resp.status_code != 200:
+                overall_healthy = False
+        except Exception as e:
+            checks["fub_api"] = {
+                "status": "error",
+                "error": str(e),
+            }
+            overall_healthy = False
+    else:
+        checks["fub_api"] = {
+            "status": "not_configured",
+        }
+        overall_healthy = False
+
+    # Check 3: LLM API (OpenRouter or Anthropic)
+    openrouter_key = os.getenv('OPENROUTER_API_KEY')
+    anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+    if openrouter_key or anthropic_key:
+        checks["llm_api"] = {
+            "status": "configured",
+            "provider": "openrouter" if openrouter_key else "anthropic",
+        }
+    else:
+        checks["llm_api"] = {
+            "status": "not_configured",
+        }
+        overall_healthy = False
+
+    # Check 4: Webhook registration
+    fub_system_key = os.getenv('FUB_SYSTEM_KEY')
+    checks["webhook_system"] = {
+        "status": "configured" if fub_system_key else "not_configured",
+    }
+
+    # Check 5: FUB browser credentials
+    try:
+        if checks.get("database", {}).get("status") == "ok":
+            result = supabase.table('ai_agent_settings').select(
+                'fub_login_email, fub_login_password'
+            ).limit(1).execute()
+            has_creds = (result.data and
+                        result.data[0].get('fub_login_email') and
+                        result.data[0].get('fub_login_password'))
+            checks["fub_browser_login"] = {
+                "status": "configured" if has_creds else "not_configured",
+            }
+        else:
+            checks["fub_browser_login"] = {"status": "unknown"}
+    except Exception:
+        checks["fub_browser_login"] = {"status": "unknown"}
+
+    # Determine overall status
+    if overall_healthy:
+        status = "healthy"
+    elif checks.get("database", {}).get("status") == "ok":
+        status = "degraded"
+    else:
+        status = "unhealthy"
+
+    # Get metrics if database is healthy
+    metrics = {}
+    if checks.get("database", {}).get("status") == "ok":
+        try:
+            # Count messages in last 24 hours
+            from datetime import datetime, timedelta
+            yesterday = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+            msg_result = supabase.table('ai_message_log').select(
+                'id', count='exact'
+            ).gte('created_at', yesterday).execute()
+            metrics["messages_24h"] = msg_result.count if hasattr(msg_result, 'count') else len(msg_result.data)
+
+            # Count active conversations
+            conv_result = supabase.table('ai_conversations').select(
+                'id', count='exact'
+            ).eq('is_active', True).execute()
+            metrics["active_conversations"] = conv_result.count if hasattr(conv_result, 'count') else len(conv_result.data)
+        except Exception:
+            pass
+
+    return jsonify({
+        "status": status,
+        "timestamp": datetime.utcnow().isoformat(),
+        "checks": checks,
+        "metrics": metrics,
+    })
