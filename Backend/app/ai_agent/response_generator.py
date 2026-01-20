@@ -1448,6 +1448,12 @@ DISCOVERY STRATEGY:
                 conversation_history=conversation_history,
             )
 
+            # Debug: Log what we're sending to the model
+            logger.info(f"[DEBUG] System prompt length: {len(system_prompt)} chars")
+            logger.info(f"[DEBUG] Messages count: {len(messages)}")
+            if messages:
+                logger.info(f"[DEBUG] Last message: {messages[-1]}")
+
             # Generate response with retries
             response, model_used, tokens = await self._generate_with_retry(
                 system_prompt=system_prompt,
@@ -2344,6 +2350,18 @@ LEAD INFORMATION:
                 # Extract response
                 response_text = data["choices"][0]["message"]["content"]
                 tokens_used = data.get("usage", {}).get("total_tokens", 0)
+
+                # Debug logging to diagnose response issues
+                logger.info(f"[DEBUG] OpenRouter raw response text (first 500 chars): {response_text[:500] if response_text else 'EMPTY'}")
+                if "hidden" in response_text.lower() or "privacy" in response_text.lower():
+                    logger.warning(f"[DEBUG] PRIVACY PLACEHOLDER DETECTED in response!")
+                    logger.warning(f"[DEBUG] Full response: {response_text}")
+                    logger.warning(f"[DEBUG] System prompt length: {len(system_prompt)} chars")
+                    logger.warning(f"[DEBUG] Messages count: {len(openai_messages)}")
+                    # Log last user message content
+                    if openai_messages:
+                        last_msg = openai_messages[-1]
+                        logger.warning(f"[DEBUG] Last message role: {last_msg.get('role')}, content: {last_msg.get('content', '')[:200]}")
 
                 return response_text, model, tokens_used
 
