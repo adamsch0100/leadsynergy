@@ -28,15 +28,23 @@ from app.lead_source_mappings import lead_source_mappings_bp
 
 from app.service.supabase_api_service import register_supabase_api
 from app.service.supabase_api_service_sse import sse_bp
-from app.voice import voice_bp, init_voice_socketio
 
-# Flask-SocketIO for voice AI WebSocket support
+# Flask-SocketIO and Voice AI are optional (for voice calling feature)
+SOCKETIO_AVAILABLE = False
+VOICE_AVAILABLE = False
+socketio = None
+
 try:
     from flask_socketio import SocketIO
     SOCKETIO_AVAILABLE = True
 except ImportError:
-    SOCKETIO_AVAILABLE = False
     print("Warning: flask-socketio not installed. Voice AI WebSocket disabled.")
+
+try:
+    from app.voice import voice_bp, init_voice_socketio
+    VOICE_AVAILABLE = True
+except ImportError:
+    print("Warning: app.voice module not found. Voice AI features disabled.")
 
 # Load environment variables early
 load_dotenv()
@@ -83,9 +91,12 @@ if SOCKETIO_AVAILABLE:
         logger=False,  # Set to True for debugging
         engineio_logger=False
     )
-    # Initialize voice AI SocketIO handlers
-    init_voice_socketio(socketio)
-    app.logger.info("Voice AI WebSocket support enabled")
+    # Initialize voice AI SocketIO handlers (if voice module available)
+    if VOICE_AVAILABLE:
+        init_voice_socketio(socketio)
+        app.logger.info("Voice AI WebSocket support enabled")
+    else:
+        app.logger.info("Voice AI module not available, WebSocket handlers not registered")
 
 CORS(app, resources={r"/*": {
     "origins": ALLOWED_ORIGINS,
@@ -153,8 +164,9 @@ app.register_blueprint(lead_source_mappings_bp, url_prefix='/api/lead-sources')
 # Register the AI webhook handlers (for real-time message processing)
 app.register_blueprint(ai_webhook_bp)  # Blueprint already has url_prefix='/webhooks/ai'
 
-# Register the voice AI blueprint
-app.register_blueprint(voice_bp, url_prefix='/api/voice')
+# Register the voice AI blueprint (if available)
+if VOICE_AVAILABLE:
+    app.register_blueprint(voice_bp, url_prefix='/api/voice')
 
 # Register the webhook routes
 app.add_url_rule(
