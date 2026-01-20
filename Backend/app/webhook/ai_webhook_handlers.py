@@ -194,11 +194,105 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             return
 
         # Check for FUB privacy-redacted messages
-        # FUB sometimes returns "* Body is hidden for privacy reasons *" instead of actual content
+        # FUB API intentionally hides SMS content with "* Body is hidden for privacy reasons *"
+        # When this happens, we use Playwright browser automation to read the actual content
         if "Body is hidden" in message_content or "hidden for privacy" in message_content.lower():
-            logger.warning(f"FUB returned privacy-redacted message for person {person_id}. Cannot process AI response.")
-            logger.warning(f"This may indicate API permission issues or old message access. Raw content: {message_content}")
-            return
+            logger.warning(f"FUB API returned privacy-redacted message for person {person_id}. Using Playwright to read actual content...")
+
+            # Resolve tenant first (we need credentials)
+            organization_id = await resolve_organization_for_person(person_id)
+            user_id = await resolve_user_for_person(person_id, organization_id)
+
+            if not organization_id or not user_id:
+                logger.error(f"Could not resolve organization/user for person {person_id} - cannot read message via Playwright")
+                return
+
+            # Get FUB browser credentials
+            from app.ai_agent.settings_service import get_fub_browser_credentials
+            credentials = await get_fub_browser_credentials(
+                supabase_client=supabase,
+                user_id=user_id,
+                organization_id=organization_id,
+            )
+
+            if not credentials:
+                logger.error(f"No FUB credentials found for Playwright read - cannot process message for person {person_id}")
+                return
+
+            # Use Playwright to read the actual message content
+            from app.messaging.playwright_sms_service import PlaywrightSMSService
+            global _playwright_sms_service
+            if _playwright_sms_service is None:
+                _playwright_sms_service = PlaywrightSMSService()
+
+            agent_id = credentials.get("agent_id", user_id or "default")
+
+            # Check if this is first contact - no message history in our database
+            existing_history = await get_conversation_history(person_id, limit=1)
+            is_first_contact = len(existing_history) == 0
+
+            if is_first_contact:
+                # First contact with this lead - sync their message history for AI context
+                logger.info(f"First contact with person {person_id} - syncing message history...")
+                history_result = await _playwright_sms_service.read_recent_messages(
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    credentials=credentials,
+                    limit=15,  # Get last 15 messages for context
+                )
+
+                if history_result.get("success") and history_result.get("messages"):
+                    # Save all historical messages to ai_message_log
+                    history_messages = history_result.get("messages", [])
+                    logger.info(f"Syncing {len(history_messages)} historical messages for person {person_id}")
+
+                    for msg in reversed(history_messages):  # Oldest first
+                        direction = "inbound" if msg.get("is_incoming") else "outbound"
+                        await log_ai_message(
+                            conversation_id=None,  # Historical messages don't have conversation ID
+                            fub_person_id=person_id,
+                            direction=direction,
+                            channel="sms",
+                            message_content=msg.get("text", ""),
+                            ai_model="historical_sync",  # Mark as synced history
+                        )
+
+                    # Get the latest incoming message from history for current processing
+                    for msg in history_messages:
+                        if msg.get("is_incoming"):
+                            message_content = msg.get("text", "")
+                            logger.info(f"Using latest incoming message from history: {message_content[:50]}...")
+                            break
+                else:
+                    logger.warning(f"Failed to sync history for person {person_id}, falling back to single message read")
+                    # Fall back to reading just the latest message
+                    read_result = await _playwright_sms_service.read_latest_message(
+                        agent_id=agent_id,
+                        person_id=person_id,
+                        credentials=credentials,
+                    )
+                    if read_result.get("success"):
+                        message_content = read_result.get("message", "")
+            else:
+                # Not first contact - just read the latest message
+                logger.info(f"Reading latest message via Playwright for person {person_id}...")
+                read_result = await _playwright_sms_service.read_latest_message(
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    credentials=credentials,
+                )
+
+                if not read_result.get("success"):
+                    logger.error(f"Playwright read failed for person {person_id}: {read_result.get('error')}")
+                    return
+
+                message_content = read_result.get("message", "")
+
+            if not message_content:
+                logger.error(f"Could not get message content for person {person_id}")
+                return
+
+            logger.info(f"Successfully read message via Playwright: {message_content[:50]}...")
 
         logger.info(f"Processing inbound text from person {person_id}: {message_content[:50]}...")
 
@@ -297,8 +391,17 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         )
         logger.info(f"Conversation context ready, state: {context.state}")
 
-        # Record inbound message
+        # Record inbound message in context
         context.add_message("inbound", message_content, "sms")
+
+        # Log inbound message to database for conversation history
+        await log_ai_message(
+            conversation_id=context.conversation_id,
+            fub_person_id=person_id,
+            direction="inbound",
+            channel="sms",
+            message_content=message_content,
+        )
 
         # ============================================
         # CRITICAL: Cancel pending automation when lead responds

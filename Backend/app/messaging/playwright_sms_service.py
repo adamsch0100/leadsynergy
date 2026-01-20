@@ -24,54 +24,66 @@ class PlaywrightSMSService:
         self._lock = asyncio.Lock()
 
     async def initialize(self):
-        """Initialize Playwright and browser instance."""
+        """Initialize Playwright and browser instance. Thread-safe."""
         async with self._lock:
-            if self._initialized:
-                return
+            await self._do_initialize()
 
-            logger.info("Initializing Playwright SMS Service")
+    async def _do_initialize(self):
+        """Internal initialization - called when lock is already held."""
+        if self._initialized:
+            return
 
-            self.playwright = await async_playwright().start()
+        logger.info("Initializing Playwright SMS Service")
 
-            # Browser launch options
-            headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+        self.playwright = await async_playwright().start()
 
-            self.browser = await self.playwright.chromium.launch(
-                headless=headless,
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-dev-shm-usage',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-gpu',
-                    '--disable-web-security',
-                    '--disable-features=IsolateOrigins,site-per-process'
-                ]
-            )
+        # Browser launch options
+        headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
 
-            self._initialized = True
-            logger.info(f"Playwright initialized (headless={headless})")
+        self.browser = await self.playwright.chromium.launch(
+            headless=headless,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-gpu',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process'
+            ]
+        )
+
+        self._initialized = True
+        logger.info(f"Playwright initialized (headless={headless})")
 
     async def get_or_create_session(self, agent_id: str, credentials: dict) -> FUBBrowserSession:
         """Get existing session or create new one for agent."""
+        logger.debug(f"get_or_create_session called for agent {agent_id}")
         async with self._lock:
+            logger.debug(f"Acquired lock for agent {agent_id}")
             if agent_id in self.sessions:
+                logger.debug(f"Found existing session for agent {agent_id}, checking validity...")
                 session = self.sessions[agent_id]
                 if await session.is_valid():
                     logger.debug(f"Reusing existing session for agent {agent_id}")
                     return session
                 else:
                     # Session expired, close and remove it
+                    logger.debug(f"Session expired for agent {agent_id}, closing...")
                     await session.close()
                     del self.sessions[agent_id]
 
             # Create new session
             if not self._initialized:
-                await self.initialize()
+                logger.debug("Service not initialized, initializing...")
+                await self._do_initialize()  # Use internal method to avoid deadlock
+                logger.debug("Service initialized")
 
             logger.info(f"Creating new session for agent {agent_id}")
             session = FUBBrowserSession(self.browser, agent_id, self.session_store)
+            logger.debug(f"FUBBrowserSession created, calling login...")
             await session.login(credentials)
+            logger.debug(f"Login complete for agent {agent_id}")
             self.sessions[agent_id] = session
             return session
 
@@ -105,6 +117,61 @@ class PlaywrightSMSService:
         except Exception as e:
             logger.error(f"Failed to send SMS to person {person_id}: {e}")
             return {"success": False, "error": str(e)}
+
+    async def read_latest_message(
+        self,
+        agent_id: str,
+        person_id: int,
+        credentials: dict
+    ) -> dict:
+        """Read the latest incoming SMS from a lead via FUB web interface.
+
+        This is used when FUB's API returns "Body is hidden for privacy reasons"
+        but we need the actual message content for AI processing.
+
+        Args:
+            agent_id: The agent's unique identifier (for session management)
+            person_id: The FUB person ID to read messages from
+            credentials: Dict with 'type' (email/google/microsoft), 'email', 'password'
+
+        Returns:
+            Dict with 'success', 'message' (the text content) or 'error'
+        """
+        try:
+            session = await self.get_or_create_session(agent_id, credentials)
+            result = await session.read_latest_message(person_id)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to read message from person {person_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def read_recent_messages(
+        self,
+        agent_id: str,
+        person_id: int,
+        credentials: dict,
+        limit: int = 15
+    ) -> dict:
+        """Read recent message history from a lead via FUB web interface.
+
+        Used on first contact to sync conversation history for AI context.
+
+        Args:
+            agent_id: The agent's unique identifier (for session management)
+            person_id: The FUB person ID to read messages from
+            credentials: Dict with 'type' (email/google/microsoft), 'email', 'password'
+            limit: Maximum number of messages to retrieve (default 15)
+
+        Returns:
+            Dict with 'success', 'messages' (list of message dicts) or 'error'
+        """
+        try:
+            session = await self.get_or_create_session(agent_id, credentials)
+            result = await session.read_recent_messages(person_id, limit)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to read messages from person {person_id}: {e}")
+            return {"success": False, "error": str(e), "messages": []}
 
     async def close_session(self, agent_id: str):
         """Close a specific agent's session."""
@@ -236,3 +303,68 @@ async def send_sms_with_auto_credentials(
 
     service = await PlaywrightSMSServiceSingleton.get_instance()
     return await service.send_sms(agent_id, person_id, message, credentials)
+
+
+async def read_latest_message_via_browser(
+    agent_id: str,
+    person_id: int,
+    credentials: dict
+) -> dict:
+    """Convenience function to read latest message via browser.
+
+    This is used when FUB's API returns "Body is hidden for privacy reasons"
+    but we need the actual message content for AI processing.
+
+    Args:
+        agent_id: Agent identifier for session management
+        person_id: FUB person ID
+        credentials: Dict with 'type', 'email', 'password'
+
+    Returns:
+        Dict with 'success' and either 'message' or 'error'
+    """
+    service = await PlaywrightSMSServiceSingleton.get_instance()
+    return await service.read_latest_message(agent_id, person_id, credentials)
+
+
+async def read_message_with_auto_credentials(
+    person_id: int,
+    user_id: str = None,
+    organization_id: str = None,
+    supabase_client=None,
+) -> dict:
+    """
+    Read latest message via browser with automatic credential lookup.
+
+    This is used when FUB's API returns "Body is hidden for privacy reasons"
+    but we need the actual message content for AI processing.
+
+    Args:
+        person_id: FUB person ID to read message from
+        user_id: Optional user ID for credential lookup
+        organization_id: Optional org ID for credential lookup
+        supabase_client: Optional Supabase client for DB lookup
+
+    Returns:
+        Dict with 'success' and either 'message' or 'error'
+    """
+    from app.ai_agent.settings_service import get_fub_browser_credentials
+
+    # Get credentials from settings or environment
+    credentials = await get_fub_browser_credentials(
+        supabase_client=supabase_client,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+
+    if not credentials:
+        return {
+            "success": False,
+            "error": "No FUB browser credentials configured. Set FUB_LOGIN_EMAIL and FUB_LOGIN_PASSWORD in environment or database settings."
+        }
+
+    # Get agent_id from credentials or generate one
+    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+
+    service = await PlaywrightSMSServiceSingleton.get_instance()
+    return await service.read_latest_message(agent_id, person_id, credentials)
