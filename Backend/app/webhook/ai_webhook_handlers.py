@@ -814,15 +814,23 @@ async def get_conversation_history(fub_person_id: int, limit: int = 15) -> List[
         if result.data:
             # Reverse to get chronological order
             history = list(reversed(result.data))
-            return [
-                {
+
+            # Filter out privacy-redacted messages (from FUB API issues)
+            filtered_history = []
+            for h in history:
+                content = h.get("message_content", "")
+                # Skip messages that are privacy placeholders
+                if "Body is hidden" in content or "hidden for privacy" in content.lower():
+                    logger.debug(f"Skipping privacy-redacted message in history for person {fub_person_id}")
+                    continue
+                filtered_history.append({
                     "role": "lead" if h["direction"] == "inbound" else "agent",
-                    "content": h["message_content"],
+                    "content": content,
                     "channel": h["channel"],
                     "timestamp": h["created_at"],
-                }
-                for h in history
-            ]
+                })
+
+            return filtered_history
     except Exception as e:
         logger.error(f"Error fetching conversation history: {e}")
 
