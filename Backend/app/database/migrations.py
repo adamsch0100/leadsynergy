@@ -909,6 +909,55 @@ MIGRATIONS = [
                 EXECUTE FUNCTION update_campaign_stats();
             """,
         ]
+    },
+    {
+        'version': '20250119_add_ai_lead_profile_cache',
+        'description': 'Add lead profile cache table for smart FUB data caching and incremental updates',
+        'sql_statements': [
+            # Lead profile cache table - stores comprehensive FUB data
+            """
+            CREATE TABLE IF NOT EXISTS ai_lead_profile_cache (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                fub_person_id BIGINT NOT NULL,
+                organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+
+                -- Person data (from FUB people endpoint)
+                person_data JSONB DEFAULT '{}',
+
+                -- Communication history
+                text_messages JSONB DEFAULT '[]',
+                emails JSONB DEFAULT '[]',
+                calls JSONB DEFAULT '[]',
+
+                -- Context data
+                notes JSONB DEFAULT '[]',
+                events JSONB DEFAULT '[]',
+                tasks JSONB DEFAULT '[]',
+
+                -- Cache metadata
+                cached_at TIMESTAMPTZ DEFAULT NOW(),
+                last_updated_at TIMESTAMPTZ DEFAULT NOW(),
+                update_count INTEGER DEFAULT 0,
+
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                CONSTRAINT ai_lead_profile_cache_unique UNIQUE (fub_person_id, organization_id)
+            );
+            """,
+            # Indexes for efficient lookups
+            "CREATE INDEX IF NOT EXISTS idx_ai_profile_cache_fub_person ON ai_lead_profile_cache(fub_person_id);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_profile_cache_org ON ai_lead_profile_cache(organization_id);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_profile_cache_cached_at ON ai_lead_profile_cache(cached_at);",
+            "CREATE INDEX IF NOT EXISTS idx_ai_profile_cache_updated ON ai_lead_profile_cache(last_updated_at);",
+
+            # Trigger for auto-updating last_updated_at
+            """
+            DROP TRIGGER IF EXISTS ai_lead_profile_cache_updated_at ON ai_lead_profile_cache;
+            CREATE TRIGGER ai_lead_profile_cache_updated_at
+                BEFORE UPDATE ON ai_lead_profile_cache
+                FOR EACH ROW
+                EXECUTE FUNCTION update_ai_conversation_timestamp();
+            """,
+        ]
     }
 ]
 

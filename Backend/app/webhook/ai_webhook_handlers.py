@@ -26,8 +26,22 @@ import uuid
 from app.database.supabase_client import SupabaseClientSingleton
 from app.database.fub_api_client import FUBApiClient
 from app.utils.constants import Credentials
+from app.ai_agent.lead_profile_cache import get_lead_profile_cache, LeadProfileCacheService
 
 logger = logging.getLogger(__name__)
+
+# Lead profile cache (lazy initialized)
+_profile_cache: Optional[LeadProfileCacheService] = None
+
+def get_profile_cache() -> LeadProfileCacheService:
+    """Get the lead profile cache service."""
+    global _profile_cache
+    if _profile_cache is None:
+        _profile_cache = get_lead_profile_cache(
+            supabase_client=supabase,
+            fub_client=fub_client,
+        )
+    return _profile_cache
 
 # Create Blueprint for AI webhooks
 ai_webhook_bp = Blueprint('ai_webhooks', __name__, url_prefix='/webhooks/ai')
@@ -371,9 +385,9 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         traceback.print_exc()
 
 
-async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_id: str) -> 'LeadProfile':
+async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_id: str, force_refresh: bool = False) -> 'LeadProfile':
     """
-    Build a COMPREHENSIVE LeadProfile from FUB data.
+    Build a COMPREHENSIVE LeadProfile from FUB data with SMART CACHING.
 
     This creates the world-class lead context that makes our AI agent
     the best in the industry by including:
@@ -384,21 +398,60 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
     - Notes from agents
     - Events (property inquiries, timeline)
     - Tasks assigned
+
+    CACHING STRATEGY:
+    - Profiles are cached in Supabase (ai_lead_profile_cache table)
+    - Cache is refreshed every 24 hours or on-demand
+    - Incremental updates via webhooks keep cache fresh between full refreshes
+    - This reduces FUB API calls from 7 per message to 1 DB read
     """
     from app.ai_agent.response_generator import LeadProfile
 
     person_id = person_data.get('id')
 
-    # Get COMPLETE lead context from FUB (all data sources)
+    # Get COMPLETE lead context - try cache first, then FUB
     full_context = {}
+    cache_hit = False
+
     if person_id:
         try:
-            full_context = fub_client.get_complete_lead_context(person_id)
-            # Use the enriched person data if available
-            if full_context.get("person"):
-                person_data = full_context["person"]
+            # Try to get from cache first
+            cache = get_profile_cache()
+            cached_profile = await cache.get_profile(
+                fub_person_id=person_id,
+                organization_id=organization_id,
+                force_refresh=force_refresh,
+            )
+
+            if cached_profile:
+                # Use cached data - much faster!
+                cache_hit = True
+                full_context = {
+                    "person": cached_profile.person_data,
+                    "text_messages": cached_profile.text_messages,
+                    "emails": cached_profile.emails,
+                    "calls": cached_profile.calls,
+                    "notes": cached_profile.notes,
+                    "events": cached_profile.events,
+                    "tasks": cached_profile.tasks,
+                }
+                person_data = cached_profile.person_data or person_data
+                logger.debug(f"Cache HIT for person {person_id} (updates: {cached_profile.update_count})")
+            else:
+                # Cache miss - fetch from FUB (this also populates the cache)
+                full_context = fub_client.get_complete_lead_context(person_id)
+                if full_context.get("person"):
+                    person_data = full_context["person"]
+                logger.debug(f"Cache MISS for person {person_id} - fetched from FUB")
         except Exception as e:
-            logger.warning(f"Could not get full lead context: {e}")
+            logger.warning(f"Could not get lead context (cache or FUB): {e}")
+            # Fallback to direct FUB call
+            try:
+                full_context = fub_client.get_complete_lead_context(person_id)
+                if full_context.get("person"):
+                    person_data = full_context["person"]
+            except Exception as fub_error:
+                logger.error(f"Fallback FUB call also failed: {fub_error}")
 
     # Extract basic info
     first_name = person_data.get('firstName', '')
@@ -1204,3 +1257,454 @@ async def log_ai_message(
         }).execute()
     except Exception as e:
         logger.error(f"Error logging AI message: {e}")
+
+
+# ============================================
+# INCREMENTAL CACHE UPDATE WEBHOOK HANDLERS
+# ============================================
+# These handlers keep the lead profile cache fresh by
+# incrementally updating it when FUB events occur.
+# This avoids full re-fetches and keeps our AI agent
+# context up-to-date in real-time.
+
+
+@ai_webhook_bp.route('/cache/email-created', methods=['POST'])
+def handle_email_created_webhook():
+    """
+    Handle emailsCreated webhook - incrementally update cache.
+
+    This is triggered when:
+    - An email is sent to or received from a lead
+    - An email is logged in FUB
+    """
+    try:
+        webhook_data = request.get_json()
+        event = webhook_data.get('event', '').lower()
+
+        if event != 'emailscreated':
+            return Response("Event not applicable", status=200)
+
+        run_async_task(process_email_cache_update(webhook_data))
+        return Response("OK", status=200)
+    except Exception as e:
+        logger.error(f"Error processing email webhook: {e}")
+        return Response("Error", status=500)
+
+
+async def process_email_cache_update(webhook_data: Dict[str, Any]):
+    """Process email created event and update cache incrementally."""
+    try:
+        import aiohttp
+        import base64
+
+        resource_uri = webhook_data.get('uri')
+        resource_ids = webhook_data.get('resourceIds', [])
+
+        if not resource_ids or not resource_uri:
+            return
+
+        # Fetch email details
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Basic {base64.b64encode(f"{CREDS.FUB_API_KEY}:".encode()).decode()}',
+        }
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(resource_uri) as response:
+                if response.status != 200:
+                    return
+                email_data = await response.json()
+
+        emails = email_data.get('emails', [])
+        if not emails:
+            return
+
+        email = emails[0]
+        person_id = email.get('personId')
+
+        if not person_id:
+            return
+
+        # Resolve organization
+        organization_id = await resolve_organization_for_person(person_id)
+        if not organization_id:
+            return
+
+        # Update cache incrementally
+        cache = get_profile_cache()
+        await cache.add_email(
+            fub_person_id=person_id,
+            organization_id=organization_id,
+            email_data={
+                "id": email.get("id"),
+                "subject": email.get("subject"),
+                "body": email.get("body"),
+                "isIncoming": email.get("isIncoming"),
+                "created": email.get("created"),
+                "from": email.get("from"),
+                "to": email.get("to"),
+            }
+        )
+
+        logger.debug(f"Cache updated with new email for person {person_id}")
+
+    except Exception as e:
+        logger.error(f"Error updating cache for email: {e}")
+
+
+@ai_webhook_bp.route('/cache/note-created', methods=['POST'])
+def handle_note_created_webhook():
+    """
+    Handle notesCreated webhook - incrementally update cache.
+    """
+    try:
+        webhook_data = request.get_json()
+        event = webhook_data.get('event', '').lower()
+
+        if event != 'notescreated':
+            return Response("Event not applicable", status=200)
+
+        run_async_task(process_note_cache_update(webhook_data))
+        return Response("OK", status=200)
+    except Exception as e:
+        logger.error(f"Error processing note webhook: {e}")
+        return Response("Error", status=500)
+
+
+async def process_note_cache_update(webhook_data: Dict[str, Any]):
+    """Process note created event and update cache incrementally."""
+    try:
+        import aiohttp
+        import base64
+
+        resource_uri = webhook_data.get('uri')
+        resource_ids = webhook_data.get('resourceIds', [])
+
+        if not resource_ids or not resource_uri:
+            return
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Basic {base64.b64encode(f"{CREDS.FUB_API_KEY}:".encode()).decode()}',
+        }
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(resource_uri) as response:
+                if response.status != 200:
+                    return
+                note_data = await response.json()
+
+        notes = note_data.get('notes', [])
+        if not notes:
+            return
+
+        note = notes[0]
+        person_id = note.get('personId')
+
+        if not person_id:
+            return
+
+        organization_id = await resolve_organization_for_person(person_id)
+        if not organization_id:
+            return
+
+        cache = get_profile_cache()
+        await cache.add_note(
+            fub_person_id=person_id,
+            organization_id=organization_id,
+            note_data={
+                "id": note.get("id"),
+                "body": note.get("body"),
+                "createdBy": note.get("createdBy"),
+                "created": note.get("created"),
+                "isHtml": note.get("isHtml"),
+            }
+        )
+
+        logger.debug(f"Cache updated with new note for person {person_id}")
+
+    except Exception as e:
+        logger.error(f"Error updating cache for note: {e}")
+
+
+@ai_webhook_bp.route('/cache/event-created', methods=['POST'])
+def handle_event_created_webhook():
+    """
+    Handle eventsCreated webhook - incrementally update cache.
+    """
+    try:
+        webhook_data = request.get_json()
+        event = webhook_data.get('event', '').lower()
+
+        if event != 'eventscreated':
+            return Response("Event not applicable", status=200)
+
+        run_async_task(process_event_cache_update(webhook_data))
+        return Response("OK", status=200)
+    except Exception as e:
+        logger.error(f"Error processing event webhook: {e}")
+        return Response("Error", status=500)
+
+
+async def process_event_cache_update(webhook_data: Dict[str, Any]):
+    """Process event created and update cache incrementally."""
+    try:
+        import aiohttp
+        import base64
+
+        resource_uri = webhook_data.get('uri')
+        resource_ids = webhook_data.get('resourceIds', [])
+
+        if not resource_ids or not resource_uri:
+            return
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Basic {base64.b64encode(f"{CREDS.FUB_API_KEY}:".encode()).decode()}',
+        }
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(resource_uri) as response:
+                if response.status != 200:
+                    return
+                event_data = await response.json()
+
+        events = event_data.get('events', [])
+        if not events:
+            return
+
+        event = events[0]
+        person_id = event.get('personId')
+
+        if not person_id:
+            return
+
+        organization_id = await resolve_organization_for_person(person_id)
+        if not organization_id:
+            return
+
+        cache = get_profile_cache()
+        await cache.add_event(
+            fub_person_id=person_id,
+            organization_id=organization_id,
+            event_data={
+                "id": event.get("id"),
+                "type": event.get("type"),
+                "source": event.get("source"),
+                "description": event.get("description"),
+                "property": event.get("property"),
+                "created": event.get("created"),
+            }
+        )
+
+        logger.debug(f"Cache updated with new event for person {person_id}")
+
+    except Exception as e:
+        logger.error(f"Error updating cache for event: {e}")
+
+
+@ai_webhook_bp.route('/cache/call-created', methods=['POST'])
+def handle_call_created_webhook():
+    """
+    Handle callsCreated webhook - incrementally update cache.
+    """
+    try:
+        webhook_data = request.get_json()
+        event = webhook_data.get('event', '').lower()
+
+        if event != 'callscreated':
+            return Response("Event not applicable", status=200)
+
+        run_async_task(process_call_cache_update(webhook_data))
+        return Response("OK", status=200)
+    except Exception as e:
+        logger.error(f"Error processing call webhook: {e}")
+        return Response("Error", status=500)
+
+
+async def process_call_cache_update(webhook_data: Dict[str, Any]):
+    """Process call created and update cache incrementally."""
+    try:
+        import aiohttp
+        import base64
+
+        resource_uri = webhook_data.get('uri')
+        resource_ids = webhook_data.get('resourceIds', [])
+
+        if not resource_ids or not resource_uri:
+            return
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Basic {base64.b64encode(f"{CREDS.FUB_API_KEY}:".encode()).decode()}',
+        }
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(resource_uri) as response:
+                if response.status != 200:
+                    return
+                call_data = await response.json()
+
+        calls = call_data.get('calls', [])
+        if not calls:
+            return
+
+        call = calls[0]
+        person_id = call.get('personId')
+
+        if not person_id:
+            return
+
+        organization_id = await resolve_organization_for_person(person_id)
+        if not organization_id:
+            return
+
+        cache = get_profile_cache()
+        await cache.add_call(
+            fub_person_id=person_id,
+            organization_id=organization_id,
+            call_data={
+                "id": call.get("id"),
+                "direction": call.get("direction"),
+                "duration": call.get("duration"),
+                "outcome": call.get("outcome"),
+                "from": call.get("from"),
+                "to": call.get("to"),
+                "created": call.get("created"),
+                "recordingUrl": call.get("recordingUrl"),
+            }
+        )
+
+        logger.debug(f"Cache updated with new call for person {person_id}")
+
+    except Exception as e:
+        logger.error(f"Error updating cache for call: {e}")
+
+
+@ai_webhook_bp.route('/cache/person-updated', methods=['POST'])
+def handle_person_updated_webhook():
+    """
+    Handle peopleUpdated webhook - refresh person data in cache.
+
+    This is triggered when lead info changes (stage, tags, custom fields, etc.)
+    We only refresh the person data, not the entire cache.
+    """
+    try:
+        webhook_data = request.get_json()
+        event = webhook_data.get('event', '').lower()
+
+        if event != 'peopleupdated':
+            return Response("Event not applicable", status=200)
+
+        run_async_task(process_person_cache_update(webhook_data))
+        return Response("OK", status=200)
+    except Exception as e:
+        logger.error(f"Error processing person update webhook: {e}")
+        return Response("Error", status=500)
+
+
+async def process_person_cache_update(webhook_data: Dict[str, Any]):
+    """Process person updated and refresh person data in cache."""
+    try:
+        resource_ids = webhook_data.get('resourceIds', [])
+
+        if not resource_ids:
+            return
+
+        person_id = resource_ids[0]
+
+        organization_id = await resolve_organization_for_person(person_id)
+        if not organization_id:
+            return
+
+        # Fetch fresh person data and update cache
+        cache = get_profile_cache()
+        await cache.update_person_data(
+            fub_person_id=person_id,
+            organization_id=organization_id,
+            person_data=None,  # Will fetch fresh from FUB
+        )
+
+        logger.debug(f"Cache refreshed person data for {person_id}")
+
+    except Exception as e:
+        logger.error(f"Error updating cache for person: {e}")
+
+
+@ai_webhook_bp.route('/cache/text-created', methods=['POST'])
+def handle_text_cache_webhook():
+    """
+    Handle textMessagesCreated webhook - incrementally update cache.
+
+    Note: This is SEPARATE from the main text-received handler.
+    This only updates the cache; the main handler processes AI responses.
+    """
+    try:
+        webhook_data = request.get_json()
+        event = webhook_data.get('event', '').lower()
+
+        if event != 'textmessagescreated':
+            return Response("Event not applicable", status=200)
+
+        run_async_task(process_text_cache_update(webhook_data))
+        return Response("OK", status=200)
+    except Exception as e:
+        logger.error(f"Error processing text cache webhook: {e}")
+        return Response("Error", status=500)
+
+
+async def process_text_cache_update(webhook_data: Dict[str, Any]):
+    """Process text message and update cache incrementally."""
+    try:
+        import aiohttp
+        import base64
+
+        resource_uri = webhook_data.get('uri')
+        resource_ids = webhook_data.get('resourceIds', [])
+
+        if not resource_ids or not resource_uri:
+            return
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Basic {base64.b64encode(f"{CREDS.FUB_API_KEY}:".encode()).decode()}',
+        }
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(resource_uri) as response:
+                if response.status != 200:
+                    return
+                msg_data = await response.json()
+
+        messages = msg_data.get('textmessages', [])
+        if not messages:
+            return
+
+        msg = messages[0]
+        person_id = msg.get('personId')
+
+        if not person_id:
+            return
+
+        organization_id = await resolve_organization_for_person(person_id)
+        if not organization_id:
+            return
+
+        cache = get_profile_cache()
+        await cache.add_text_message(
+            fub_person_id=person_id,
+            organization_id=organization_id,
+            message_data={
+                "id": msg.get("id"),
+                "message": msg.get("message"),
+                "isIncoming": msg.get("isIncoming"),
+                "fromNumber": msg.get("fromNumber"),
+                "toNumber": msg.get("toNumber"),
+                "created": msg.get("created"),
+            }
+        )
+
+        logger.debug(f"Cache updated with new text for person {person_id}")
+
+    except Exception as e:
+        logger.error(f"Error updating cache for text: {e}")

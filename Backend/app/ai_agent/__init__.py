@@ -98,6 +98,11 @@ from app.ai_agent.crm_sync_service import (
     FieldMapping,
     get_crm_sync_service,
 )
+from app.ai_agent.lead_profile_cache import (
+    LeadProfileCacheService,
+    CachedLeadProfile,
+    get_lead_profile_cache,
+)
 
 __all__ = [
     # Conversation management
@@ -164,4 +169,8 @@ __all__ = [
     'CRMSyncService',
     'FieldMapping',
     'get_crm_sync_service',
+    # Lead profile cache
+    'LeadProfileCacheService',
+    'CachedLeadProfile',
+    'get_lead_profile_cache',
 ]
