@@ -81,8 +81,8 @@ class ComplianceChecker:
     # Rate limits
     MAX_MESSAGES_PER_DAY = 3
 
-    # Default timezone if unknown
-    DEFAULT_TIMEZONE = "America/New_York"
+    # Default timezone if unknown (Mountain Time for Colorado-based operations)
+    DEFAULT_TIMEZONE = "America/Denver"
 
     # Stage patterns that BLOCK AI outreach entirely
     # These stages mean the lead should NOT receive automated AI messages

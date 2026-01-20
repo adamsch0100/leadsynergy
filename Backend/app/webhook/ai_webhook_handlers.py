@@ -228,10 +228,17 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
 
         # Check compliance before responding
         phone = text_msg.get('to') or text_msg.get('from')
+
+        # Load AI agent settings to get the configured timezone
+        from app.ai_agent.settings_service import get_agent_settings
+        ai_settings = await get_agent_settings(supabase, organization_id)
+        configured_timezone = ai_settings.timezone if ai_settings else "America/Denver"
+
         compliance_result = await compliance_checker.check_sms_compliance(
             fub_person_id=person_id,
             organization_id=organization_id,
             phone_number=phone,
+            recipient_timezone=configured_timezone,
         )
 
         if not compliance_result.can_send:
@@ -904,10 +911,12 @@ async def process_new_lead(webhook_data: Dict[str, Any], resource_uri: str, reso
         )
 
         # Check compliance before proceeding
+        configured_timezone = settings.get('timezone', 'America/Denver') if settings else 'America/Denver'
         compliance_result = await compliance_checker.check_sms_compliance(
             fub_person_id=person_id,
             organization_id=organization_id,
             phone_number=phone,
+            recipient_timezone=configured_timezone,
         )
 
         if not compliance_result.can_send:
