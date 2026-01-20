@@ -256,15 +256,19 @@ class LeadProfile:
         Convert profile to a detailed context string for the LLM.
 
         This is the key method that creates rich, readable context.
+        NOTE: We intentionally exclude email and phone to avoid triggering
+        model PII filters. The AI doesn't need these to have a conversation.
         """
         sections = []
 
         # === IDENTITY SECTION ===
+        # NOTE: We only include name, not email/phone to avoid PII filtering by the model
         identity_parts = [f"Name: {self.full_name or self.first_name or 'Unknown'}"]
-        if self.email:
-            identity_parts.append(f"Email: {self.email}")
-        if self.phone:
-            identity_parts.append(f"Phone: {self.phone}")
+        # Email and phone are intentionally excluded - they can trigger model PII filters
+        # if self.email:
+        #     identity_parts.append(f"Email: {self.email}")
+        # if self.phone:
+        #     identity_parts.append(f"Phone: {self.phone}")
         sections.append("LEAD IDENTITY:\n" + "\n".join(f"  - {p}" for p in identity_parts))
 
         # === SCORE & STATUS SECTION ===
