@@ -373,12 +373,32 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
 
 async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_id: str) -> 'LeadProfile':
     """
-    Build a rich LeadProfile from FUB person data.
+    Build a COMPREHENSIVE LeadProfile from FUB data.
 
-    This creates the comprehensive lead context that the AI agent uses
-    for personalized, context-aware responses.
+    This creates the world-class lead context that makes our AI agent
+    the best in the industry by including:
+    - All person data and custom fields
+    - Full text message conversation history
+    - Email history
+    - Call logs
+    - Notes from agents
+    - Events (property inquiries, timeline)
+    - Tasks assigned
     """
     from app.ai_agent.response_generator import LeadProfile
+
+    person_id = person_data.get('id')
+
+    # Get COMPLETE lead context from FUB (all data sources)
+    full_context = {}
+    if person_id:
+        try:
+            full_context = fub_client.get_complete_lead_context(person_id)
+            # Use the enriched person data if available
+            if full_context.get("person"):
+                person_data = full_context["person"]
+        except Exception as e:
+            logger.warning(f"Could not get full lead context: {e}")
 
     # Extract basic info
     first_name = person_data.get('firstName', '')
@@ -387,10 +407,13 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
     phones = person_data.get('phones', [])
     tags = person_data.get('tags', [])
     source = person_data.get('source', '')
+    source_url = person_data.get('sourceUrl', '')
     stage = person_data.get('stage', {})
     stage_name = stage.get('name', '') if isinstance(stage, dict) else str(stage)
     created = person_data.get('created', '')
     last_activity = person_data.get('lastActivity', '')
+    assigned_to = person_data.get('assignedTo', '')
+    assigned_user_id = person_data.get('assignedUserId')
 
     # Extract addresses
     addresses = person_data.get('addresses', [])
@@ -405,11 +428,16 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
     budget_min = None
     budget_max = None
     timeline = None
+    timeline_detail = None
     property_type = None
     pre_approved = None
+    pre_approval_amount = None
+    motivation = None
+    bedrooms = None
+    bathrooms = None
 
     for field in custom_fields:
-        field_name = field.get('name', '').lower()
+        field_name = field.get('name', '').lower() if field.get('name') else ''
         field_value = field.get('value')
 
         if 'budget' in field_name or 'price' in field_name:
@@ -424,7 +452,25 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
         elif 'property' in field_name and 'type' in field_name:
             property_type = field_value
         elif 'pre-approv' in field_name or 'preapprov' in field_name:
-            pre_approved = field_value in ['Yes', 'yes', 'true', True, '1']
+            if isinstance(field_value, (int, float)):
+                pre_approval_amount = int(field_value)
+                pre_approved = True
+            elif field_value in ['Yes', 'yes', 'true', True, '1']:
+                pre_approved = True
+            else:
+                pre_approved = False
+        elif 'motivation' in field_name or 'reason' in field_name:
+            motivation = field_value
+        elif 'bedroom' in field_name or 'bed' in field_name:
+            try:
+                bedrooms = int(field_value)
+            except:
+                pass
+        elif 'bathroom' in field_name or 'bath' in field_name:
+            try:
+                bathrooms = int(field_value)
+            except:
+                pass
 
     # Calculate days since created
     days_in_system = 0
@@ -440,7 +486,7 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
     agent_info = await get_agent_info_for_org(organization_id)
 
     # Calculate score label
-    lead_score = person_data.get('leadScore', 0)
+    lead_score = person_data.get('leadScore', 0) or 0
     if lead_score >= 70:
         score_label = "Hot"
     elif lead_score >= 40:
@@ -448,7 +494,96 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
     else:
         score_label = "Cold"
 
-    # Build the profile using correct LeadProfile fields
+    # ========================================
+    # PROCESS TEXT MESSAGE HISTORY (CRITICAL)
+    # ========================================
+    actual_messages_sent = []
+    actual_messages_received = []
+    has_received_any_messages = False
+
+    text_messages = full_context.get("text_messages", [])
+    for msg in text_messages:
+        msg_data = {
+            "content": msg.get("message", ""),
+            "timestamp": msg.get("created", ""),
+            "from": msg.get("fromNumber", ""),
+            "to": msg.get("toNumber", ""),
+        }
+        if msg.get("isIncoming"):
+            actual_messages_received.append(msg_data)
+        else:
+            actual_messages_sent.append(msg_data)
+            has_received_any_messages = True  # Lead has received at least one message
+
+    # ========================================
+    # PROCESS EVENTS (PROPERTY INQUIRIES)
+    # ========================================
+    property_inquiry_source = ""
+    property_inquiry_description = ""
+    property_inquiry_location = ""
+    property_inquiry_budget = ""
+    property_inquiry_timeline = ""
+    property_inquiry_financing = ""
+    interested_property_address = ""
+    interested_property_price = None
+
+    events = full_context.get("events", [])
+    for event in events:
+        event_type = event.get("type", "")
+        if event_type in ["Property Inquiry", "Registration", "General Inquiry", "Seller Inquiry"]:
+            property_inquiry_source = event.get("source", "") or source
+            property_inquiry_description = event.get("description", "")
+
+            # Extract property details if available
+            prop = event.get("property", {})
+            if prop:
+                interested_property_address = prop.get("address", "")
+                interested_property_price = parse_currency(prop.get("price"))
+
+            # Parse description for lead details (e.g., "Primary Zip: 80521 | Time Frame: 0 - 3 Months")
+            desc = property_inquiry_description
+            if desc:
+                if "zip" in desc.lower() or "location" in desc.lower():
+                    property_inquiry_location = desc
+                if "time" in desc.lower() or "month" in desc.lower():
+                    property_inquiry_timeline = desc
+                if "budget" in desc.lower() or "price" in desc.lower():
+                    property_inquiry_budget = desc
+                if "pre-approv" in desc.lower() or "financ" in desc.lower():
+                    property_inquiry_financing = desc
+            break  # Use first relevant event
+
+    # ========================================
+    # PROCESS NOTES (AGENT INSIGHTS)
+    # ========================================
+    important_notes = []
+    agent_notes_summary = ""
+    notes = full_context.get("notes", [])
+    for note in notes[:10]:  # Limit to most recent 10
+        note_body = note.get("body", "")
+        created_by = note.get("createdBy", "")
+
+        # Skip KTS/automation notes - those are planned messages, not real notes
+        if "KTS" in created_by or "Leadngage" in created_by:
+            continue
+
+        # These are real agent notes
+        if note_body:
+            # Clean HTML if present
+            import re
+            clean_note = re.sub(r'<[^>]+>', ' ', note_body).strip()
+            if clean_note and len(clean_note) > 10:
+                important_notes.append(clean_note[:500])  # Truncate long notes
+
+    if important_notes:
+        agent_notes_summary = " | ".join(important_notes[:5])
+
+    # ========================================
+    # DETERMINE IF THIS IS FIRST CONTACT
+    # ========================================
+    is_first_contact = not has_received_any_messages and len(actual_messages_received) == 0
+
+    # Build the profile with ALL context
     profile = LeadProfile(
         # Identity
         first_name=first_name,
@@ -456,30 +591,71 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
         full_name=f"{first_name} {last_name}".strip(),
         email=emails[0].get('value', '') if emails else "",
         phone=phones[0].get('value', '') if phones else "",
+        fub_person_id=person_id,
 
         # Lead scoring and status
         score=lead_score,
         score_label=score_label,
         stage_name=stage_name,
-        assigned_agent=agent_info.get('agent_name', ''),
+        assigned_agent=assigned_to or agent_info.get('agent_name', ''),
 
-        # Source
+        # Source and attribution
         source=source,
+        source_url=source_url,
+        original_source=source,
 
         # Property interests
-        interested_property_type=property_type,
+        interested_property_address=interested_property_address,
+        interested_property_price=interested_property_price,
+        interested_property_type=property_type or "",
         preferred_cities=[city] if city else [],
 
         # Financial profile
         price_min=budget_min,
         price_max=budget_max,
         is_pre_approved=pre_approved,
+        pre_approval_amount=pre_approval_amount,
 
         # Timeline
         timeline=timeline or "",
+        timeline_detail=timeline_detail or "",
+        motivation=motivation or "",
 
-        # Tags
+        # Property criteria
+        bedrooms_min=bedrooms,
+        property_types=[property_type] if property_type else [],
+
+        # Tags and notes
         tags=tags if tags else [],
+        important_notes=important_notes,
+        agent_notes_summary=agent_notes_summary,
+
+        # Property inquiry info (how they came in)
+        property_inquiry_source=property_inquiry_source,
+        property_inquiry_description=property_inquiry_description,
+        property_inquiry_location=property_inquiry_location,
+        property_inquiry_budget=property_inquiry_budget,
+        property_inquiry_timeline=property_inquiry_timeline,
+        property_inquiry_financing=property_inquiry_financing,
+
+        # ACTUAL conversation history from FUB
+        actual_messages_sent=actual_messages_sent,
+        actual_messages_received=actual_messages_received,
+        has_received_any_messages=has_received_any_messages,
+
+        # First contact flag
+        is_first_contact=is_first_contact,
+
+        # Metadata
+        created_date=created,
+        days_since_created=days_in_system,
+    )
+
+    logger.info(
+        f"Built comprehensive profile for {first_name} {last_name} (ID: {person_id}): "
+        f"score={lead_score}, source={source}, "
+        f"msgs_sent={len(actual_messages_sent)}, msgs_received={len(actual_messages_received)}, "
+        f"notes={len(important_notes)}, first_contact={is_first_contact}"
     )
 
     return profile

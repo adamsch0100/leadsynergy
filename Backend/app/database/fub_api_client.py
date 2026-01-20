@@ -159,18 +159,201 @@ class FUBApiClient:
         return response.json()
     
     
-    def get_person(self, person_id: str) -> Dict[str, Any]:
-        """Get person by their ID"""
+    def get_person(self, person_id: str, include_all_fields: bool = True) -> Dict[str, Any]:
+        """
+        Get person by their ID with all available data.
+
+        Args:
+            person_id: FUB person ID
+            include_all_fields: If True, includes all custom fields
+
+        Returns:
+            Complete person data including custom fields
+        """
         headers = self._add_system_headers(
             self.creds.TAG_SYSTEM_NAME,
             self.creds.TAG_SYSTEM_KEY
         )
-        
+
         url = f"{self.base_url}people/{person_id}"
-        response = requests.get(url, headers=headers)
+        params = {}
+        if include_all_fields:
+            params["fields"] = "allFields"
+
+        response = requests.get(url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
-        
+
         return response.json()
+
+    def get_text_messages_for_person(self, person_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Get text message history for a specific person.
+
+        Args:
+            person_id: FUB person ID
+            limit: Max number of messages to retrieve
+
+        Returns:
+            List of text messages with content, direction, timestamps
+        """
+        url = f"{self.base_url}textMessages"
+        params = {
+            "personId": person_id,
+            "limit": limit,
+        }
+
+        response = requests.get(url, headers=self.headers, params=params, timeout=30)
+        response.raise_for_status()
+
+        return response.json().get("textmessages", [])
+
+    def get_emails_for_person(self, person_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get email history for a specific person.
+
+        Args:
+            person_id: FUB person ID
+            limit: Max number of emails to retrieve
+
+        Returns:
+            List of emails with subject, body, direction, timestamps
+        """
+        url = f"{self.base_url}emails"
+        params = {
+            "personId": person_id,
+            "limit": limit,
+        }
+
+        try:
+            response = requests.get(url, headers=self.headers, params=params, timeout=30)
+            response.raise_for_status()
+            return response.json().get("emails", [])
+        except Exception as e:
+            # Emails endpoint may not be available for all accounts
+            return []
+
+    def get_calls_for_person(self, person_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get call history for a specific person.
+
+        Args:
+            person_id: FUB person ID
+            limit: Max number of calls to retrieve
+
+        Returns:
+            List of calls with duration, direction, timestamps
+        """
+        url = f"{self.base_url}calls"
+        params = {
+            "personId": person_id,
+            "limit": limit,
+        }
+
+        try:
+            response = requests.get(url, headers=self.headers, params=params, timeout=30)
+            response.raise_for_status()
+            return response.json().get("calls", [])
+        except Exception as e:
+            # Calls endpoint may not be available
+            return []
+
+    def get_tasks_for_person(self, person_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get tasks assigned for a specific person.
+
+        Args:
+            person_id: FUB person ID
+            limit: Max number of tasks to retrieve
+
+        Returns:
+            List of tasks with name, due date, completion status
+        """
+        url = f"{self.base_url}tasks"
+        params = {
+            "personId": person_id,
+            "limit": limit,
+        }
+
+        try:
+            response = requests.get(url, headers=self.headers, params=params, timeout=30)
+            response.raise_for_status()
+            return response.json().get("tasks", [])
+        except Exception as e:
+            return []
+
+    def get_complete_lead_context(self, person_id: int) -> Dict[str, Any]:
+        """
+        Get ALL available data for a lead - comprehensive context for AI.
+
+        This pulls every piece of data FUB has about this lead:
+        - Person details (contact info, stage, source, custom fields)
+        - Text message history (full conversation)
+        - Email history
+        - Call history
+        - Notes (agent notes, system notes)
+        - Events (property inquiries, timeline)
+        - Tasks
+
+        Args:
+            person_id: FUB person ID
+
+        Returns:
+            Complete lead context with all available data
+        """
+        context = {
+            "person": {},
+            "text_messages": [],
+            "emails": [],
+            "calls": [],
+            "notes": [],
+            "events": [],
+            "tasks": [],
+            "errors": [],
+        }
+
+        # Get person data with all fields
+        try:
+            context["person"] = self.get_person(str(person_id), include_all_fields=True)
+        except Exception as e:
+            context["errors"].append(f"Failed to get person: {e}")
+
+        # Get text message history
+        try:
+            context["text_messages"] = self.get_text_messages_for_person(person_id, limit=50)
+        except Exception as e:
+            context["errors"].append(f"Failed to get text messages: {e}")
+
+        # Get email history
+        try:
+            context["emails"] = self.get_emails_for_person(person_id, limit=20)
+        except Exception as e:
+            context["errors"].append(f"Failed to get emails: {e}")
+
+        # Get call history
+        try:
+            context["calls"] = self.get_calls_for_person(person_id, limit=20)
+        except Exception as e:
+            context["errors"].append(f"Failed to get calls: {e}")
+
+        # Get notes
+        try:
+            context["notes"] = self.get_notes_for_person(person_id, limit=30)
+        except Exception as e:
+            context["errors"].append(f"Failed to get notes: {e}")
+
+        # Get events (property inquiries, timeline)
+        try:
+            context["events"] = self.get_events_for_person(person_id, limit=30)
+        except Exception as e:
+            context["errors"].append(f"Failed to get events: {e}")
+
+        # Get tasks
+        try:
+            context["tasks"] = self.get_tasks_for_person(person_id, limit=20)
+        except Exception as e:
+            context["errors"].append(f"Failed to get tasks: {e}")
+
+        return context
     
     def get_notes_for_person(self, person_id: int, limit: int = 100) -> List[Dict[str, Any]]:
         """Get notes for a specific person"""
