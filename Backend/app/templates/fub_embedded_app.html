@@ -38,16 +38,20 @@
             max-width: 400px;
             margin: 0 auto;
             background: #fff;
-            min-height: 100vh;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
         /* Header */
         .app-header {
             background: linear-gradient(135deg, var(--primary) 0%, #6366f1 100%);
-            padding: 12px 16px;
+            padding: 8px 12px;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-shrink: 0;
         }
 
         .app-logo {
@@ -84,7 +88,8 @@
         .lead-banner {
             background: var(--gray-50);
             border-bottom: 1px solid var(--gray-200);
-            padding: 10px 16px;
+            padding: 8px 12px;
+            flex-shrink: 0;
         }
 
         .lead-name {
@@ -126,26 +131,30 @@
         .referral-source.redfin { background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #991b1b; }
         .referral-source.referral-exchange { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #065f46; }
 
-        /* Tab Navigation */
+        /* Tab Navigation - Fixed at Bottom */
         .tab-nav {
             display: flex;
-            border-bottom: 1px solid var(--gray-200);
+            border-top: 1px solid var(--gray-200);
             background: #fff;
-            position: sticky;
-            top: 0;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
             z-index: 100;
+            max-width: 400px;
+            margin: 0 auto;
         }
 
         .tab-btn {
             flex: 1;
-            padding: 10px 8px;
+            padding: 8px 4px;
             border: none;
             background: none;
             color: var(--gray-500);
-            font-size: 11px;
+            font-size: 10px;
             font-weight: 500;
             cursor: pointer;
-            border-bottom: 2px solid transparent;
+            border-top: 2px solid transparent;
             transition: all 0.2s;
         }
 
@@ -155,48 +164,56 @@
 
         .tab-btn.active {
             color: var(--primary);
-            border-bottom-color: var(--primary);
+            border-top-color: var(--primary);
         }
 
         .tab-btn i {
             display: block;
-            font-size: 16px;
+            font-size: 14px;
             margin-bottom: 2px;
+        }
+
+        /* Content wrapper for scrolling */
+        .content-wrapper {
+            flex: 1;
+            overflow-y: auto;
+            padding-bottom: 60px; /* Space for fixed bottom nav */
         }
 
         .tab-panel {
             display: none;
-            padding: 12px 16px;
+            padding: 10px 12px;
         }
 
         .tab-panel.active {
             display: block;
         }
 
-        /* Credits Bar */
+        /* Credits Bar - Compact */
         .credits-bar {
             display: flex;
             background: var(--gray-100);
             border-bottom: 1px solid var(--gray-200);
+            flex-shrink: 0;
         }
 
         .credit-item {
             flex: 1;
             text-align: center;
-            padding: 8px 4px;
+            padding: 6px 4px;
             border-right: 1px solid var(--gray-200);
         }
 
         .credit-item:last-child { border-right: none; }
 
         .credit-value {
-            font-size: 16px;
+            font-size: 14px;
             font-weight: 700;
             color: var(--primary);
         }
 
         .credit-label {
-            font-size: 10px;
+            font-size: 9px;
             color: var(--gray-500);
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -1062,8 +1079,10 @@
             </div>
         </div>
 
-        <!-- Credits Bar -->
-        <div class="credits-bar">
+        <!-- Scrollable Content Area -->
+        <div class="content-wrapper">
+            <!-- Credits Bar -->
+            <div class="credits-bar">
             <div class="credit-item">
                 <div class="credit-value" id="enhancementCredits">--</div>
                 <div class="credit-label">Enhance</div>
@@ -1076,29 +1095,9 @@
                 <div class="credit-value" id="dncCredits">--</div>
                 <div class="credit-label">DNC</div>
             </div>
-        </div>
+            </div>
 
-        <!-- Tab Navigation -->
-        <div class="tab-nav">
-            <button class="tab-btn active" data-tab="lead-info">
-                <i class="fas fa-user"></i>
-                Lead
-            </button>
-            <button class="tab-btn" data-tab="ai-agent">
-                <i class="fas fa-robot"></i>
-                AI Agent
-            </button>
-            <button class="tab-btn" data-tab="enrich">
-                <i class="fas fa-search"></i>
-                Enrich
-            </button>
-            <button class="tab-btn" data-tab="history">
-                <i class="fas fa-history"></i>
-                History
-            </button>
-        </div>
-
-        <!-- Tab: Lead Info -->
+            <!-- Tab: Lead Info -->
         <div class="tab-panel active" id="panel-lead-info">
             <!-- Referral Status (if from referral source) -->
             <div id="referralSection" style="display: none;">
@@ -1282,7 +1281,28 @@
                 </div>
             </div>
         </div>
-    </div>
+        </div> <!-- Close content-wrapper -->
+
+        <!-- Tab Navigation - Fixed at Bottom -->
+        <div class="tab-nav">
+            <button class="tab-btn active" data-tab="lead-info">
+                <i class="fas fa-user"></i>
+                Lead
+            </button>
+            <button class="tab-btn" data-tab="ai-agent">
+                <i class="fas fa-robot"></i>
+                AI Agent
+            </button>
+            <button class="tab-btn" data-tab="enrich">
+                <i class="fas fa-search-plus"></i>
+                Enrich
+            </button>
+            <button class="tab-btn" data-tab="history">
+                <i class="fas fa-history"></i>
+                History
+            </button>
+        </div>
+    </div> <!-- Close app-container -->
 
     <!-- Terms Modal -->
     <div class="modal-overlay" id="termsOverlay">
