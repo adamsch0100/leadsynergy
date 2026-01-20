@@ -310,19 +310,37 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             # Continue processing even if cancellation fails
 
         # Process through full AI Agent Service
+        import sys
+        print(f"[DEBUG] Calling AI Agent Service for person {person_id}...", flush=True)
+        sys.stderr.write(f"[DEBUG-ERR] Calling AI Agent Service for person {person_id}...\n")
+        sys.stderr.flush()
         logger.info(f"Calling AI Agent Service for person {person_id}...")
+
         agent_service = get_agent_service()
+        print(f"[DEBUG] Agent service obtained, processing message...", flush=True)
+        sys.stderr.write(f"[DEBUG-ERR] Agent service obtained\n")
+        sys.stderr.flush()
         logger.info(f"Agent service ready, processing message: {message_content[:50]}...")
-        agent_response = await agent_service.process_message(
-            message=message_content,
-            lead_profile=lead_profile,
-            conversation_context=context,
-            conversation_history=conversation_history,
-            channel="sms",
-            fub_person_id=person_id,
-            user_id=user_id,
-            organization_id=organization_id,
-        )
+
+        try:
+            agent_response = await agent_service.process_message(
+                message=message_content,
+                lead_profile=lead_profile,
+                conversation_context=context,
+                conversation_history=conversation_history,
+                channel="sms",
+                fub_person_id=person_id,
+                user_id=user_id,
+                organization_id=organization_id,
+            )
+            print(f"[DEBUG] AI processing complete, response: {agent_response}", flush=True)
+        except Exception as ai_error:
+            print(f"[DEBUG] AI processing FAILED: {ai_error}", flush=True)
+            sys.stderr.write(f"[DEBUG-ERR] AI processing FAILED: {ai_error}\n")
+            sys.stderr.flush()
+            import traceback
+            traceback.print_exc()
+            raise
 
         if agent_response and agent_response.response_text:
             logger.info(f"AI generated response for person {person_id}: {agent_response.response_text[:100]}...")
