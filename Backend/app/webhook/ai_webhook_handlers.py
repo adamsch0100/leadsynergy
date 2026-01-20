@@ -517,20 +517,25 @@ async def get_conversation_history(fub_person_id: int, limit: int = 15) -> List[
 async def get_agent_info_for_org(organization_id: str) -> Dict[str, Any]:
     """Get agent info for an organization."""
     try:
+        # Only select columns that exist in ai_agent_settings table
         result = supabase.table("ai_agent_settings").select(
-            "agent_name, agent_email, agent_phone, brokerage_name"
+            "agent_name, brokerage_name, team_members"
         ).eq("organization_id", organization_id).limit(1).execute()
 
         if result.data:
-            return result.data[0]
+            data = result.data[0]
+            return {
+                "agent_name": data.get("agent_name", "Sarah"),
+                "brokerage_name": data.get("brokerage_name", "our team"),
+                "team_members": data.get("team_members", ""),
+            }
     except Exception as e:
         logger.error(f"Error fetching agent info: {e}")
 
     return {
         "agent_name": "Sarah",
-        "agent_email": "",
-        "agent_phone": "",
         "brokerage_name": "our team",
+        "team_members": "",
     }
 
 

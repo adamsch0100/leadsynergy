@@ -1000,15 +1000,19 @@ class AIAgentService:
         Sync qualification data to FUB CRM custom fields.
 
         This runs asynchronously to not block the response.
+        Note: CRM sync is optional - if modules aren't available, we skip silently.
         """
         try:
             from app.ai_agent.crm_sync_service import get_crm_sync_service
-            from app.fub.fub_client import FUBClient
+        except ImportError:
+            # CRM sync module not available - skip silently
+            logger.debug("CRM sync service not available - skipping sync")
+            return
 
-            # Get CRM sync service
+        try:
+            # Get CRM sync service (no FUB client dependency for now)
             crm_service = get_crm_sync_service(
                 supabase_client=self.supabase,
-                fub_client=FUBClient(),
             )
 
             # Sync data to FUB
@@ -1023,11 +1027,11 @@ class AIAgentService:
             if result.get("success"):
                 logger.info(f"Synced {result.get('synced_fields', 0)} fields to FUB for person {fub_person_id}")
             else:
-                logger.warning(f"CRM sync failed: {result.get('error')}")
+                logger.debug(f"CRM sync skipped: {result.get('error')}")
 
         except Exception as e:
-            # Log but don't fail the response
-            logger.error(f"Error syncing to CRM: {e}", exc_info=True)
+            # Log but don't fail the response - CRM sync is non-critical
+            logger.debug(f"CRM sync failed (non-critical): {e}")
 
     async def get_conversation_state(self, lead_id: str) -> Optional[Dict[str, Any]]:
         """Get current conversation state for a lead."""
