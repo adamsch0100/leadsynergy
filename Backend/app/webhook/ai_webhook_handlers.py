@@ -342,36 +342,58 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             traceback.print_exc()
             raise
 
+        print(f"[DEBUG] Checking if response exists...", flush=True)
         if agent_response and agent_response.response_text:
+            print(f"[DEBUG] Response exists! Preparing to send SMS...", flush=True)
             logger.info(f"AI generated response for person {person_id}: {agent_response.response_text[:100]}...")
 
             # Send response via FUB browser automation (Playwright)
+            print(f"[DEBUG] Importing PlaywrightSMSService...", flush=True)
             from app.messaging.playwright_sms_service import PlaywrightSMSService
             from app.ai_agent.settings_service import get_fub_browser_credentials
 
             # Get FUB browser credentials for this user/org
+            print(f"[DEBUG] Getting FUB credentials for user {user_id}...", flush=True)
             logger.info(f"Getting FUB credentials for user {user_id} / org {organization_id}")
-            credentials = await get_fub_browser_credentials(
-                supabase_client=supabase,
-                user_id=user_id,
-                organization_id=organization_id,
-            )
+            try:
+                credentials = await get_fub_browser_credentials(
+                    supabase_client=supabase,
+                    user_id=user_id,
+                    organization_id=organization_id,
+                )
+                print(f"[DEBUG] Got credentials: {credentials is not None}", flush=True)
+            except Exception as cred_err:
+                print(f"[DEBUG] FAILED to get credentials: {cred_err}", flush=True)
+                import traceback
+                traceback.print_exc()
+                raise
 
             if not credentials:
+                print(f"[DEBUG] No credentials found - returning", flush=True)
                 logger.error(f"No FUB credentials found for user {user_id} / org {organization_id}")
                 return
 
             # Get or create global playwright service
+            print(f"[DEBUG] Creating PlaywrightSMSService...", flush=True)
+            global _playwright_sms_service
             if _playwright_sms_service is None:
                 _playwright_sms_service = PlaywrightSMSService()
 
             agent_id = credentials.get("agent_id", user_id or "default")
-            result = await _playwright_sms_service.send_sms(
-                agent_id=agent_id,
-                person_id=person_id,
-                message=agent_response.response_text,
-                credentials=credentials,
-            )
+            print(f"[DEBUG] Sending SMS via Playwright to person {person_id}...", flush=True)
+            try:
+                result = await _playwright_sms_service.send_sms(
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    message=agent_response.response_text,
+                    credentials=credentials,
+                )
+                print(f"[DEBUG] SMS send result: {result}", flush=True)
+            except Exception as sms_err:
+                print(f"[DEBUG] SMS send FAILED: {sms_err}", flush=True)
+                import traceback
+                traceback.print_exc()
+                raise
 
             if result.get('success'):
                 logger.info(f"SMS sent successfully to person {person_id}: {agent_response.response_text[:50]}...")
