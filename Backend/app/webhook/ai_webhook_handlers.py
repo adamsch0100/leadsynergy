@@ -254,12 +254,17 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             return
 
         # Build rich lead profile from FUB data
+        logger.info(f"Building lead profile for person {person_id}...")
         lead_profile = await build_lead_profile_from_fub(person_data, organization_id)
+        logger.info(f"Lead profile built for {person_id}: {lead_profile.first_name} {lead_profile.last_name}")
 
         # Get conversation history for context
+        logger.info(f"Getting conversation history for person {person_id}...")
         conversation_history = await get_conversation_history(person_id, limit=15)
+        logger.info(f"Got {len(conversation_history) if conversation_history else 0} history messages")
 
         # Get or create conversation context
+        logger.info(f"Getting conversation context for person {person_id}...")
         conversation_manager = ConversationManager(supabase_client=supabase)
         context = await conversation_manager.get_or_create_conversation(
             fub_person_id=person_id,
@@ -267,6 +272,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             organization_id=organization_id,
             lead_data=person_data,
         )
+        logger.info(f"Conversation context ready, state: {context.state}")
 
         # Record inbound message
         context.add_message("inbound", message_content, "sms")
@@ -288,7 +294,9 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             # Continue processing even if cancellation fails
 
         # Process through full AI Agent Service
+        logger.info(f"Calling AI Agent Service for person {person_id}...")
         agent_service = get_agent_service()
+        logger.info(f"Agent service ready, processing message: {message_content[:50]}...")
         agent_response = await agent_service.process_message(
             message=message_content,
             lead_profile=lead_profile,
@@ -391,9 +399,14 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             logger.warning(f"No AI response generated for person {person_id}")
 
     except Exception as e:
-        logger.error(f"Error processing inbound text: {e}")
         import traceback
+        import sys
+        error_msg = f"Error processing inbound text: {e}"
+        logger.error(error_msg)
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
 
 
 async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_id: str, force_refresh: bool = False) -> 'LeadProfile':
