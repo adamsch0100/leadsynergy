@@ -155,11 +155,32 @@ def embedded_app():
         context_b64 = request.args.get('context', '')
         signature = request.args.get('signature', '')
 
+        # Check for direct preview mode query param (e.g., ?example=true)
+        is_preview_mode = request.args.get('example', '').lower() == 'true'
+
         context = None
         signed_token = ''  # Initialize for template
 
+        # Handle direct preview mode access (no context provided)
+        if is_preview_mode and not context_b64:
+            logger.info("FUB Preview mode - direct URL access with ?example=true")
+            context = {
+                'example': True,
+                'user': {'email': 'preview@example.com', 'name': 'Preview User', 'id': 0},
+                'person': {
+                    'id': 12345,
+                    'firstName': 'Jane',
+                    'lastName': 'Smith',
+                    'emails': [{'value': 'jane.smith@example.com'}],
+                    'phones': [{'value': '(555) 123-4567'}]
+                },
+                'address': {},
+                'email': 'jane.smith@example.com',
+                'phone': '(555) 123-4567'
+            }
+
         # First, try to decode context to check for debug/preview mode
-        if context_b64:
+        if not context and context_b64:
             try:
                 # Add padding if needed for base64 decode
                 padded = context_b64 + '=' * (4 - len(context_b64) % 4) if len(context_b64) % 4 else context_b64
