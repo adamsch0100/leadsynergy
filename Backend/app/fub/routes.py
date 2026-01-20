@@ -172,7 +172,30 @@ def embedded_app():
                     'phone': ''
                 }
             else:
-                return jsonify({"error": "Invalid or missing token"}), 401
+                # Return HTML error page with FUB SDK so FUB recognizes the app
+                error_html = '''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>LeadSynergy - Authentication Error</title>
+    <script src="https://eia.followupboss.com/embeddedApps-v1.0.1.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f9fafb; }
+        .error-box { text-align: center; padding: 40px; background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .error-icon { font-size: 48px; margin-bottom: 16px; }
+        h1 { color: #374151; font-size: 18px; margin: 0 0 8px; }
+        p { color: #6b7280; font-size: 14px; margin: 0; }
+    </style>
+</head>
+<body>
+    <div class="error-box">
+        <div class="error-icon">🔐</div>
+        <h1>Authentication Required</h1>
+        <p>Please access this app from within Follow Up Boss.</p>
+    </div>
+</body>
+</html>'''
+                return error_html, 401, {'Content-Type': 'text/html'}
 
         # Get user from context
         user_data = get_user_from_fub_context(context)
