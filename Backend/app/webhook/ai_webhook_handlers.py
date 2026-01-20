@@ -75,13 +75,29 @@ def get_agent_service():
 
 
 def run_async_task(coroutine):
-    """Helper function to run async tasks from sync code."""
+    """Helper function to run async tasks from sync code with error handling."""
     loop = asyncio.new_event_loop()
 
     def run_in_thread(loop, coro):
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(coro)
-        loop.close()
+        try:
+            asyncio.set_event_loop(loop)
+            logger.info("Background task starting...")
+            loop.run_until_complete(coro)
+            logger.info("Background task completed successfully")
+        except Exception as e:
+            import traceback
+            import sys
+            logger.error(f"CRITICAL: Background task failed with error: {e}")
+            logger.error(f"Full traceback:\n{traceback.format_exc()}")
+            # Also print to stderr so Railway can capture it
+            print(f"BACKGROUND TASK ERROR: {e}", file=sys.stderr)
+            traceback.print_exc()
+            sys.stderr.flush()
+        finally:
+            try:
+                loop.close()
+            except:
+                pass
 
     thread = threading.Thread(target=run_in_thread, args=(loop, coroutine))
     thread.daemon = True
