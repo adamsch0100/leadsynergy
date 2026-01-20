@@ -37,15 +37,18 @@
         html, body {
             margin: 0;
             padding: 0;
+            height: 100vh;
+            overflow: hidden;
         }
 
         .app-container {
             max-width: 400px;
             margin: 0 auto;
             background: #fff;
-            min-height: 100vh;
-            padding-bottom: 60px; /* Space for fixed bottom nav */
-            position: relative;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
         /* Header */
@@ -135,18 +138,12 @@
         .referral-source.redfin { background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #991b1b; }
         .referral-source.referral-exchange { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #065f46; }
 
-        /* Tab Navigation - Fixed at Bottom */
+        /* Tab Navigation - Stays at Bottom via Flexbox */
         .tab-nav {
             display: flex;
             border-top: 1px solid var(--gray-200);
             background: #fff;
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            z-index: 100;
-            max-width: 400px;
-            margin: 0 auto;
+            flex-shrink: 0;
         }
 
         .tab-btn {
@@ -177,9 +174,11 @@
             margin-bottom: 2px;
         }
 
-        /* Content wrapper */
+        /* Content wrapper - scrollable area between header and bottom nav */
         .content-wrapper {
-            /* Content flows naturally, tab-nav is fixed at bottom */
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
         }
 
         .tab-panel {
