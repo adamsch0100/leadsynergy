@@ -38,14 +38,31 @@ class CreditService:
             Dict with credit balances and user type info
         """
         try:
-            result = self.supabase.table('users').select(
-                'id, user_type, '
-                'plan_enhancement_credits, plan_criminal_credits, plan_dnc_credits, '
-                'bundle_enhancement_credits, bundle_criminal_credits, bundle_dnc_credits, '
-                'allocated_enhancement_credits, allocated_criminal_credits, allocated_dnc_credits, '
-                'personal_enhancement_credits, personal_criminal_credits, '
-                'credit_allocation_type'
-            ).eq('id', user_id).single().execute()
+            # Try query with broker_id first (full schema)
+            # If broker_id column doesn't exist yet, fall back to basic query
+            try:
+                result = self.supabase.table('users').select(
+                    'id, user_type, broker_id, '
+                    'plan_enhancement_credits, plan_criminal_credits, plan_dnc_credits, '
+                    'bundle_enhancement_credits, bundle_criminal_credits, bundle_dnc_credits, '
+                    'allocated_enhancement_credits, allocated_criminal_credits, allocated_dnc_credits, '
+                    'personal_enhancement_credits, personal_criminal_credits, '
+                    'credit_allocation_type'
+                ).eq('id', user_id).single().execute()
+            except Exception as schema_err:
+                # broker_id column may not exist yet - try without it
+                if 'broker_id' in str(schema_err):
+                    logger.warning("broker_id column not found - run add_leaddata_integration.sql migration")
+                    result = self.supabase.table('users').select(
+                        'id, user_type, '
+                        'plan_enhancement_credits, plan_criminal_credits, plan_dnc_credits, '
+                        'bundle_enhancement_credits, bundle_criminal_credits, bundle_dnc_credits, '
+                        'allocated_enhancement_credits, allocated_criminal_credits, allocated_dnc_credits, '
+                        'personal_enhancement_credits, personal_criminal_credits, '
+                        'credit_allocation_type'
+                    ).eq('id', user_id).single().execute()
+                else:
+                    raise
 
             if not result.data:
                 return None
@@ -87,7 +104,7 @@ class CreditService:
             return {
                 'user_id': user_id,
                 'user_type': user_type,
-                'broker_id': None,  # broker_id column not in current schema
+                'broker_id': user.get('broker_id'),  # Will be None if column doesn't exist
                 'credit_allocation_type': user.get('credit_allocation_type', 'shared'),
 
                 # Individual pools
