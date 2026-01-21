@@ -16,6 +16,9 @@ class SystemSettings(BaseModel):
         self.min_update_interval_days: int = 5
         self.max_update_interval_days: int = 10
         self.fub_import_tag: str = "ReferralLink"
+        # Gmail credentials for 2FA code retrieval (used program-wide)
+        self.gmail_email: Optional[str] = None
+        self.gmail_app_password: Optional[str] = None  # Google App Password (NOT regular password)
         self.created_at: Optional[datetime] = None
         self.updated_at: Optional[datetime] = None
 
