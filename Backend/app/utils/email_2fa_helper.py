@@ -461,7 +461,8 @@ class Email2FAHelper:
         link_contains: str = None,
         max_age_seconds: int = 180,
         max_retries: int = 10,
-        retry_delay: float = 3.0
+        retry_delay: float = 3.0,
+        mark_as_read: bool = True
     ) -> Optional[str]:
         """
         Get a verification link from recent emails (for magic link 2FA).
@@ -473,21 +474,28 @@ class Email2FAHelper:
             max_age_seconds: Only check emails from the last N seconds (default: 180 = 3 minutes)
             max_retries: Number of times to retry if link not found (default: 10)
             retry_delay: Seconds to wait between retries (default: 3.0)
+            mark_as_read: If True, mark the email as read after extracting the link (default: True)
 
         Returns:
             The verification link URL as a string, or None if not found
         """
         for attempt in range(max_retries):
             try:
-                link = self._fetch_link(
+                result = self._fetch_link(
                     sender_contains=sender_contains,
                     subject_contains=subject_contains,
                     link_contains=link_contains,
                     max_age_seconds=max_age_seconds
                 )
 
-                if link:
+                if result:
+                    link, msg_id = result
                     logger.info(f"Found verification link: {link[:80]}...")
+
+                    # Mark the email as read to prevent processing it again
+                    if mark_as_read and msg_id:
+                        self._mark_email_as_read(msg_id)
+
                     return link
 
                 if attempt < max_retries - 1:
@@ -502,14 +510,27 @@ class Email2FAHelper:
         logger.warning("Verification link not found after all retries")
         return None
 
+    def _mark_email_as_read(self, msg_id: bytes):
+        """Mark an email as read (add \\Seen flag)."""
+        try:
+            if self._connection:
+                self._connection.store(msg_id, '+FLAGS', '\\Seen')
+                logger.info(f"Marked email {msg_id} as read")
+        except Exception as e:
+            logger.warning(f"Failed to mark email as read: {e}")
+
     def _fetch_link(
         self,
         sender_contains: str = None,
         subject_contains: str = None,
         link_contains: str = None,
         max_age_seconds: int = 180
-    ) -> Optional[str]:
-        """Internal method to fetch a verification link from emails"""
+    ) -> Optional[Tuple[str, bytes]]:
+        """Internal method to fetch a verification link from emails.
+
+        Returns:
+            Tuple of (link, msg_id) if found, None otherwise
+        """
         if not self.connect():
             return None
 
@@ -517,11 +538,17 @@ class Email2FAHelper:
             # Select inbox
             self._connection.select("INBOX")
 
-            # Search for recent emails
+            # Search for recent UNREAD emails first, then fall back to all recent
             since_date = (datetime.now() - timedelta(seconds=max_age_seconds)).strftime("%d-%b-%Y")
-            search_criteria = f'(SINCE "{since_date}")'
 
+            # Try unread emails first
+            search_criteria = f'(SINCE "{since_date}" UNSEEN)'
             status, message_ids = self._connection.search(None, search_criteria)
+
+            if status != "OK" or not message_ids[0]:
+                # Fall back to all recent emails
+                search_criteria = f'(SINCE "{since_date}")'
+                status, message_ids = self._connection.search(None, search_criteria)
 
             if status != "OK" or not message_ids[0]:
                 logger.debug("No recent emails found")
@@ -571,7 +598,7 @@ class Email2FAHelper:
                     # Find verification links
                     link = self._extract_verification_link(body, link_contains)
                     if link:
-                        return link
+                        return (link, msg_id)
 
                 except Exception as e:
                     logger.debug(f"Error parsing email {msg_id}: {e}")

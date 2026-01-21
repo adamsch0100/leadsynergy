@@ -22,6 +22,8 @@ class PlaywrightSMSService:
         self.session_store = SessionStore()
         self._initialized = False
         self._lock = asyncio.Lock()
+        self._login_locks: Dict[str, asyncio.Lock] = {}  # Per-agent login locks
+        self._login_in_progress: Dict[str, bool] = {}  # Track login attempts
 
     async def initialize(self):
         """Initialize Playwright and browser instance. Thread-safe."""
@@ -57,10 +59,35 @@ class PlaywrightSMSService:
         logger.info(f"Playwright initialized (headless={headless})")
 
     async def get_or_create_session(self, agent_id: str, credentials: dict) -> FUBBrowserSession:
-        """Get existing session or create new one for agent."""
+        """Get existing session or create new one for agent.
+
+        Uses per-agent locks to prevent multiple concurrent login attempts,
+        which could trigger multiple security emails from FUB.
+        """
         logger.debug(f"get_or_create_session called for agent {agent_id}")
+
+        # Get or create per-agent lock
         async with self._lock:
-            logger.debug(f"Acquired lock for agent {agent_id}")
+            if agent_id not in self._login_locks:
+                self._login_locks[agent_id] = asyncio.Lock()
+            agent_lock = self._login_locks[agent_id]
+
+        # Use per-agent lock to prevent concurrent logins for the same agent
+        async with agent_lock:
+            logger.debug(f"Acquired agent lock for {agent_id}")
+
+            # Check if login is already in progress (shouldn't happen with lock, but safety check)
+            if self._login_in_progress.get(agent_id, False):
+                logger.warning(f"Login already in progress for agent {agent_id}, waiting...")
+                # Wait a bit and check for existing session
+                for _ in range(30):  # Wait up to 30 seconds
+                    await asyncio.sleep(1)
+                    if agent_id in self.sessions and await self.sessions[agent_id].is_valid():
+                        return self.sessions[agent_id]
+                    if not self._login_in_progress.get(agent_id, False):
+                        break
+
+            # Check for existing valid session
             if agent_id in self.sessions:
                 logger.debug(f"Found existing session for agent {agent_id}, checking validity...")
                 session = self.sessions[agent_id]
@@ -73,19 +100,27 @@ class PlaywrightSMSService:
                     await session.close()
                     del self.sessions[agent_id]
 
-            # Create new session
-            if not self._initialized:
-                logger.debug("Service not initialized, initializing...")
-                await self._do_initialize()  # Use internal method to avoid deadlock
-                logger.debug("Service initialized")
+            # Initialize browser if needed
+            async with self._lock:
+                if not self._initialized:
+                    logger.debug("Service not initialized, initializing...")
+                    await self._do_initialize()
+                    logger.debug("Service initialized")
 
-            logger.info(f"Creating new session for agent {agent_id}")
-            session = FUBBrowserSession(self.browser, agent_id, self.session_store)
-            logger.debug(f"FUBBrowserSession created, calling login...")
-            await session.login(credentials)
-            logger.debug(f"Login complete for agent {agent_id}")
-            self.sessions[agent_id] = session
-            return session
+            # Mark login as in progress
+            self._login_in_progress[agent_id] = True
+
+            try:
+                logger.info(f"Creating new session for agent {agent_id}")
+                session = FUBBrowserSession(self.browser, agent_id, self.session_store)
+                logger.debug(f"FUBBrowserSession created, calling login...")
+                await session.login(credentials)
+                logger.debug(f"Login complete for agent {agent_id}")
+                self.sessions[agent_id] = session
+                return session
+            finally:
+                # Clear login in progress flag
+                self._login_in_progress[agent_id] = False
 
     async def send_sms(
         self,
