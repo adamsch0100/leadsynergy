@@ -177,15 +177,20 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         text_messages = message_data.get('textmessages', [])
         if not text_messages:
             logger.warning("No text messages in response")
+            logger.debug(f"Full message_data: {message_data}")
             return
 
         text_msg = text_messages[0]
+        logger.debug(f"[DEBUG] Text message data: {text_msg}")
+        print(f"[DEBUG] Text message keys: {text_msg.keys()}", flush=True)
+        print(f"[DEBUG] Text message data: {text_msg}", flush=True)
+
         person_id = text_msg.get('personId')
         is_incoming = text_msg.get('isIncoming', False)
         message_content = text_msg.get('message', '')
 
         if not person_id:
-            logger.warning("No person ID associated with text message")
+            logger.warning(f"No person ID associated with text message. Full msg: {text_msg}")
             return
 
         # Only process incoming messages (from the lead)
