@@ -37,19 +37,19 @@
         html, body {
             margin: 0;
             padding: 0;
-            height: 737px;
+            width: 100%;
+            height: 100%;
             overflow: hidden;
         }
 
         .app-container {
             width: 100%;
-            max-width: 575px;
-            height: 737px;
-            margin: 0 auto;
+            height: 100%;
             background: #fff;
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            position: relative;
         }
 
         /* Header */
@@ -139,7 +139,7 @@
         .referral-source.redfin { background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #991b1b; }
         .referral-source.referral-exchange { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #065f46; }
 
-        /* Tab Navigation - stays at bottom */
+        /* Tab Navigation - at bottom */
         .tab-nav {
             display: flex;
             border-top: 1px solid var(--gray-200);
@@ -178,7 +178,7 @@
         /* Content wrapper - scrollable middle area */
         .content-wrapper {
             flex: 1;
-            min-height: 0; /* Required for flex overflow to work */
+            min-height: 0;
             overflow-y: auto;
             overflow-x: hidden;
         }
@@ -1286,7 +1286,7 @@
         </div>
         </div> <!-- Close content-wrapper -->
 
-        <!-- Tab Navigation - Fixed at Bottom -->
+        <!-- Tab Navigation -->
         <div class="tab-nav">
             <button class="tab-btn active" data-tab="lead-info">
                 <i class="fas fa-user"></i>
