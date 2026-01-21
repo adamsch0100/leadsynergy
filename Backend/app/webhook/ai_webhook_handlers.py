@@ -457,45 +457,37 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             print(f"[DEBUG] Response exists! Preparing to send SMS...", flush=True)
             logger.info(f"AI generated response for person {person_id}: {agent_response.response_text[:100]}...")
 
-            # Send response via FUB browser automation (Playwright)
-            print(f"[DEBUG] Importing PlaywrightSMSService...", flush=True)
-            from app.messaging.playwright_sms_service import PlaywrightSMSService
-            from app.ai_agent.settings_service import get_fub_browser_credentials
+            # Send response via FUB API (not Playwright - avoids login/location issues)
+            print(f"[DEBUG] Importing FUBSMSService...", flush=True)
+            from app.messaging.fub_sms_service import FUBSMSService
 
-            # Get FUB browser credentials for this user/org
-            print(f"[DEBUG] Getting FUB credentials for user {user_id}...", flush=True)
-            logger.info(f"Getting FUB credentials for user {user_id} / org {organization_id}")
+            # Get user's FUB API key
+            print(f"[DEBUG] Getting FUB API key for user {user_id}...", flush=True)
             try:
-                credentials = await get_fub_browser_credentials(
-                    supabase_client=supabase,
-                    user_id=user_id,
-                    organization_id=organization_id,
-                )
-                print(f"[DEBUG] Got credentials: {credentials is not None}", flush=True)
-            except Exception as cred_err:
-                print(f"[DEBUG] FAILED to get credentials: {cred_err}", flush=True)
+                user_result = supabase.table("users").select("fub_api_key, fub_user_id").eq("id", user_id).single().execute()
+                fub_api_key = user_result.data.get("fub_api_key") if user_result.data else None
+                fub_user_id = user_result.data.get("fub_user_id") if user_result.data else None
+                print(f"[DEBUG] Got API key: {fub_api_key is not None}, FUB user ID: {fub_user_id}", flush=True)
+            except Exception as key_err:
+                print(f"[DEBUG] FAILED to get API key: {key_err}", flush=True)
                 import traceback
                 traceback.print_exc()
-                raise
+                fub_api_key = None
+                fub_user_id = None
 
-            if not credentials:
-                print(f"[DEBUG] No credentials found - returning", flush=True)
-                logger.error(f"No FUB credentials found for user {user_id} / org {organization_id}")
+            if not fub_api_key:
+                print(f"[DEBUG] No FUB API key found - returning", flush=True)
+                logger.error(f"No FUB API key found for user {user_id}")
                 return
 
-            # Get or create global playwright service
-            print(f"[DEBUG] Creating PlaywrightSMSService...", flush=True)
-            if _playwright_sms_service is None:
-                _playwright_sms_service = PlaywrightSMSService()
-
-            agent_id = credentials.get("agent_id", user_id or "default")
-            print(f"[DEBUG] Sending SMS via Playwright to person {person_id}...", flush=True)
+            # Send via FUB API
+            print(f"[DEBUG] Sending SMS via FUB API to person {person_id}...", flush=True)
             try:
-                result = await _playwright_sms_service.send_sms(
-                    agent_id=agent_id,
+                sms_service = FUBSMSService(api_key=fub_api_key, user_id=fub_user_id)
+                result = await sms_service.send_text_message_async(
                     person_id=person_id,
                     message=agent_response.response_text,
-                    credentials=credentials,
+                    from_user_id=fub_user_id,
                 )
                 print(f"[DEBUG] SMS send result: {result}", flush=True)
             except Exception as sms_err:
