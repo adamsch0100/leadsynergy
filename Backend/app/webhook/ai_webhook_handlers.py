@@ -477,7 +477,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 return
 
             # Use the global playwright service (already initialized if we read messages)
-            global _playwright_sms_service
+            # Note: global declaration is at the top of the function
             if _playwright_sms_service is None:
                 _playwright_sms_service = PlaywrightSMSService()
 
