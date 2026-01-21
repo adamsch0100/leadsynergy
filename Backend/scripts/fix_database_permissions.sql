@@ -82,6 +82,30 @@ GRANT ALL ON ai_agent_settings TO service_role;
 GRANT ALL ON ai_agent_settings TO authenticated;
 
 
+-- 6. Add Gmail credentials columns to ai_agent_settings (for 2FA code retrieval)
+-- These are used program-wide for FUB login verification, Redfin 2FA, etc.
+DO $$
+BEGIN
+    -- Add gmail_email column if it doesn't exist
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'ai_agent_settings' AND column_name = 'gmail_email'
+    ) THEN
+        ALTER TABLE ai_agent_settings ADD COLUMN gmail_email TEXT;
+        COMMENT ON COLUMN ai_agent_settings.gmail_email IS 'Gmail address for 2FA code retrieval (used by FUB login, Redfin, etc.)';
+    END IF;
+
+    -- Add gmail_app_password column if it doesn't exist
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'ai_agent_settings' AND column_name = 'gmail_app_password'
+    ) THEN
+        ALTER TABLE ai_agent_settings ADD COLUMN gmail_app_password TEXT;
+        COMMENT ON COLUMN ai_agent_settings.gmail_app_password IS 'Google App Password for IMAP access (NOT your regular Gmail password)';
+    END IF;
+END $$;
+
+
 -- =============================================
 -- VERIFICATION QUERIES
 -- =============================================
@@ -100,3 +124,9 @@ WHERE table_name = 'ai_lead_profile_cache';
 SELECT trigger_name, event_object_table, action_statement
 FROM information_schema.triggers
 WHERE trigger_schema = 'public';
+
+-- Check ai_agent_settings structure (including new gmail columns)
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'ai_agent_settings'
+ORDER BY ordinal_position;

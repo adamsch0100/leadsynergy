@@ -176,14 +176,16 @@ class FUBBrowserSession:
         try:
             from app.utils.email_2fa_helper import Email2FAHelper
 
-            # Create email helper - uses environment credentials
-            email_helper = Email2FAHelper.from_env()
+            # Create email helper - uses centralized ai_agent_settings (preferred)
+            # or falls back to environment variables
+            email_helper = await Email2FAHelper.from_settings()
 
             if not email_helper or not email_helper.email_address:
                 logger.error("No email credentials configured for 2FA verification")
                 raise Exception(
                     "Login failed: New location security check. "
                     "Email credentials not configured for auto-verification. "
+                    "Please set gmail_email and gmail_app_password in AI Agent Settings or env vars. "
                     "Please approve the login manually via email."
                 )
 

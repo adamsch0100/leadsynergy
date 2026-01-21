@@ -106,6 +106,10 @@ class AIAgentSettings:
     fub_login_password: Optional[str] = None  # Should be encrypted in DB
     fub_login_type: str = "email"  # email, google, microsoft
 
+    # Gmail Credentials (for 2FA code retrieval - used by FUB login, Redfin, etc.)
+    gmail_email: Optional[str] = None
+    gmail_app_password: Optional[str] = None  # Google App Password (NOT regular password)
+
     # LLM Model Configuration (for AI responses)
     # Provider options: "openrouter", "anthropic"
     llm_provider: str = "openrouter"  # Default to OpenRouter (free models available)
@@ -189,6 +193,9 @@ class AIAgentSettings:
             fub_login_email=row.get('fub_login_email'),
             fub_login_password=row.get('fub_login_password'),
             fub_login_type=row.get('fub_login_type') or "email",
+            # Gmail Credentials (for 2FA)
+            gmail_email=row.get('gmail_email'),
+            gmail_app_password=row.get('gmail_app_password'),
             # LLM Model Configuration
             llm_provider=row.get('llm_provider') or "openrouter",
             llm_model=row.get('llm_model') or "xiaomi/mimo-v2-flash:free",
@@ -547,4 +554,51 @@ async def get_fub_browser_credentials(
 
     # No credentials available
     logger.warning("No FUB browser credentials found in settings or environment")
+    return None
+
+
+async def get_gmail_credentials(
+    supabase_client=None,
+    user_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Get Gmail credentials for 2FA code retrieval (used by FUB login, Redfin, etc.).
+
+    Checks in order:
+    1. User-specific settings from database
+    2. Organization settings from database
+    3. Environment variables (fallback)
+
+    Args:
+        supabase_client: Supabase client
+        user_id: User ID for settings lookup
+        organization_id: Organization ID for fallback
+
+    Returns:
+        Dict with 'email', 'app_password' keys, or None if not configured
+    """
+    import os
+
+    # Try to get from database settings first
+    settings = await get_agent_settings(supabase_client, user_id, organization_id)
+
+    if settings.gmail_email and settings.gmail_app_password:
+        return {
+            "email": settings.gmail_email,
+            "app_password": settings.gmail_app_password,
+        }
+
+    # Fallback to environment variables
+    gmail_email = os.getenv("GMAIL_EMAIL")
+    gmail_app_password = os.getenv("GMAIL_APP_PASSWORD")
+
+    if gmail_email and gmail_app_password:
+        return {
+            "email": gmail_email,
+            "app_password": gmail_app_password,
+        }
+
+    # No credentials available
+    logger.warning("No Gmail credentials found in settings or environment")
     return None

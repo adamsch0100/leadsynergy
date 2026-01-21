@@ -75,6 +75,52 @@ class Email2FAHelper:
         )
 
     @classmethod
+    async def from_settings(
+        cls,
+        supabase_client=None,
+        user_id: str = None,
+        organization_id: str = None
+    ) -> 'Email2FAHelper':
+        """
+        Create helper from centralized ai_agent_settings (preferred method).
+
+        This loads Gmail credentials from the program-wide settings in the database,
+        falling back to environment variables if not configured in the database.
+
+        Args:
+            supabase_client: Supabase client for database access
+            user_id: Optional user ID for user-specific settings
+            organization_id: Optional organization ID for org-level settings
+
+        Returns:
+            Email2FAHelper instance (may have None credentials if not configured)
+        """
+        try:
+            from app.ai_agent.settings_service import get_gmail_credentials
+
+            # Try to get credentials from database settings first
+            credentials = await get_gmail_credentials(
+                supabase_client=supabase_client,
+                user_id=user_id,
+                organization_id=organization_id
+            )
+
+            if credentials:
+                return cls(
+                    email_address=credentials.get('email'),
+                    app_password=credentials.get('app_password')
+                )
+
+            # Fall back to environment variables
+            logger.info("No Gmail credentials in database settings, falling back to env vars")
+            return cls.from_env()
+
+        except Exception as e:
+            logger.error(f"Error loading Gmail credentials from settings: {e}")
+            # Fall back to environment variables
+            return cls.from_env()
+
+    @classmethod
     def from_lead_source_settings(
         cls,
         source_name: str,
