@@ -150,7 +150,14 @@ class FUBBrowserSession:
         # Verify login succeeded
         current_url = self.page.url
         if "login" in current_url or "signin" in current_url:
-            # Check for error message
+            # Check for "new location" security message
+            page_text = await self.page.text_content('body')
+            if page_text and ("new location" in page_text.lower() or "security measure" in page_text.lower()):
+                logger.info("FUB security check detected - attempting to get verification link from email")
+                await self._handle_security_email_verification(email)
+                return  # Successfully handled via email verification
+
+            # Check for other error messages
             error_elem = await self.page.query_selector('[class*="error"], [class*="alert"]')
             error_text = await error_elem.text_content() if error_elem else "Unknown error"
             raise Exception(f"Login failed: {error_text}")
@@ -158,6 +165,92 @@ class FUBBrowserSession:
         # Capture the team subdomain after successful login
         self._capture_base_url()
         logger.info(f"Email login successful for {email}")
+
+    async def _handle_security_email_verification(self, fub_email: str):
+        """
+        Handle FUB's 'new location' security check by fetching the
+        verification link from email and navigating to it.
+        """
+        logger.info("Attempting to auto-verify FUB login via email link...")
+
+        try:
+            from app.utils.email_2fa_helper import Email2FAHelper
+
+            # Create email helper - uses environment credentials
+            email_helper = Email2FAHelper.from_env()
+
+            if not email_helper or not email_helper.email_address:
+                logger.error("No email credentials configured for 2FA verification")
+                raise Exception(
+                    "Login failed: New location security check. "
+                    "Email credentials not configured for auto-verification. "
+                    "Please approve the login manually via email."
+                )
+
+            logger.info(f"Checking email inbox for FUB verification link...")
+
+            # Get the verification link from the FUB security email
+            with email_helper:
+                verification_link = email_helper.get_verification_link(
+                    sender_contains="followupboss",
+                    subject_contains="login",
+                    link_contains="followupboss.com",
+                    max_age_seconds=300,  # 5 minutes
+                    max_retries=15,
+                    retry_delay=3.0
+                )
+
+            if not verification_link:
+                logger.error("Could not find FUB verification link in email")
+                raise Exception(
+                    "Login failed: New location security check. "
+                    "Verification email not found. Please check your inbox and try again."
+                )
+
+            logger.info(f"Found FUB verification link, navigating to complete login...")
+
+            # Navigate to the verification link in Playwright
+            await self.page.goto(verification_link, wait_until="domcontentloaded")
+            await self._human_delay(2, 3)
+
+            # Check if we're now logged in
+            current_url = self.page.url
+            if "login" not in current_url and "signin" not in current_url:
+                logger.info("Email verification successful - now logged in!")
+                self._capture_base_url()
+                self._logged_in = True
+                return
+
+            # Sometimes FUB redirects to another page - follow it
+            await self.page.wait_for_load_state("networkidle")
+            current_url = self.page.url
+
+            if "login" not in current_url and "signin" not in current_url:
+                logger.info("Email verification successful after redirect - now logged in!")
+                self._capture_base_url()
+                self._logged_in = True
+                return
+
+            # If still on login page, the verification link may have expired
+            raise Exception(
+                "Login failed: Verification link may have expired. "
+                "Please try again."
+            )
+
+        except ImportError:
+            logger.error("Email2FAHelper not available")
+            raise Exception(
+                "Login failed: New location security check. "
+                "Email verification module not available."
+            )
+        except Exception as e:
+            if "Login failed" in str(e):
+                raise
+            logger.error(f"Email verification failed: {e}")
+            raise Exception(
+                f"Login failed: New location security check. "
+                f"Auto-verification failed: {e}"
+            )
 
     async def _google_sso_login(self, credentials: dict):
         """Login with Google SSO."""
