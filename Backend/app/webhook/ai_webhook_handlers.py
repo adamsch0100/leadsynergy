@@ -457,37 +457,38 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             print(f"[DEBUG] Response exists! Preparing to send SMS...", flush=True)
             logger.info(f"AI generated response for person {person_id}: {agent_response.response_text[:100]}...")
 
-            # Send response via FUB API (not Playwright - avoids login/location issues)
-            print(f"[DEBUG] Importing FUBSMSService...", flush=True)
-            from app.messaging.fub_sms_service import FUBSMSService
+            # Send response via Playwright browser automation
+            # FUB API doesn't have texting access - must use browser
+            print(f"[DEBUG] Sending SMS via Playwright to person {person_id}...", flush=True)
 
-            # Get user's FUB API key
-            print(f"[DEBUG] Getting FUB API key for user {user_id}...", flush=True)
-            try:
-                user_result = supabase.table("users").select("fub_api_key, fub_user_id").eq("id", user_id).single().execute()
-                fub_api_key = user_result.data.get("fub_api_key") if user_result.data else None
-                fub_user_id = user_result.data.get("fub_user_id") if user_result.data else None
-                print(f"[DEBUG] Got API key: {fub_api_key is not None}, FUB user ID: {fub_user_id}", flush=True)
-            except Exception as key_err:
-                print(f"[DEBUG] FAILED to get API key: {key_err}", flush=True)
-                import traceback
-                traceback.print_exc()
-                fub_api_key = None
-                fub_user_id = None
+            # Get FUB browser credentials (already resolved earlier, but may need to get again)
+            from app.ai_agent.settings_service import get_fub_browser_credentials
+            from app.messaging.playwright_sms_service import PlaywrightSMSService
 
-            if not fub_api_key:
-                print(f"[DEBUG] No FUB API key found - returning", flush=True)
-                logger.error(f"No FUB API key found for user {user_id}")
+            credentials = await get_fub_browser_credentials(
+                supabase_client=supabase,
+                user_id=user_id,
+                organization_id=organization_id,
+            )
+
+            if not credentials:
+                print(f"[DEBUG] No FUB browser credentials found - cannot send SMS", flush=True)
+                logger.error(f"No FUB browser credentials for user {user_id} - cannot send SMS")
                 return
 
-            # Send via FUB API
-            print(f"[DEBUG] Sending SMS via FUB API to person {person_id}...", flush=True)
+            # Use the global playwright service (already initialized if we read messages)
+            global _playwright_sms_service
+            if _playwright_sms_service is None:
+                _playwright_sms_service = PlaywrightSMSService()
+
+            agent_id = credentials.get("agent_id", user_id or "default")
+
             try:
-                sms_service = FUBSMSService(api_key=fub_api_key, user_id=fub_user_id)
-                result = await sms_service.send_text_message_async(
+                result = await _playwright_sms_service.send_sms(
+                    agent_id=agent_id,
                     person_id=person_id,
                     message=agent_response.response_text,
-                    from_user_id=fub_user_id,
+                    credentials=credentials,
                 )
                 print(f"[DEBUG] SMS send result: {result}", flush=True)
             except Exception as sms_err:
