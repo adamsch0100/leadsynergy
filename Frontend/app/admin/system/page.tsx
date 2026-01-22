@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { AlertCircle, CheckCircle2, Key, RefreshCw } from "lucide-react"
+import { AlertCircle, CheckCircle2, Key, RefreshCw, Mail } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
@@ -25,6 +25,11 @@ export default function SystemSettingsPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<User | null>(null)
+
+  // Gmail credentials for 2FA/email verification
+  const [gmailEmail, setGmailEmail] = useState("")
+  const [gmailAppPassword, setGmailAppPassword] = useState("")
+  const [gmailConfigured, setGmailConfigured] = useState(false)
 
   // Load user session
   useEffect(() => {
@@ -55,6 +60,15 @@ export default function SystemSettingsPage() {
       if (data.success && data.data) {
         setMinDays(data.data.min_update_interval_days?.toString() || "5")
         setMaxDays(data.data.max_update_interval_days?.toString() || "10")
+        // Load Gmail credentials
+        if (data.data.gmail_email) {
+          setGmailEmail(data.data.gmail_email)
+          setGmailConfigured(true)
+        }
+        // Don't load the password - just show if it's configured
+        if (data.data.gmail_app_password) {
+          setGmailConfigured(true)
+        }
       }
 
       // Check if user has FUB API key by checking session user data
@@ -79,8 +93,18 @@ export default function SystemSettingsPage() {
     try {
       let settingsSuccess = true
 
-      // Only try to save system settings if values changed from defaults
-      // Note: min/max update interval columns may not exist in DB yet
+      // Build the settings object with Gmail credentials
+      const settingsToSave: Record<string, any> = {}
+
+      // Add Gmail credentials if provided
+      if (gmailEmail) {
+        settingsToSave.gmail_email = gmailEmail
+      }
+      if (gmailAppPassword) {
+        settingsToSave.gmail_app_password = gmailAppPassword
+      }
+
+      // Save system settings (including Gmail credentials)
       try {
         const settingsRes = await fetch(`${API_BASE_URL}/api/supabase/system-settings`, {
           method: 'PUT',
@@ -88,14 +112,15 @@ export default function SystemSettingsPage() {
             'Content-Type': 'application/json',
             'X-User-ID': user.id
           },
-          body: JSON.stringify({
-            // Only send updated_at for now since interval columns don't exist
-            // min_update_interval_days: parseInt(minDays),
-            // max_update_interval_days: parseInt(maxDays)
-          })
+          body: JSON.stringify(settingsToSave)
         })
         const settingsData = await settingsRes.json()
         settingsSuccess = settingsData.success
+
+        if (settingsSuccess && (gmailEmail || gmailAppPassword)) {
+          setGmailConfigured(true)
+          setGmailAppPassword("") // Clear password field after saving
+        }
       } catch (settingsErr) {
         console.warn('System settings update skipped:', settingsErr)
         // Don't fail the whole save if system settings fails
@@ -217,6 +242,71 @@ export default function SystemSettingsPage() {
               </AlertDescription>
             </Alert>
           )}
+
+          <Separator className="my-6" />
+
+          {/* Gmail Credentials for 2FA/Email Verification */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Mail className="h-5 w-5 text-primary" />
+                <h3 className="font-medium">Gmail IMAP Access (for 2FA Verification)</h3>
+              </div>
+              <Badge variant={gmailConfigured ? "default" : "secondary"}>
+                {gmailConfigured ? "Configured" : "Not Configured"}
+              </Badge>
+            </div>
+
+            <p className="text-sm text-muted-foreground">
+              Gmail credentials are used to automatically retrieve 2FA verification codes from email
+              (e.g., FUB login verification, Redfin 2FA). This requires a Google App Password, not your regular Gmail password.
+            </p>
+
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="gmail-email">Gmail Email Address</Label>
+                <Input
+                  id="gmail-email"
+                  type="email"
+                  value={gmailEmail}
+                  onChange={(e) => setGmailEmail(e.target.value)}
+                  placeholder="your-email@gmail.com"
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="gmail-app-password">Google App Password</Label>
+                <Input
+                  id="gmail-app-password"
+                  type="password"
+                  value={gmailAppPassword}
+                  onChange={(e) => setGmailAppPassword(e.target.value)}
+                  placeholder={gmailConfigured ? "Enter new app password to update" : "xxxx xxxx xxxx xxxx"}
+                />
+                <p className="text-sm text-muted-foreground">
+                  <a
+                    href="https://myaccount.google.com/apppasswords"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Generate an App Password here
+                  </a>
+                  {" "} (requires 2-Step Verification enabled on your Google account)
+                </p>
+              </div>
+            </div>
+
+            {!gmailConfigured && (
+              <Alert className="bg-yellow-50 border-yellow-200 text-yellow-800">
+                <AlertCircle className="h-4 w-4 text-yellow-600" />
+                <AlertTitle>Gmail Not Configured</AlertTitle>
+                <AlertDescription>
+                  Gmail credentials are needed for automatic 2FA code retrieval. Without this, you may need to manually approve logins.
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
         </CardContent>
       </Card>
 
