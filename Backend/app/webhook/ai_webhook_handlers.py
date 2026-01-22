@@ -206,24 +206,46 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             logger.warning(f"Could not resolve organization/user for person {person_id}")
             return
 
-        # Check if AI auto-respond is enabled for this user/org
-        from app.ai_agent.settings_service import get_agent_settings
-        ai_settings = await get_agent_settings(supabase, organization_id, user_id)
+        # Check per-lead AI settings first (most specific)
+        from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+        lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
+        per_lead_enabled = await lead_ai_service.is_ai_enabled_for_lead(
+            fub_person_id=person_id,
+            organization_id=organization_id,
+            user_id=user_id,
+        )
 
-        if not ai_settings.is_enabled:
-            logger.info(f"Skipping person {person_id} - AI auto-respond is disabled for this user/org")
-            # Log the message but don't respond
-            await log_ai_message(
-                conversation_id=None,
-                fub_person_id=person_id,
-                direction="inbound",
-                channel="sms",
-                message_content=message_content,
-                extracted_data={"ai_disabled": True, "reason": "AI auto-respond disabled in settings"},
-            )
-            return
+        # If per-lead setting exists, use it
+        if per_lead_enabled is not None:
+            if not per_lead_enabled:
+                logger.info(f"Skipping person {person_id} - AI disabled for this specific lead")
+                await log_ai_message(
+                    conversation_id=None,
+                    fub_person_id=person_id,
+                    direction="inbound",
+                    channel="sms",
+                    message_content=message_content,
+                    extracted_data={"ai_disabled": True, "reason": "AI disabled for this lead"},
+                )
+                return
+            logger.info(f"AI enabled for this specific lead {person_id}")
+        else:
+            # No per-lead setting - check global AI settings
+            from app.ai_agent.settings_service import get_agent_settings
+            ai_settings = await get_agent_settings(supabase, organization_id, user_id)
 
-        logger.info(f"AI auto-respond enabled for person {person_id} - processing message")
+            if not ai_settings.is_enabled:
+                logger.info(f"Skipping person {person_id} - AI auto-respond is disabled globally for this user/org")
+                await log_ai_message(
+                    conversation_id=None,
+                    fub_person_id=person_id,
+                    direction="inbound",
+                    channel="sms",
+                    message_content=message_content,
+                    extracted_data={"ai_disabled": True, "reason": "AI auto-respond disabled globally"},
+                )
+                return
+            logger.info(f"AI auto-respond enabled globally for user/org - processing message for person {person_id}")
 
         # Fetch person data for profile building
         fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
