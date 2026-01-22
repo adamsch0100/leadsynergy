@@ -198,21 +198,20 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             logger.info(f"Skipping outbound message for person {person_id}")
             return
 
-        # Check if this lead should receive AI responses
-        # Only respond to leads with "AI Follow-up" tag
-        fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
-        person_data = fub_client.get_person(person_id)
+        # Resolve organization/user first to check AI settings
+        organization_id = await resolve_organization_for_person(person_id)
+        user_id = await resolve_user_for_person(person_id, organization_id)
 
-        if not person_data:
-            logger.warning(f"Could not fetch person data for {person_id}")
+        if not organization_id or not user_id:
+            logger.warning(f"Could not resolve organization/user for person {person_id}")
             return
 
-        # Check for AI Follow-up tag
-        person_tags = person_data.get('tags', [])
-        has_ai_tag = any(tag.lower() in ['ai follow-up', 'ai followup', 'ai-follow-up'] for tag in person_tags)
+        # Check if AI auto-respond is enabled for this user/org
+        from app.ai_agent.settings_service import get_agent_settings
+        ai_settings = await get_agent_settings(supabase, organization_id, user_id)
 
-        if not has_ai_tag:
-            logger.info(f"Skipping person {person_id} - does not have 'AI Follow-up' tag. Tags: {person_tags}")
+        if not ai_settings.is_enabled:
+            logger.info(f"Skipping person {person_id} - AI auto-respond is disabled for this user/org")
             # Log the message but don't respond
             await log_ai_message(
                 conversation_id=None,
@@ -220,11 +219,19 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 direction="inbound",
                 channel="sms",
                 message_content=message_content,
-                extracted_data={"ai_disabled": True, "reason": "No AI Follow-up tag"},
+                extracted_data={"ai_disabled": True, "reason": "AI auto-respond disabled in settings"},
             )
             return
 
-        logger.info(f"Person {person_id} has AI Follow-up tag - processing message")
+        logger.info(f"AI auto-respond enabled for person {person_id} - processing message")
+
+        # Fetch person data for profile building
+        fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
+        person_data = fub_client.get_person(person_id)
+
+        if not person_data:
+            logger.warning(f"Could not fetch person data for {person_id}")
+            return
 
         # Check for FUB privacy-redacted messages
         # FUB API intentionally hides SMS content with "* Body is hidden for privacy reasons *"
@@ -232,13 +239,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         if "Body is hidden" in message_content or "hidden for privacy" in message_content.lower():
             logger.warning(f"FUB API returned privacy-redacted message for person {person_id}. Using Playwright to read actual content...")
 
-            # Resolve tenant first (we need credentials)
-            organization_id = await resolve_organization_for_person(person_id)
-            user_id = await resolve_user_for_person(person_id, organization_id)
-
-            if not organization_id or not user_id:
-                logger.error(f"Could not resolve organization/user for person {person_id} - cannot read message via Playwright")
-                return
+            # organization_id and user_id already resolved above
 
             # Get FUB browser credentials
             from app.ai_agent.settings_service import get_fub_browser_credentials
@@ -333,15 +334,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         from app.ai_agent.compliance_checker import ComplianceChecker
         from app.ai_agent.conversation_manager import ConversationManager, ConversationState
 
-        # person_data already fetched earlier for tag check - no need to fetch again
-
-        # Resolve tenant (organization) for this person
-        organization_id = await resolve_organization_for_person(person_id)
-        user_id = await resolve_user_for_person(person_id, organization_id)
-
-        if not organization_id or not user_id:
-            logger.warning(f"Could not resolve organization/user for person {person_id}")
-            return
+        # person_data, organization_id, and user_id already fetched earlier - no need to fetch again
 
         # Check for opt-out keywords first
         compliance_checker = ComplianceChecker(supabase_client=supabase)
