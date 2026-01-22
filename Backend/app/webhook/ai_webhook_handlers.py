@@ -198,6 +198,34 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             logger.info(f"Skipping outbound message for person {person_id}")
             return
 
+        # Check if this lead should receive AI responses
+        # Only respond to leads with "AI Follow-up" tag
+        fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
+        person_data = fub_client.get_person(person_id)
+
+        if not person_data:
+            logger.warning(f"Could not fetch person data for {person_id}")
+            return
+
+        # Check for AI Follow-up tag
+        person_tags = person_data.get('tags', [])
+        has_ai_tag = any(tag.lower() in ['ai follow-up', 'ai followup', 'ai-follow-up'] for tag in person_tags)
+
+        if not has_ai_tag:
+            logger.info(f"Skipping person {person_id} - does not have 'AI Follow-up' tag. Tags: {person_tags}")
+            # Log the message but don't respond
+            await log_ai_message(
+                conversation_id=None,
+                fub_person_id=person_id,
+                direction="inbound",
+                channel="sms",
+                message_content=message_content,
+                extracted_data={"ai_disabled": True, "reason": "No AI Follow-up tag"},
+            )
+            return
+
+        logger.info(f"Person {person_id} has AI Follow-up tag - processing message")
+
         # Check for FUB privacy-redacted messages
         # FUB API intentionally hides SMS content with "* Body is hidden for privacy reasons *"
         # When this happens, we use Playwright browser automation to read the actual content
@@ -305,8 +333,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         from app.ai_agent.compliance_checker import ComplianceChecker
         from app.ai_agent.conversation_manager import ConversationManager, ConversationState
 
-        # Get person details from FUB
-        person_data = fub_client.get_person(person_id)
+        # person_data already fetched earlier for tag check - no need to fetch again
 
         # Resolve tenant (organization) for this person
         organization_id = await resolve_organization_for_person(person_id)
