@@ -54,7 +54,7 @@ class AIAgentSettings:
     auto_schedule_score_threshold: int = 70  # Score to auto-suggest scheduling
 
     # Feature flags
-    is_enabled: bool = True
+    is_enabled: bool = False  # AI auto-respond OFF by default - must be explicitly enabled
     use_llm_for_all_responses: bool = True
     use_templates_as_fallback: bool = True
     enable_a_b_testing: bool = True
