@@ -3524,3 +3524,210 @@ def import_fub_leads(user_id=None):
 
 def register_supabase_api(app):
     app.register_blueprint(supabase_api)
+
+
+# Lead AI Settings
+@supabase_api.route("/lead-ai-settings/<person_id>", methods=["GET"])
+def get_lead_ai_settings(person_id):
+    """Get AI settings for a specific lead."""
+    try:
+        user_id = request.headers.get("X-User-ID")
+        if not user_id:
+            return jsonify({"success": False, "error": "User ID is required"}), 400
+        
+        # Get organization
+        user_result = supabase.table("users").select("organization_id").eq("id", user_id).execute()
+        if not user_result.data:
+            return jsonify({"success": False, "error": "User not found"}), 404
+        
+        organization_id = user_result.data[0].get("organization_id")
+        
+        # Get AI settings
+        from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+        import asyncio
+        
+        lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        ai_enabled = loop.run_until_complete(
+            lead_ai_service.is_ai_enabled_for_lead(person_id, organization_id, user_id)
+        )
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "person_id": person_id,
+                "ai_enabled": ai_enabled if ai_enabled is not None else "unset",
+            }
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error getting lead AI settings: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@supabase_api.route("/lead-ai-settings/<person_id>/toggle", methods=["POST"])
+def toggle_lead_ai(person_id):
+    """
+    Toggle AI for a specific lead.
+    Also adds/removes 'AI Follow-up' tag in FUB.
+    """
+    try:
+        user_id = request.headers.get("X-User-ID")
+        if not user_id:
+            return jsonify({"success": False, "error": "User ID is required"}), 400
+        
+        data = request.json
+        enable = data.get("enable", True)
+        
+        # Get organization
+        user_result = supabase.table("users").select("organization_id").eq("id", user_id).execute()
+        if not user_result.data:
+            return jsonify({"success": False, "error": "User not found"}), 404
+        
+        organization_id = user_result.data[0].get("organization_id")
+        
+        # Get AI settings service
+        from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+        import asyncio
+        
+        lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Toggle AI setting
+        if enable:
+            success = loop.run_until_complete(
+                lead_ai_service.enable_ai_for_lead(
+                    fub_person_id=person_id,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    reason='manual_toggle',
+                    enabled_by=user_id,
+                )
+            )
+        else:
+            success = loop.run_until_complete(
+                lead_ai_service.disable_ai_for_lead(
+                    fub_person_id=person_id,
+                    organization_id=organization_id,
+                )
+            )
+        
+        if not success:
+            return jsonify({"success": False, "error": "Failed to update AI settings"}), 500
+        
+        # Sync with FUB tag
+        try:
+            from app.database.fub_api_client import FUBApiClient
+            fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
+            
+            if enable:
+                # Add "AI Follow-up" tag
+                fub_client.add_tag(person_id, "AI Follow-up")
+                logger.info(f"Added 'AI Follow-up' tag to person {person_id}")
+            else:
+                # Remove "AI Follow-up" tag
+                fub_client.remove_tag(person_id, "AI Follow-up")
+                logger.info(f"Removed 'AI Follow-up' tag from person {person_id}")
+        except Exception as tag_error:
+            logger.warning(f"Failed to sync FUB tag: {tag_error}")
+            # Don't fail the request if tag sync fails
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "person_id": person_id,
+                "ai_enabled": enable,
+                "tag_synced": True,
+            }
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error toggling lead AI: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@supabase_api.route("/lead-ai-settings/bulk-toggle", methods=["POST"])
+def bulk_toggle_lead_ai():
+    """
+    Bulk toggle AI for multiple leads.
+    Also adds/removes 'AI Follow-up' tags in FUB.
+    """
+    try:
+        user_id = request.headers.get("X-User-ID")
+        if not user_id:
+            return jsonify({"success": False, "error": "User ID is required"}), 400
+        
+        data = request.json
+        person_ids = data.get("person_ids", [])
+        enable = data.get("enable", True)
+        reason = data.get("reason", "bulk_toggle")
+        
+        if not person_ids:
+            return jsonify({"success": False, "error": "person_ids required"}), 400
+        
+        # Get organization
+        user_result = supabase.table("users").select("organization_id").eq("id", user_id).execute()
+        if not user_result.data:
+            return jsonify({"success": False, "error": "User not found"}), 404
+        
+        organization_id = user_result.data[0].get("organization_id")
+        
+        # Get AI settings service
+        from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+        from app.database.fub_api_client import FUBApiClient
+        import asyncio
+        
+        lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
+        fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Bulk enable/disable
+        if enable:
+            result = loop.run_until_complete(
+                lead_ai_service.bulk_enable_ai(
+                    fub_person_ids=person_ids,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    reason=reason,
+                    enabled_by=user_id,
+                )
+            )
+            # Add tags
+            for person_id in person_ids:
+                try:
+                    fub_client.add_tag(person_id, "AI Follow-up")
+                except Exception as e:
+                    logger.warning(f"Failed to add tag for {person_id}: {e}")
+        else:
+            # Disable individually
+            success_count = 0
+            failed_count = 0
+            for person_id in person_ids:
+                try:
+                    success = loop.run_until_complete(
+                        lead_ai_service.disable_ai_for_lead(person_id, organization_id)
+                    )
+                    if success:
+                        success_count += 1
+                        fub_client.remove_tag(person_id, "AI Follow-up")
+                    else:
+                        failed_count += 1
+                except Exception as e:
+                    logger.error(f"Error disabling AI for {person_id}: {e}")
+                    failed_count += 1
+            
+            result = {
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "total": len(person_ids),
+            }
+        
+        return jsonify({"success": True, "data": result}), 200
+    
+    except Exception as e:
+        logger.error(f"Error bulk toggling lead AI: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500

@@ -797,3 +797,102 @@ class FUBApiClient:
             return datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
         except (ValueError, TypeError):
             return None
+    def add_tag(self, person_id: str, tag: str) -> bool:
+        """
+        Add a tag to a person in FUB.
+        
+        Args:
+            person_id: FUB person ID
+            tag: Tag name to add
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            url = f"{self.base_url}/people/{person_id}"
+            
+            # Get current person data
+            person = self.get_person(person_id)
+            if not person:
+                logger.error(f"Person {person_id} not found")
+                return False
+            
+            # Get current tags
+            current_tags = person.get("tags", [])
+            
+            # Check if tag already exists
+            if tag in current_tags:
+                logger.info(f"Tag '{tag}' already exists for person {person_id}")
+                return True
+            
+            # Add new tag
+            updated_tags = current_tags + [tag]
+            
+            # Update person with new tags
+            response = requests.put(
+                url,
+                json={"tags": updated_tags},
+                headers=self.headers,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Added tag '{tag}' to person {person_id}")
+                return True
+            else:
+                logger.error(f"Failed to add tag: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error adding tag to person {person_id}: {e}")
+            return False
+    
+    def remove_tag(self, person_id: str, tag: str) -> bool:
+        """
+        Remove a tag from a person in FUB.
+        
+        Args:
+            person_id: FUB person ID
+            tag: Tag name to remove
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            url = f"{self.base_url}/people/{person_id}"
+            
+            # Get current person data
+            person = self.get_person(person_id)
+            if not person:
+                logger.error(f"Person {person_id} not found")
+                return False
+            
+            # Get current tags
+            current_tags = person.get("tags", [])
+            
+            # Check if tag exists
+            if tag not in current_tags:
+                logger.info(f"Tag '{tag}' doesn't exist for person {person_id}")
+                return True
+            
+            # Remove tag
+            updated_tags = [t for t in current_tags if t != tag]
+            
+            # Update person with new tags
+            response = requests.put(
+                url,
+                json={"tags": updated_tags},
+                headers=self.headers,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Removed tag '{tag}' from person {person_id}")
+                return True
+            else:
+                logger.error(f"Failed to remove tag: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error removing tag from person {person_id}: {e}")
+            return False

@@ -1947,3 +1947,98 @@ async def process_text_cache_update(webhook_data: Dict[str, Any]):
 
     except Exception as e:
         logger.error(f"Error updating cache for text: {e}")
+
+
+@ai_webhook_bp.route('/tag-sync', methods=['POST'])
+def handle_tag_sync_webhook():
+    """
+    Handle FUB tag changes and sync with AI settings.
+    
+    When "AI Follow-up" tag is added → enable AI for lead
+    When "AI Follow-up" tag is removed → disable AI for lead
+    """
+    try:
+        webhook_data = request.get_json()
+        logger.info(f"Received tag sync webhook: {webhook_data.get('event')}")
+        
+        event = webhook_data.get('event', '').lower()
+        
+        if event not in ['tagadded', 'tagremoved']:
+            return Response("Event not applicable", status=200)
+        
+        # Process asynchronously
+        run_async_task(process_tag_change(webhook_data, event))
+        
+        return Response("OK", status=200)
+        
+    except Exception as e:
+        logger.error(f"Error processing tag sync webhook: {e}")
+        return Response("Error processing webhook", status=500)
+
+
+async def process_tag_change(webhook_data: Dict[str, Any], event: str):
+    """
+    Process tag changes and sync with AI settings.
+    
+    Args:
+        webhook_data: Webhook payload from FUB
+        event: 'tagadded' or 'tagremoved'
+    """
+    try:
+        # Extract tag info
+        tag_name = webhook_data.get('data', {}).get('tag', '')
+        person_id = webhook_data.get('data', {}).get('personId')
+        
+        if not person_id:
+            logger.warning("No person ID in tag webhook")
+            return
+        
+        # Check if it's the AI Follow-up tag
+        ai_tag_variations = ['ai follow-up', 'ai followup', 'ai-follow-up', 'ai follow up']
+        if tag_name.lower() not in ai_tag_variations:
+            logger.debug(f"Tag '{tag_name}' is not an AI tag, ignoring")
+            return
+        
+        logger.info(f"AI tag '{tag_name}' {event} for person {person_id}")
+        
+        # Resolve organization/user
+        organization_id = await resolve_organization_for_person(person_id)
+        user_id = await resolve_user_for_person(person_id, organization_id)
+        
+        if not organization_id or not user_id:
+            logger.warning(f"Could not resolve organization/user for person {person_id}")
+            return
+        
+        # Get AI settings service
+        from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+        lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
+        
+        if event == 'tagadded':
+            # Enable AI for this lead
+            success = await lead_ai_service.enable_ai_for_lead(
+                fub_person_id=person_id,
+                organization_id=organization_id,
+                user_id=user_id,
+                reason='fub_tag_added',
+                enabled_by=user_id,
+            )
+            if success:
+                logger.info(f"AI enabled for person {person_id} via FUB tag")
+            else:
+                logger.error(f"Failed to enable AI for person {person_id}")
+                
+        elif event == 'tagremoved':
+            # Disable AI for this lead
+            success = await lead_ai_service.disable_ai_for_lead(
+                fub_person_id=person_id,
+                organization_id=organization_id,
+            )
+            if success:
+                logger.info(f"AI disabled for person {person_id} via FUB tag removal")
+            else:
+                logger.error(f"Failed to disable AI for person {person_id}")
+    
+    except Exception as e:
+        logger.error(f"Error processing tag change: {e}")
+        import traceback
+        traceback.print_exc()
