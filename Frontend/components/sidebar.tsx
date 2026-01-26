@@ -75,8 +75,8 @@ export function SidebarWrapper({ children, role }: SidebarWrapperProps) {
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen">
         <AppSidebar role={role} />
-        <div className="flex-1 flex flex-col min-w-0">
-          <header className="sticky top-0 z-30 flex h-16 items-center border-b bg-background px-6">
+        <div className="flex-1 flex flex-col min-w-0 w-full">
+          <header className="sticky top-0 z-30 flex h-16 w-full items-center border-b bg-background px-6">
             <div className="flex items-center gap-4 shrink-0">
               <SidebarTrigger />
               <h1 className="text-xl font-semibold">LeadSynergy</h1>
