@@ -9,7 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Clock, Phone, RefreshCw, AlertTriangle, Users } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
+import { Clock, Phone, RefreshCw, AlertTriangle, Users, Bot } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
 
@@ -29,6 +30,7 @@ interface Lead {
   price: number
   assigned_user_id?: string
   assigned_user_name?: string
+  ai_enabled?: boolean | null
 }
 
 interface FUBStage {
@@ -49,6 +51,7 @@ export default function AdminLeadsPage() {
   const [assignmentFilter, setAssignmentFilter] = useState("all")
   const [uniqueSources, setUniqueSources] = useState<string[]>([])
   const [commissionRate, setCommissionRate] = useState(0.03)
+  const [aiTogglingLeads, setAiTogglingLeads] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     const loadUser = async () => {
@@ -111,8 +114,28 @@ export default function AdminLeadsPage() {
       const stagesData = await stagesRes.json()
 
       if (leadsData.success && Array.isArray(leadsData.data)) {
-        setLeads(leadsData.data)
-        const sources = [...new Set(leadsData.data.map((l: Lead) => l.source).filter(Boolean))]
+        // Fetch AI status for all leads in parallel
+        const leadsWithAI = await Promise.all(
+          leadsData.data.map(async (lead: Lead) => {
+            try {
+              const aiRes = await fetch(
+                `${API_BASE_URL}/api/supabase/lead-ai-settings/${lead.fub_person_id}`,
+                { headers: { 'X-User-ID': user.id } }
+              )
+              const aiData = await aiRes.json()
+              return {
+                ...lead,
+                ai_enabled: aiData.success ? aiData.data.ai_enabled : null
+              }
+            } catch (err) {
+              console.error(`Failed to fetch AI status for lead ${lead.fub_person_id}:`, err)
+              return { ...lead, ai_enabled: null }
+            }
+          })
+        )
+
+        setLeads(leadsWithAI)
+        const sources = [...new Set(leadsWithAI.map((l: Lead) => l.source).filter(Boolean))]
         setUniqueSources(sources as string[])
       } else {
         throw new Error(leadsData.error || 'Failed to load leads')
@@ -126,6 +149,50 @@ export default function AdminLeadsPage() {
       console.error('Error fetching data:', err)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const toggleLeadAI = async (lead: Lead, enable: boolean) => {
+    if (!user) return
+
+    // Add to toggling set
+    setAiTogglingLeads(prev => new Set(prev).add(lead.fub_person_id))
+
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/supabase/lead-ai-settings/${lead.fub_person_id}/toggle`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-ID': user.id
+          },
+          body: JSON.stringify({ enable })
+        }
+      )
+
+      const data = await res.json()
+
+      if (data.success) {
+        // Update local state
+        setLeads(prev => prev.map(l =>
+          l.fub_person_id === lead.fub_person_id
+            ? { ...l, ai_enabled: enable }
+            : l
+        ))
+      } else {
+        throw new Error(data.error || 'Failed to toggle AI')
+      }
+    } catch (err) {
+      console.error('Error toggling AI:', err)
+      setError(err instanceof Error ? err.message : 'Failed to toggle AI')
+    } finally {
+      // Remove from toggling set
+      setAiTogglingLeads(prev => {
+        const next = new Set(prev)
+        next.delete(lead.fub_person_id)
+        return next
+      })
     }
   }
 
@@ -266,6 +333,12 @@ export default function AdminLeadsPage() {
                   <TableHead>Stage</TableHead>
                   <TableHead>Last Update</TableHead>
                   <TableHead>Commission</TableHead>
+                  <TableHead className="text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <Bot className="w-4 h-4" />
+                      AI Agent
+                    </div>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -315,6 +388,24 @@ export default function AdminLeadsPage() {
                     </TableCell>
                     <TableCell className="text-sm">
                       {lead.price > 0 ? `$${(lead.price * commissionRate).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '-'}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <Switch
+                          checked={lead.ai_enabled === true}
+                          onCheckedChange={(checked) => toggleLeadAI(lead, checked)}
+                          disabled={aiTogglingLeads.has(lead.fub_person_id)}
+                        />
+                        {lead.ai_enabled === true && (
+                          <Badge variant="default" className="text-xs">ON</Badge>
+                        )}
+                        {lead.ai_enabled === false && (
+                          <Badge variant="secondary" className="text-xs">OFF</Badge>
+                        )}
+                        {lead.ai_enabled === null && (
+                          <Badge variant="outline" className="text-xs">Default</Badge>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
