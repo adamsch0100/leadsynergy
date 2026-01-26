@@ -180,6 +180,35 @@ class PlaywrightSMSService:
             logger.error(f"Failed to read message from person {person_id}: {e}")
             return {"success": False, "error": str(e)}
 
+    async def read_call_summaries(
+        self,
+        agent_id: str,
+        person_id: int,
+        credentials: dict,
+        limit: int = 5
+    ) -> dict:
+        """Read call summaries from a lead via FUB web interface.
+
+        FUB auto-generates AI summaries for calls that appear in the timeline.
+        The API doesn't expose these, so we scrape them from the UI.
+
+        Args:
+            agent_id: The agent's unique identifier (for session management)
+            person_id: The FUB person ID to read call summaries from
+            credentials: Dict with 'type' (email/google/microsoft), 'email', 'password'
+            limit: Maximum number of call summaries to retrieve (default 5)
+
+        Returns:
+            Dict with 'success', 'summaries' (list of summary dicts) or 'error'
+        """
+        try:
+            session = await self.get_or_create_session(agent_id, credentials)
+            result = await session.read_call_summaries(person_id, limit)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to read call summaries from person {person_id}: {e}")
+            return {"success": False, "error": str(e), "summaries": []}
+
     async def read_recent_messages(
         self,
         agent_id: str,
@@ -360,6 +389,76 @@ async def read_latest_message_via_browser(
     """
     service = await PlaywrightSMSServiceSingleton.get_instance()
     return await service.read_latest_message(agent_id, person_id, credentials)
+
+
+async def read_call_summaries_via_browser(
+    agent_id: str,
+    person_id: int,
+    credentials: dict,
+    limit: int = 5
+) -> dict:
+    """Convenience function to read call summaries via browser.
+
+    FUB auto-generates AI summaries for calls. These aren't available
+    via API, so we scrape them from the UI.
+
+    Args:
+        agent_id: Agent identifier for session management
+        person_id: FUB person ID
+        credentials: Dict with 'type', 'email', 'password'
+        limit: Maximum number of call summaries (default 5)
+
+    Returns:
+        Dict with 'success' and either 'summaries' or 'error'
+    """
+    service = await PlaywrightSMSServiceSingleton.get_instance()
+    return await service.read_call_summaries(agent_id, person_id, credentials, limit)
+
+
+async def read_call_summaries_with_auto_credentials(
+    person_id: int,
+    user_id: str = None,
+    organization_id: str = None,
+    supabase_client=None,
+    limit: int = 5
+) -> dict:
+    """
+    Read call summaries via browser with automatic credential lookup.
+
+    FUB auto-generates AI summaries for calls. These aren't available
+    via API, so we scrape them from the UI.
+
+    Args:
+        person_id: FUB person ID to read call summaries from
+        user_id: Optional user ID for credential lookup
+        organization_id: Optional org ID for credential lookup
+        supabase_client: Optional Supabase client for DB lookup
+        limit: Maximum number of call summaries (default 5)
+
+    Returns:
+        Dict with 'success' and either 'summaries' or 'error'
+    """
+    from app.ai_agent.settings_service import get_fub_browser_credentials
+
+    # Get credentials from settings or environment
+    credentials = await get_fub_browser_credentials(
+        supabase_client=supabase_client,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+
+    if not credentials:
+        return {
+            "success": False,
+            "error": "No FUB browser credentials configured. Set FUB_LOGIN_EMAIL and FUB_LOGIN_PASSWORD in environment or database settings.",
+            "summaries": []
+        }
+
+    # Get agent_id from credentials or generate one
+    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+
+    service = await PlaywrightSMSServiceSingleton.get_instance()
+    return await service.read_call_summaries(agent_id, person_id, credentials, limit)
 
 
 async def read_message_with_auto_credentials(

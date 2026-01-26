@@ -731,6 +731,252 @@ class FUBBrowserSession:
             "is_incoming": True,
         }
 
+    async def read_call_summaries(self, person_id: int, limit: int = 5) -> dict:
+        """
+        Read call summaries from a lead's profile timeline.
+
+        FUB auto-generates AI summaries for calls. These appear in the timeline
+        with a "Summary" tab showing bullet points of what was discussed.
+
+        Args:
+            person_id: The FUB person ID
+            limit: Maximum number of call summaries to retrieve (default 5)
+
+        Returns:
+            Dict with 'success', 'summaries' (list of summary dicts with
+            caller, recipient, duration, summary_text, timestamp)
+        """
+        logger.info(f"Reading call summaries for person {person_id} (limit={limit})")
+
+        if not self._logged_in:
+            raise Exception("Not logged in. Call login() first.")
+
+        # Navigate to lead profile
+        person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
+        logger.info(f"Navigating to person page: {person_url}")
+        await self.page.goto(person_url, wait_until="domcontentloaded")
+        await self._human_delay(1.5, 2.5)
+
+        # FUB call structure (from screenshot Jan 2026):
+        # - Call entries have phone icon (green circle with phone)
+        # - Header shows "Adam Schwartz > Jesus Esparza Reyes (1 min 8 sec)"
+        # - "Summary" tab shows AI-generated bullet points
+        # - "Transcript" tab shows full transcript
+
+        # Extract call summaries using JavaScript
+        js_script = """
+        (limit) => {
+            const summaries = [];
+
+            // Find all timeline items - calls have phone icons
+            // Look for items with call-related icons or classes
+            const timelineItems = document.querySelectorAll('[class*="TimelineItem"], [class*="ContainerBase"]');
+
+            for (const item of timelineItems) {
+                if (summaries.length >= limit) break;
+
+                // Check if this is a call entry by looking for phone icon or call indicator
+                const phoneIcon = item.querySelector('[class*="phone"], [class*="call"], .BaseIcon-phone, svg[class*="phone"]');
+                const hasCallDuration = item.textContent?.match(/\\(\\d+\\s*(min|sec|hr)/i);
+
+                // Also check for the green call icon background
+                const greenCircle = item.querySelector('[style*="background"][style*="green"], [class*="call-icon"]');
+
+                if (!phoneIcon && !hasCallDuration && !greenCircle) continue;
+
+                // Get caller/recipient from header (format: "Name > Name (duration)")
+                let caller = null;
+                let recipient = null;
+                let duration = null;
+
+                // Find the header text - usually in first link or span
+                const headerLinks = item.querySelectorAll('a, [class*="tooltip"]');
+                if (headerLinks.length >= 2) {
+                    caller = headerLinks[0].textContent?.trim();
+                    recipient = headerLinks[1].textContent?.trim();
+                }
+
+                // Extract duration from text like "(1 min 8 sec)"
+                const durationMatch = item.textContent?.match(/\\((\\d+\\s*(?:min|sec|hr)[^)]*?)\\)/i);
+                if (durationMatch) {
+                    duration = durationMatch[1];
+                }
+
+                // Look for Summary tab content
+                // The summary is in a section with "Summary" tab active
+                let summaryText = null;
+
+                // Find summary section - it has bullet points (li elements)
+                const summarySection = item.querySelector('[class*="summary"], [class*="Summary"]');
+                if (summarySection) {
+                    const bullets = summarySection.querySelectorAll('li');
+                    if (bullets.length > 0) {
+                        summaryText = Array.from(bullets).map(b => b.textContent?.trim()).filter(t => t).join(' | ');
+                    }
+                }
+
+                // Fallback: look for bullet points (li) directly in the item
+                if (!summaryText) {
+                    const bullets = item.querySelectorAll('li');
+                    if (bullets.length > 0) {
+                        // Filter out non-summary bullets
+                        const summaryBullets = Array.from(bullets)
+                            .map(b => b.textContent?.trim())
+                            .filter(t => t && !t.includes('Suggested Tasks') && t.length > 10);
+                        if (summaryBullets.length > 0) {
+                            summaryText = summaryBullets.join(' | ');
+                        }
+                    }
+                }
+
+                // Get timestamp
+                let timestamp = null;
+                const timeEl = item.querySelector('time, [class*="time"], [class*="date"]');
+                if (timeEl) {
+                    timestamp = timeEl.getAttribute('datetime') || timeEl.textContent?.trim();
+                }
+
+                if (summaryText || duration) {
+                    summaries.push({
+                        caller: caller,
+                        recipient: recipient,
+                        duration: duration,
+                        summary: summaryText,
+                        timestamp: timestamp
+                    });
+                }
+            }
+
+            return summaries;
+        }
+        """
+
+        try:
+            summaries = await self.page.evaluate(js_script, limit)
+            logger.info(f"Found {len(summaries)} call summaries")
+
+            # If no summaries found, try alternate approach - click on calls to expand
+            if not summaries:
+                summaries = await self._extract_call_summaries_expanded(limit)
+
+            if summaries:
+                return {
+                    "success": True,
+                    "summaries": summaries,
+                    "person_id": person_id,
+                    "count": len(summaries)
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "No call summaries found",
+                    "person_id": person_id,
+                    "summaries": []
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to extract call summaries: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "person_id": person_id,
+                "summaries": []
+            }
+
+    async def _extract_call_summaries_expanded(self, limit: int = 5) -> list:
+        """
+        Alternate approach: Find call entries and click to expand them.
+        Some call summaries may only be visible after expanding the entry.
+        """
+        summaries = []
+
+        try:
+            # Find call entries by looking for elements with duration pattern
+            # FUB shows calls like "Adam > Jesus (1 min 8 sec)"
+            js_find_calls = """
+            () => {
+                const calls = [];
+                // Find all timeline items
+                const items = document.querySelectorAll('[class*="TimelineItem"], [class*="ContainerBase"]');
+                for (const item of items) {
+                    // Check for call duration pattern
+                    if (item.textContent?.match(/\\(\\d+\\s*(min|sec|hr)/i)) {
+                        // Return a unique identifier for this call
+                        const rect = item.getBoundingClientRect();
+                        calls.push({
+                            top: rect.top,
+                            text: item.textContent?.substring(0, 100)
+                        });
+                    }
+                }
+                return calls;
+            }
+            """
+
+            calls = await self.page.evaluate(js_find_calls)
+            logger.info(f"Found {len(calls)} potential call entries to expand")
+
+            # For each call, try to expand and get summary
+            for i, call in enumerate(calls[:limit]):
+                try:
+                    # Click on the call entry area to expand it
+                    # Use the y-position to click
+                    await self.page.mouse.click(400, call['top'] + 20)
+                    await self._human_delay(0.5, 1)
+
+                    # Now try to find the expanded summary
+                    summary_js = """
+                    () => {
+                        // Look for expanded summary section
+                        const summaryTab = document.querySelector('[class*="Summary"]:not([class*="tab"]), [class*="summary-content"]');
+                        if (summaryTab) {
+                            const bullets = summaryTab.querySelectorAll('li');
+                            if (bullets.length > 0) {
+                                return Array.from(bullets).map(b => b.textContent?.trim()).filter(t => t).join(' | ');
+                            }
+                            return summaryTab.textContent?.trim();
+                        }
+
+                        // Look for any newly visible bullet points
+                        const allBullets = document.querySelectorAll('li');
+                        const visibleBullets = Array.from(allBullets)
+                            .filter(b => {
+                                const rect = b.getBoundingClientRect();
+                                return rect.height > 0 && rect.width > 0;
+                            })
+                            .map(b => b.textContent?.trim())
+                            .filter(t => t && t.length > 10 && !t.includes('Suggested'));
+
+                        return visibleBullets.length > 0 ? visibleBullets.join(' | ') : null;
+                    }
+                    """
+
+                    summary_text = await self.page.evaluate(summary_js)
+
+                    if summary_text:
+                        # Extract duration from call text
+                        import re
+                        duration = None
+                        call_text = call.get('text', '')
+                        if call_text:
+                            duration_match = re.search(r'\((\d+\s*(?:min|sec|hr)[^)]*?)\)', call_text, re.IGNORECASE)
+                            if duration_match:
+                                duration = duration_match.group(1)
+                        summaries.append({
+                            "summary": summary_text,
+                            "duration": duration,
+                            "raw_text": call_text[:100] if call_text else ''
+                        })
+
+                except Exception as e:
+                    logger.debug(f"Failed to expand call {i}: {e}")
+                    continue
+
+        except Exception as e:
+            logger.warning(f"Alternate call summary extraction failed: {e}")
+
+        return summaries
+
     async def read_recent_messages(self, person_id: int, limit: int = 15) -> dict:
         """
         Read recent message history from a lead's profile.
@@ -806,20 +1052,23 @@ class FUBBrowserSession:
         logger.info(f"Lead name from page: {lead_name}")
 
         # Extract all messages using JavaScript
-        js_script = """
+        # Distinguishes between actual SMS texts, action plan notes, and other entries
+        js_script = r"""
         (args) => {
             const { leadName, limit } = args;
 
-            // Find all BodyContainer elements directly - these contain the actual message text
-            // Each message has exactly one BodyContainer
-            const bodyContainers = document.querySelectorAll('[class*="BodyContainer"]');
+            // Find all timeline entries (not just BodyContainers)
+            const timelineItems = document.querySelectorAll('[class*="TimelineItem"], [class*="ContainerBase"]');
             let messages = [];
             let seenTexts = new Set();  // Track seen messages to avoid duplicates
 
-            for (const bodyContainer of bodyContainers) {
+            for (const container of timelineItems) {
                 if (messages.length >= limit) break;
 
-                // Get the message text from the first div child
+                // Get the message body
+                const bodyContainer = container.querySelector('[class*="BodyContainer"]');
+                if (!bodyContainer) continue;
+
                 const msgDiv = bodyContainer.querySelector('div');
                 if (!msgDiv) continue;
 
@@ -833,45 +1082,73 @@ class FUBBrowserSession:
                 if (seenTexts.has(msgText)) continue;
                 seenTexts.add(msgText);
 
-                // Walk up to find the parent container that has the header info
-                let container = bodyContainer.parentElement;
-                while (container && !container.className?.includes('ContainerBase') && !container.className?.includes('TimelineItem')) {
-                    container = container.parentElement;
-                    if (!container || container === document.body) break;
+                // Determine the entry type by checking FUB-specific icon classes
+                let entryType = 'text';  // Default to text
+
+                // FUB Timeline Entry Types (Jan 2026):
+                // - Texts: Blue speech bubble icon (BaseIcon-bubble class)
+                // - Calls: Green phone icon (BaseIcon-phone class) with duration
+                // - Action Plans: Orange icon with "action plan" text
+                // - Emails: Blue info icon
+
+                // Check for FUB-specific icon classes - most reliable method
+                const bubbleIcon = container.querySelector('.BaseIcon-bubble');
+                const phoneIcon = container.querySelector('.BaseIcon-phone');
+
+                // Check the immediate parent/sibling area for duration (not deep in body)
+                // Look at the first ~200 chars of container text (header area)
+                const containerText = container.textContent || '';
+                const headerArea = containerText.substring(0, Math.min(200, containerText.indexOf(msgText) || 200)).toLowerCase();
+
+                const hasCallDuration = /\(\d+\s*(min|sec|hr)/i.test(headerArea);
+                const isActionPlan = headerArea.includes('action plan');
+                const isEmail = headerArea.includes('via action plan') && headerArea.includes('email');
+
+                // Priority classification based on icons and text
+                if (phoneIcon || hasCallDuration) {
+                    entryType = 'call';
+                } else if (isEmail) {
+                    entryType = 'email';
+                } else if (isActionPlan) {
+                    entryType = 'action_plan_note';
+                } else if (bubbleIcon) {
+                    entryType = 'text';
+                } else {
+                    // Default: no special indicators = assume text
+                    entryType = 'text';
                 }
 
                 // Determine if incoming by checking tooltips
-                // First tooltip = sender name, second tooltip = recipient name
-                // If first tooltip matches lead name, message is FROM the lead (incoming)
                 let isIncoming = false;
                 let senderName = null;
 
-                if (container) {
-                    const tooltips = container.querySelectorAll('[class*="tooltip"]');
-                    if (tooltips.length >= 1 && leadName) {
-                        senderName = tooltips[0].textContent?.trim();
-                        const leadFirstName = leadName.split(' ')[0].toLowerCase();
-                        // If first tooltip (sender) matches lead's name, it's incoming
-                        if (senderName && senderName.toLowerCase().includes(leadFirstName)) {
-                            isIncoming = true;
-                        }
+                const tooltips = container.querySelectorAll('[class*="tooltip"]');
+                if (tooltips.length >= 1 && leadName) {
+                    senderName = tooltips[0].textContent?.trim();
+                    const leadFirstName = leadName.split(' ')[0].toLowerCase();
+                    if (senderName && senderName.toLowerCase().includes(leadFirstName)) {
+                        isIncoming = true;
                     }
                 }
 
                 // Try to get timestamp from the container
                 let timestamp = null;
-                if (container) {
-                    const timeEl = container.querySelector('time, [class*="time"], [class*="date"]');
-                    if (timeEl) {
-                        timestamp = timeEl.getAttribute('datetime') || timeEl.textContent?.trim();
-                    }
+                const timeEl = container.querySelector('time, [class*="time"], [class*="date"]');
+                if (timeEl) {
+                    timestamp = timeEl.getAttribute('datetime') || timeEl.textContent?.trim();
                 }
 
                 messages.push({
                     text: msgText,
                     is_incoming: isIncoming,
                     timestamp: timestamp,
-                    sender: senderName
+                    sender: senderName,
+                    entry_type: entryType,
+                    debug_has_duration: hasCallDuration,
+                    debug_is_action_plan: isActionPlan,
+                    debug_has_phone_icon: !!phoneIcon,
+                    debug_has_bubble_icon: !!bubbleIcon,
+                    debug_header_area: headerArea.substring(0, 50)
                 });
             }
 

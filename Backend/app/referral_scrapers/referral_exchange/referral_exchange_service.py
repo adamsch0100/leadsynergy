@@ -619,16 +619,23 @@ class ReferralExchangeService(BaseReferralService):
 
         return False, ""
 
-    def update_multiple_leads(self, leads_data: List[Tuple[Lead, Any]]) -> Dict[str, Any]:
+    def update_multiple_leads(
+        self,
+        leads_data: List[Tuple[Lead, Any]],
+        comments: Dict[str, str] = None
+    ) -> Dict[str, Any]:
         """
         Update multiple leads in a single browser session (login once)
 
         Args:
             leads_data: List of tuples containing (lead, target_status)
+            comments: Optional dict mapping lead.id -> comment string (from @update notes)
 
         Returns:
             Dict with sync results
         """
+        if comments is None:
+            comments = {}
         import logging
         logger = logging.getLogger(__name__)
 
@@ -695,7 +702,12 @@ class ReferralExchangeService(BaseReferralService):
 
                     # Find and update customer
                     if self.find_and_click_customer_by_name(lead_name, self.status):
-                        if self.update_customers():
+                        # Get comment from @update notes if available
+                        lead_comment = comments.get(lead.id)
+                        if lead_comment:
+                            print(f"[UPDATE] Using @update comment for {lead_name}: {lead_comment[:50]}...")
+
+                        if self.update_customers(comment=lead_comment):
                             print(f"[SUCCESS] Updated {lead_name}")
                             results["successful"] += 1
 

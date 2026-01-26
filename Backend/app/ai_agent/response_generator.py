@@ -16,6 +16,7 @@ The generator is designed to produce natural, helpful responses that:
 - Know when to hand off to humans
 """
 
+import asyncio
 import logging
 import json
 import os
@@ -205,6 +206,7 @@ class LeadProfile:
     tags: List[str] = field(default_factory=list)
     important_notes: List[str] = field(default_factory=list)
     agent_notes_summary: str = ""
+    call_summaries: List[str] = field(default_factory=list)  # Summaries from phone calls
 
     # Objection history
     previous_objections: List[str] = field(default_factory=list)
@@ -315,7 +317,7 @@ class LeadProfile:
                 amt = f" for ${self.pre_approval_amount:,}" if self.pre_approval_amount else ""
                 search_parts.append(f"Pre-approved: Yes{amt}")
             else:
-                search_parts.append("Pre-approved: No (opportunity to help!)")
+                search_parts.append("Pre-approved: No (already asked - do not ask again)")
         if self.preferred_cities or self.preferred_neighborhoods:
             locations = self.preferred_neighborhoods or self.preferred_cities
             search_parts.append(f"Preferred areas: {', '.join(locations[:3])}")
@@ -354,12 +356,36 @@ class LeadProfile:
         if timeline_parts:
             sections.append("TIMELINE & MOTIVATION:\n" + "\n".join(f"  - {p}" for p in timeline_parts))
 
+        # === LEAD FRESHNESS (critical for tone) ===
+        if self.days_since_created is not None and self.days_since_created <= 1:
+            sections.append("""*** BRAND NEW LEAD (just came in today!) ***
+- This lead JUST signed up - they're expecting quick contact
+- Be warm and reference how you got their info (the source)
+- If someone else on your team already called/emailed, mention you're following up""")
+        elif self.days_since_created is not None and self.days_since_created <= 7:
+            sections.append(f"RECENT LEAD: Came in {self.days_since_created} days ago - still fresh")
+
+        # === CONTACT HISTORY (what's already happened) ===
+        contact_parts = []
+        if self.total_calls and self.total_calls > 0:
+            contact_parts.append(f"Calls made: {self.total_calls} (someone already tried calling!)")
+        if self.total_emails and self.total_emails > 0:
+            contact_parts.append(f"Emails sent: {self.total_emails}")
+        if self.total_messages_sent and self.total_messages_sent > 0:
+            contact_parts.append(f"Texts sent: {self.total_messages_sent}")
+        if self.total_messages_received and self.total_messages_received > 0:
+            contact_parts.append(f"Texts received: {self.total_messages_received}")
+        if not contact_parts and self.is_first_contact:
+            contact_parts.append("NO CONTACT YET - this is the first outreach!")
+        if contact_parts:
+            sections.append("CONTACT HISTORY:\n" + "\n".join(f"  - {p}" for p in contact_parts))
+
+        # === CALL SUMMARIES (what was discussed on calls) ===
+        if self.call_summaries:
+            sections.append("CALL SUMMARIES (what was discussed):\n" + "\n".join(f"  - {s}" for s in self.call_summaries[:3]))
+
         # === ENGAGEMENT HISTORY SECTION ===
         engagement_parts = []
-        if self.total_messages_sent or self.total_messages_received:
-            engagement_parts.append(
-                f"Messages: {self.total_messages_received} received, {self.total_messages_sent} sent"
-            )
         if self.last_contact_date:
             engagement_parts.append(f"Last contact: {self.last_contact_date} via {self.last_contact_type or 'unknown'}")
         if self.engagement_level:
@@ -370,10 +396,10 @@ class LeadProfile:
             engagement_parts.append("Has made offer: Yes (serious buyer!)")
         if self.scheduled_appointments:
             engagement_parts.append(f"Upcoming appointments: {', '.join(self.scheduled_appointments[:2])}")
-        if self.days_since_created:
+        if self.days_since_created and self.days_since_created > 7:
             engagement_parts.append(f"Lead age: {self.days_since_created} days")
         if engagement_parts:
-            sections.append("ENGAGEMENT HISTORY:\n" + "\n".join(f"  - {p}" for p in engagement_parts))
+            sections.append("ENGAGEMENT:\n" + "\n".join(f"  - {p}" for p in engagement_parts))
 
         # === PROPERTY INQUIRY DETAILS (from referral source) ===
         if self.property_inquiry_source or self.property_inquiry_description:
@@ -580,6 +606,7 @@ class LeadProfile:
             has_pets=additional.get("has_pets"),
             important_notes=additional.get("important_notes", []),
             agent_notes_summary=additional.get("agent_notes_summary", ""),
+            call_summaries=additional.get("call_summaries", []),
             # Property inquiry details (from FUB events)
             property_inquiry_source=additional.get("property_inquiry_source", ""),
             property_inquiry_description=additional.get("property_inquiry_description", ""),
@@ -628,6 +655,134 @@ class LeadProfile:
 
         return result
 
+    @classmethod
+    def process_fub_context(cls, fub_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process raw FUB context into structured additional_data for LeadProfile.
+
+        Takes the output of get_complete_lead_context() and extracts:
+        - Message history (sent/received)
+        - Notes summary
+        - Property inquiry details from events
+        - Communication status
+
+        Args:
+            fub_context: Raw context from FUBApiClient.get_complete_lead_context()
+
+        Returns:
+            Structured additional_data dict for from_fub_data()
+        """
+        additional = {}
+
+        # Process text messages
+        text_messages = fub_context.get("text_messages", [])
+        sent_messages = []
+        received_messages = []
+
+        for msg in text_messages:
+            msg_data = {
+                "content": msg.get("message", ""),
+                "timestamp": msg.get("created", ""),
+                "direction": "outbound" if msg.get("isOutgoing") else "inbound",
+            }
+            if msg.get("isOutgoing"):
+                sent_messages.append(msg_data)
+            else:
+                received_messages.append(msg_data)
+
+        additional["actual_messages_sent"] = sent_messages
+        additional["actual_messages_received"] = received_messages
+        additional["total_messages_sent"] = len(sent_messages)
+        additional["total_messages_received"] = len(received_messages)
+        additional["has_received_any_messages"] = len(sent_messages) > 0
+        additional["is_first_contact"] = len(sent_messages) == 0
+
+        # Process calls for call notes/summaries/outcomes
+        calls = fub_context.get("calls", [])
+        call_summaries = []
+        additional["total_calls"] = len(calls)
+        for call in calls[:5]:  # Last 5 calls
+            call_note = call.get("note", "")
+            duration = call.get("duration", 0)
+            direction = "outgoing" if not call.get("isIncoming") else "incoming"
+            outcome = call.get("outcome", "")  # Interested, Not Interested, Left Message, No Answer, etc.
+
+            if call_note:
+                outcome_str = f" - {outcome}" if outcome else ""
+                call_summaries.append(f"[{direction} call, {duration}s{outcome_str}]: {call_note[:200]}")
+            elif outcome:
+                call_summaries.append(f"[{direction} call, {duration}s]: Outcome: {outcome}")
+            elif duration and duration > 30:  # Only mention substantial calls without notes
+                call_summaries.append(f"[{direction} call, {duration}s - no notes recorded]")
+
+        if call_summaries:
+            additional["call_summaries"] = call_summaries
+
+        # Process notes for summary
+        notes = fub_context.get("notes", [])
+        important_notes = []
+        for note in notes[:10]:  # Limit to recent 10
+            content = note.get("body", "")[:200]  # Truncate long notes
+            if content:
+                important_notes.append(content)
+
+        additional["important_notes"] = important_notes
+        if important_notes:
+            additional["agent_notes_summary"] = " | ".join(important_notes[:3])
+
+        # Process events for property inquiry details
+        events = fub_context.get("events", [])
+        for event in events:
+            event_type = event.get("type", "")
+            description = event.get("description", "") or event.get("body", "")
+
+            # Property inquiry events have rich context
+            if event_type in ["PropertyInquiry", "propertyInquiry"] or "inquiry" in event_type.lower():
+                source = event.get("source", "") or event.get("provider", "")
+                if source:
+                    additional["property_inquiry_source"] = source
+                if description:
+                    additional["property_inquiry_description"] = description
+                    # Parse the description for structured data
+                    parsed = cls.parse_property_inquiry(description)
+                    if parsed.get("location"):
+                        additional["property_inquiry_location"] = parsed["location"]
+                    if parsed.get("timeline"):
+                        additional["property_inquiry_timeline"] = parsed["timeline"]
+                        # Convert to standard timeline
+                        timeline_lower = parsed["timeline"].lower()
+                        if "0 - 3" in timeline_lower or "immediate" in timeline_lower:
+                            additional["timeline"] = "short"
+                        elif "3 - 6" in timeline_lower:
+                            additional["timeline"] = "medium"
+                        elif "6" in timeline_lower or "12" in timeline_lower:
+                            additional["timeline"] = "long"
+                    if parsed.get("financing"):
+                        additional["property_inquiry_financing"] = parsed["financing"]
+                        financing_lower = parsed["financing"].lower()
+                        # Check "in process" first since it also contains "pre-approved"
+                        if "process" in financing_lower or "getting" in financing_lower or "working on" in financing_lower:
+                            additional["is_pre_approved"] = False  # In process = not yet approved
+                        elif "pre-approved" in financing_lower or "preapproved" in financing_lower or "already" in financing_lower:
+                            additional["is_pre_approved"] = True
+                        elif "cash" in financing_lower:
+                            additional["is_pre_approved"] = True  # Cash buyer = no approval needed
+                    if parsed.get("budget"):
+                        additional["property_inquiry_budget"] = parsed["budget"]
+                break  # Use first property inquiry found
+
+        # Get last contact info
+        if sent_messages:
+            last_sent = sorted(sent_messages, key=lambda x: x.get("timestamp", ""), reverse=True)[0]
+            additional["last_contact_date"] = last_sent.get("timestamp", "")[:10]
+            additional["last_contact_type"] = "sms"
+        elif received_messages:
+            last_received = sorted(received_messages, key=lambda x: x.get("timestamp", ""), reverse=True)[0]
+            additional["last_contact_date"] = last_received.get("timestamp", "")[:10]
+            additional["last_contact_type"] = "sms_inbound"
+
+        return additional
+
 
 class AIResponseGenerator:
     """
@@ -648,10 +803,18 @@ class AIResponseGenerator:
     DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
     DEFAULT_ANTHROPIC_FALLBACK = "claude-3-5-haiku-20241022"
 
-    # Model configuration - OpenRouter (defaults for free tier)
+    # Model configuration - OpenRouter
+    # Primary: Free tier (best for Marketing per OpenRouter stats)
+    # Fallback: Cheap paid tier for reliability when rate limited
     DEFAULT_OPENROUTER_MODEL = "xiaomi/mimo-v2-flash:free"
-    DEFAULT_OPENROUTER_FALLBACK = "deepseek/deepseek-r1-0528:free"
+    DEFAULT_OPENROUTER_FALLBACK = "google/gemini-2.5-flash-lite"
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+    # Rate limit avoidance settings
+    # Free tier models have strict limits - for texting we can be very conservative
+    # Real conversations have minutes/hours between messages, so no rush
+    MIN_REQUEST_INTERVAL = 10.0  # Minimum seconds between requests (very conservative for free tier)
+    REQUEST_JITTER = 5.0  # Random jitter (0-5s) to spread out requests
 
     # Available free models for user selection (with tool calling support)
     AVAILABLE_FREE_MODELS = [
@@ -681,8 +844,8 @@ class AIResponseGenerator:
         "referralexchange": {
             "approach": "warm_referral",
             "urgency": "high",
-            "context": "They came through a referral network - they're actively looking and expect quick response. Move fast to appointment.",
-            "opener_hint": "Reference the referral source, express appreciation, get to appointment quickly"
+            "context": "They came through ReferralExchange - a referral network. They're actively looking and expect quick response.",
+            "opener_hint": "If someone on your team already called/emailed, SAY SO: 'Following up on Adam's call' or 'I work with Adam who reached out'. Don't pretend you're the first contact if you're not."
         },
         "homelight": {
             "approach": "warm_referral",
@@ -895,32 +1058,40 @@ class AIResponseGenerator:
 HOW TO SOUND HUMAN (CRITICAL):
 - Write like you're texting a friend, not writing a business email
 - Use contractions: "I'd" not "I would", "that's" not "that is"
-- Keep it SHORT - real texts are brief
-- Vary your sentence length - mix short and medium
-- Small imperfections are OK - don't be too perfect
-- Reference context naturally, don't repeat everything back
+- Keep it SHORT - real texts are brief (1-2 sentences)
+- Vary how you start messages - don't always say "Hey [name]!"
+- Small imperfections are OK - don't be too polished
 
-NEVER SAY (these sound like AI):
-- "I'd be happy to help!" or "I'm here to assist"
+BANNED PHRASES (never use these - they sound fake/robotic):
+- "Just checking in" or "checking in on you" (overused)
+- "Touching base" (corporate speak)
+- "Hope you're doing well" / "Hope you're having a great day" (generic filler)
+- "Hope all is well" (same thing)
+- "I wanted to reach out" or "reaching out" (robotic)
+- "I'd be happy to help!" or "I'm here to assist" (customer service bot)
 - "Absolutely!" or "Certainly!" (too eager)
-- "Thank you for reaching out" or "Thanks for your message"
+- "Thank you for reaching out" (formal)
 - "I understand" repeatedly
-- Formal phrases like "Please don't hesitate" or "At your earliest convenience"
-- Starting with "Great question!" or "That's a great point!"
-- Excessive exclamation points!!!
-- Listing multiple options with bullets in SMS
+- "Please don't hesitate" or "At your earliest convenience" (formal)
+- "Great question!" or "That's a great point!" (patronizing)
+- "Curious what sparked your interest" (robotic af)
+- "What's driving your search?" (sounds like a survey)
+- Too many exclamation points!!!
 
-SOUND LIKE THIS:
+SOUND LIKE THIS (real human texts):
 - "Hey! Saw you're looking to sell - when are you thinking of moving?"
-- "Nice, that area is hot right now. Want me to swing by and take a look?"
+- "Nice, that area is hot right now. Want me to swing by?"
 - "Got it. What's your timeline looking like?"
+- "What's making you want to move?"
+- "Still thinking about buying or did things change?"
 
-NOT LIKE THIS:
-- "Hello! I'd be happy to assist you with selling your home. I understand this is an important decision."
-- "Thank you for reaching out! I'm here to help with all your real estate needs."
-- "Absolutely! I would be delighted to schedule a time to view your property."
+NOT LIKE THIS (robotic/salesy):
+- "Hello! I'd be happy to assist you with selling your home."
+- "Just checking in to see if you had any questions!"
+- "Hope you're doing well! I wanted to reach out about..."
+- "Thank you for reaching out! I'm here to help."
 
-VIBE: You're a real person with a life, not a customer service bot. Helpful but not desperate.""",
+VIBE: You're a real person with a life, not a customer service bot. Helpful but chill.""",
 
         "professional": """You're a knowledgeable real estate pro - confident, direct, and efficient.
 
@@ -1083,6 +1254,7 @@ FOR BUYERS: "I've got a few homes that fit what you're looking for - want to che
         self._openrouter_client = None
         self._total_tokens_used = 0
         self._request_count = 0
+        self._last_request_time = 0.0  # For rate limit avoidance
 
         if self.use_openrouter:
             logger.info(f"Using OpenRouter API with model: {self.primary_model}")
@@ -1250,20 +1422,33 @@ SELLER APPOINTMENT STRATEGY:
 - Use assumptive close: "I'd love to come see your home and give you an idea of what it could sell for"
 """
         elif lead_type == "buyer":
-            return """
+            # Build dynamic strategy based on what we already know
+            strategy_items = []
+            strategy_items.append("- If they inquired about a specific property, reference it - offer to show it")
+
+            # Only ask about things we DON'T know
+            if lead_profile.is_pre_approved is None:
+                strategy_items.append("- Ask about pre-approval status (this qualifies them)")
+            else:
+                strategy_items.append("- Pre-approval is ALREADY KNOWN - do NOT ask about it")
+
+            if not lead_profile.timeline:
+                strategy_items.append("- Ask about timeline (when do they need to move?)")
+            else:
+                strategy_items.append("- Timeline is ALREADY KNOWN - do NOT ask about it")
+
+            strategy_items.append("- Once qualified, propose showings with specific time options")
+            strategy_items.append("- Use assumptive close: \"I've got some great homes to show you - are you free Saturday or Sunday?\"")
+
+            return f"""
 YOUR PRIMARY GOAL: Book a SHOWING APPOINTMENT
 
 OBJECTIVE: Schedule property showings or a buyer consultation
-- Understand their timeline, budget, pre-approval status, and preferred areas
 - Offer to show them homes that match their criteria
 - Ideal outcome: "Let's schedule a time to tour some homes this weekend"
 
 BUYER APPOINTMENT STRATEGY:
-- If they inquired about a specific property, reference it - offer to show it
-- Ask about pre-approval status (this qualifies them)
-- Ask about timeline (when do they need to move?)
-- Once qualified, propose showings with specific time options
-- Use assumptive close: "I've got some great homes to show you - are you free Saturday or Sunday?"
+{chr(10).join(strategy_items)}
 """
         else:
             return self._build_goal_section_unknown()
@@ -1361,7 +1546,7 @@ DISCOVERY STRATEGY:
                     amt = f" for ${profile.pre_approval_amount:,}" if profile.pre_approval_amount else ""
                     known.append(f"Pre-approved: Yes{amt}")
                 else:
-                    known.append("Pre-approved: No (opportunity to help!)")
+                    known.append("Pre-approved: No - DO NOT ask about this again, we already know")
             elif lead_type == "buyer":
                 unknown.append("pre-approval status")
 
@@ -1436,6 +1621,19 @@ DISCOVERY STRATEGY:
                         "Thanks for reaching out! What can I help you with today?",
                         warnings=["Empty input message received"]
                     )
+
+            # Handle follow-up sequence triggers (when lead hasn't responded)
+            if incoming_message.startswith("[FOLLOWUP_SEQUENCE:"):
+                # Parse the message type from trigger: [FOLLOWUP_SEQUENCE:value_with_cta]
+                try:
+                    followup_type = incoming_message.split(":")[1].rstrip("]").strip()
+                except (IndexError, AttributeError):
+                    followup_type = "gentle_followup"
+
+                # Build follow-up specific instructions based on type
+                followup_instructions = self._get_followup_instructions(followup_type, lead_profile)
+                incoming_message = followup_instructions
+                warnings.append(f"Generating follow-up message: {followup_type}")
 
             # Build the prompt with rich context
             system_prompt = self._build_system_prompt(
@@ -1848,12 +2046,19 @@ SOURCE STRATEGY ({lead_profile.source}):
 
 {goal_section}
 
+CRITICAL RULE - READ THIS FIRST:
+- NEVER ask about something that is already marked as [KNOWN] in the "INFORMATION WE ALREADY HAVE" section below
+- If pre-approval status is [KNOWN], DO NOT ask about pre-approval or financing
+- If location is [KNOWN], DO NOT ask what area they're looking in
+- If timeline is [KNOWN], DO NOT ask when they're looking to move
+- VIOLATION OF THIS RULE IS A FAILURE
+
 APPOINTMENT STRATEGY:
 - Be consultative and helpful, but EVERY conversation should move toward booking an appointment
 - Ask qualifying questions to understand their situation, then transition to scheduling
 - Use assumptive closes: "Let's find a time that works for you" not "Would you like to schedule?"
 - If they hesitate, address the concern, then circle back to scheduling
-- NEVER ask for information you already have (see KNOWN INFO section)
+- Since you already know their pre-approval status and areas, move directly to scheduling
 
 WHAT SUCCESS LOOKS LIKE:
 - Seller: "Great! I'll send you a calendar invite for our listing consultation on Tuesday at 2pm"
@@ -2299,6 +2504,27 @@ LEAD INFORMATION:
 
         return messages
 
+    async def _throttle_request(self):
+        """
+        Throttle requests to avoid rate limiting.
+
+        Ensures minimum interval between requests with random jitter
+        to prevent thundering herd problems.
+        """
+        import time
+        import random
+
+        current_time = time.time()
+        elapsed = current_time - self._last_request_time
+        min_interval = self.MIN_REQUEST_INTERVAL + random.uniform(0, self.REQUEST_JITTER)
+
+        if elapsed < min_interval:
+            sleep_time = min_interval - elapsed
+            logger.debug(f"Throttling request, sleeping {sleep_time:.2f}s")
+            await asyncio.sleep(sleep_time)
+
+        self._last_request_time = time.time()
+
     async def _generate_with_openrouter(
         self,
         system_prompt: str,
@@ -2312,6 +2538,9 @@ LEAD INFORMATION:
             Tuple of (response_text, model_used, tokens_used)
         """
         import aiohttp
+
+        # Throttle to avoid rate limits
+        await self._throttle_request()
 
         # Convert messages to OpenAI format
         openai_messages = [{"role": "system", "content": system_prompt}]
@@ -2566,6 +2795,140 @@ LEAD INFORMATION:
             return truncated[:self.MAX_SMS_LENGTH - 3] + "..."
 
         return response
+
+    def _get_followup_instructions(
+        self,
+        followup_type: str,
+        lead_profile: Optional[LeadProfile] = None,
+    ) -> str:
+        """
+        Generate instructions for follow-up messages when lead hasn't responded.
+
+        This tells the AI to generate an OUTBOUND follow-up message, not respond
+        to an incoming message. Each follow-up type has specific goals and tone.
+
+        Args:
+            followup_type: Type of follow-up (value_with_cta, qualify_motivation, etc.)
+            lead_profile: Lead profile for personalization
+
+        Returns:
+            Instruction string for the AI to generate appropriate follow-up
+        """
+        first_name = lead_profile.first_name if lead_profile else "there"
+        area = ""
+        if lead_profile:
+            if lead_profile.preferred_cities:
+                area = lead_profile.preferred_cities[0]
+            elif lead_profile.preferred_neighborhoods:
+                area = lead_profile.preferred_neighborhoods[0]
+
+        # Base context - sound like a REAL PERSON, not a robot or salesperson
+        base_context = f"""[FOLLOW-UP - {first_name} hasn't replied yet. Send another message.]
+
+CRITICAL RULES:
+- Sound like a real human texting a friend, NOT a salesperson or robot
+- Keep it short (1-2 sentences max)
+- Don't be pushy or desperate
+- Use contractions (I'm, you're, what's) - nobody texts formally
+- Don't start every message with "Hey {first_name}!" - mix it up
+- NO corporate buzzwords: "checking in", "touching base", "following up", "reaching out"
+- NO robotic phrases: "curious what sparked", "driving your search", "I wanted to"
+
+"""
+
+        # Type-specific instructions - all focused on sounding HUMAN
+        instructions = {
+            "value_with_cta": f"""{base_context}Send a message offering to chat + suggest a time:
+
+GOOD examples:
+- "Got some time Thursday if you wanna talk about {area or 'the market'}. Work for you?"
+- "Free this week if you want to hop on a quick call - maybe Thursday?"
+- "I can fill you in on what's happening in {area or 'the area'} if you've got 10 min this week"
+
+BAD (don't say):
+- "I have availability" (too formal)
+- "Would Thursday afternoon work for a quick call?" (sounds scripted)
+- "I'd love to chat" (salesy)""",
+
+            "qualify_motivation": f"""{base_context}Ask why they're looking to buy/move - be casual about it:
+
+GOOD examples:
+- "What's making you want to move?"
+- "Job change, growing family, or just ready for something new?"
+- "What's the move for - work thing or just want a change?"
+
+BAD (don't say):
+- "Curious what sparked your interest" (robotic af)
+- "What's driving your home search?" (sounds like a survey)
+- "I'd love to learn more about your situation" (too formal)""",
+
+            "email_market_report": f"""{base_context}Share something useful about the {area or 'local'} market:
+
+GOOD examples:
+- "Saw some interesting stuff in {area or 'the area'} this week - prices are holding but more homes coming on. Want me to send you what I'm seeing?"
+- "Quick heads up - {area or 'the market'} is getting a bit more inventory lately. Good sign if you're still looking."
+
+Keep it conversational, not like a formal report.""",
+
+            "social_proof": f"""{base_context}Mention you helped someone recently (but don't be braggy):
+
+GOOD examples:
+- "Just got a buyer into a place in {area or 'the area'} last week - market's moving! Lmk if you want to chat"
+- "Helped someone close on a great spot nearby - made me think of you. Still looking?"
+
+BAD (don't say):
+- "I've helped many clients" (braggy)
+- "I have extensive experience" (formal/braggy)""",
+
+            "strategic_breakup": f"""{base_context}This is your last message for a while - be real and give them an easy out:
+
+GOOD examples:
+- "Hey - gonna back off for now, but no hard feelings! If things change or you have questions later, I'm around"
+- "I'll give you some space - just let me know if you ever want to pick this back up"
+- "Stepping back for now. If your situation changes, hit me up - if not, no worries at all"
+
+This message often gets the BEST response rate because there's no pressure. Keep it genuine.""",
+
+            "gentle_followup": f"""{base_context}Quick casual check-in:
+
+GOOD examples:
+- "Hey! Still thinking about buying or did things change?"
+- "How's it going? Any questions come up?"
+- "Still on your radar or taking a break from the search?"
+
+BAD (don't say):
+- "Just checking in" (overused)
+- "Touching base" (corporate speak)
+- "Hope you're doing well!" (generic)""",
+
+            "value_add": f"""{base_context}Share something useful - a listing, tip, or market info:
+
+GOOD examples:
+- "Heads up - saw a place in {area or 'your area'} that might work. Want me to send it?"
+- "Saw something hit the market near {area or 'where you were looking'} - want details?"
+- "Quick tip - {area or 'this area'} is seeing more listings pop up. Good time to look if you're still interested"
+
+Don't ask for anything in return - just be helpful.""",
+
+            "channel_switch": f"""{base_context}Try email since texts aren't working:
+
+GOOD examples:
+- "Trying email in case that's easier - still interested in {area or 'buying'}?"
+- "Not sure if texts are getting through - shooting you an email instead"
+
+Keep it super short.""",
+
+            "final_attempt": f"""{base_context}Last message - leave the door open nicely:
+
+GOOD examples:
+- "I'll back off - but hit me up anytime if you want to chat about {area or 'real estate'}"
+- "Gonna give you some space! I'm here if anything changes"
+- "No worries if now's not the time - reach out whenever"
+
+Be warm, not guilt-trippy.""",
+        }
+
+        return instructions.get(followup_type, instructions["gentle_followup"])
 
     def _create_fallback_response(
         self,

@@ -11,6 +11,7 @@ from typing import Optional, Tuple, List, Dict, Any
 from app.database.fub_api_client import FUBApiClient
 from app.models.lead import Lead
 from app.models.lead_source_settings import LeadSourceSettings
+from app.utils.update_note_extractor import UpdateNoteExtractor
 
 
 class FUBDataHelper:
@@ -18,6 +19,7 @@ class FUBDataHelper:
 
     def __init__(self):
         self.fub_client = FUBApiClient()
+        self.update_extractor = UpdateNoteExtractor()
         self._lead_service = None
         self._supabase = None
 
@@ -116,10 +118,15 @@ class FUBDataHelper:
         """
         Determine status and comment for a lead update.
 
-        Priority:
+        Status Priority:
         1. FUB mapped stage (if lead has FUB status that maps to platform stage)
         2. Last known status (stored in metadata from previous sync)
         3. Default status
+
+        Comment Priority:
+        1. @update: message from FUB notes (if found and newer than last sync)
+        2. Recent note summary from FUB
+        3. Configured same_status_note fallback
 
         Args:
             lead: The lead to determine status for
@@ -128,7 +135,7 @@ class FUBDataHelper:
             default_status: Default status to use if no mapping found
 
         Returns:
-            Tuple of (status, comment) where comment may be from FUB notes
+            Tuple of (status, comment) where comment may be from @update notes or FUB notes
         """
         comment = None
         status = None
@@ -165,19 +172,130 @@ class FUBDataHelper:
                 print(f"[FUB Helper] Using default status: {default_status}")
                 status = default_status
 
-            # Try to fetch FUB notes for the comment
-            notes_summary = self.fetch_notes_summary(lead)
-            if notes_summary:
-                comment = notes_summary
-            elif source_settings and hasattr(source_settings, 'same_status_note'):
-                # Use the configured "same status" note as fallback
-                comment = source_settings.same_status_note
+            # Priority 1: Try to get @update message from FUB notes
+            update_message = self.get_update_message_for_platform(lead, platform_name)
+            if update_message:
+                print(f"[FUB Helper] Found @update message for {platform_name}: {update_message[:50]}...")
+                comment = update_message
+            else:
+                # Priority 2: Try to fetch FUB notes summary for the comment
+                notes_summary = self.fetch_notes_summary(lead)
+                if notes_summary:
+                    comment = notes_summary
+                elif source_settings and hasattr(source_settings, 'same_status_note'):
+                    # Priority 3: Use the configured "same status" note as fallback
+                    comment = source_settings.same_status_note
 
             return status, comment
 
         except Exception as e:
             print(f"[FUB Helper] Error determining status: {e}")
             return default_status, None
+
+    def get_update_message_for_platform(
+        self,
+        lead: Lead,
+        platform_name: str
+    ) -> Optional[str]:
+        """
+        Get @update: message from FUB notes for a specific platform.
+
+        Only returns messages from notes created after the last sync to this platform.
+
+        Args:
+            lead: The lead to get update message for
+            platform_name: Platform identifier (e.g., 'referralexchange', 'homelight')
+
+        Returns:
+            The @update message or None if no new update found
+        """
+        try:
+            # Get FUB ID
+            fub_id = getattr(lead, 'fub_id', None)
+            if not fub_id:
+                metadata = getattr(lead, 'metadata', {}) or {}
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except (json.JSONDecodeError, TypeError):
+                        metadata = {}
+                fub_id = metadata.get('fub_id') or metadata.get('fub_person_id')
+
+            if not fub_id:
+                return None
+
+            # Fetch notes from FUB
+            notes = self.fub_client.get_notes_for_person(str(fub_id), limit=20)
+            if not notes:
+                return None
+
+            # Get lead metadata for sync timestamp
+            metadata = getattr(lead, 'metadata', {}) or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except (json.JSONDecodeError, TypeError):
+                    metadata = {}
+
+            # Extract @update message
+            return self.update_extractor.get_update_for_platform(
+                notes,
+                platform_name,
+                metadata
+            )
+
+        except Exception as e:
+            print(f"[FUB Helper] Error getting update message: {e}")
+            return None
+
+    def mark_update_synced(
+        self,
+        lead: Lead,
+        platform_name: str,
+        note_id: str,
+        note_timestamp: str
+    ) -> bool:
+        """
+        Mark an @update note as synced for a platform.
+
+        Args:
+            lead: The lead to update
+            platform_name: Platform identifier
+            note_id: FUB note ID that was synced
+            note_timestamp: ISO timestamp of the note
+
+        Returns:
+            True if marked successfully
+        """
+        try:
+            metadata = getattr(lead, 'metadata', {}) or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except (json.JSONDecodeError, TypeError):
+                    metadata = {}
+
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            # Initialize sync tracking if needed
+            if 'last_update_note_synced' not in metadata:
+                metadata['last_update_note_synced'] = {}
+
+            # Update sync info for this platform
+            metadata['last_update_note_synced'][f'{platform_name.lower()}_note_id'] = note_id
+            metadata['last_update_note_synced'][f'{platform_name.lower()}_timestamp'] = note_timestamp
+
+            # Save metadata
+            lead.metadata = metadata
+            self.lead_service.update(lead)
+
+            print(f"[FUB Helper] Marked @update synced for {platform_name}: note {note_id}")
+            return True
+
+        except Exception as e:
+            print(f"[FUB Helper] Error marking update synced: {e}")
+            return False
 
     def _get_lead_type_from_tags(self, lead: Lead) -> Optional[str]:
         """Extract lead type (buyer/seller) from lead tags"""

@@ -831,12 +831,24 @@ class AgentProntoService(BaseReferralService):
             logger.error(f"Error finding lead in list: {e}")
             return None
 
-    def update_customers(self, status_to_select: Any) -> bool:
-        """Update the current lead's status - implements abstract method"""
-        return self._update_lead_status_on_page(status_to_select)
+    def update_customers(self, status_to_select: Any, custom_comment: str = None) -> bool:
+        """
+        Update the current lead's status - implements abstract method.
 
-    def _update_lead_status_on_page(self, status: Any) -> bool:
-        """Update the status of the currently open lead on Agent Pronto"""
+        Args:
+            status_to_select: The status to set
+            custom_comment: Optional custom comment (from @update notes) to use instead of default
+        """
+        return self._update_lead_status_on_page(status_to_select, custom_comment=custom_comment)
+
+    def _update_lead_status_on_page(self, status: Any, custom_comment: str = None) -> bool:
+        """
+        Update the status of the currently open lead on Agent Pronto.
+
+        Args:
+            status: The status to set
+            custom_comment: Optional custom comment (from @update notes) to use
+        """
         try:
             # Parse status if it's a complex type
             primary_status, sub_status = self._parse_status(status)
@@ -902,9 +914,9 @@ class AgentProntoService(BaseReferralService):
 
             if is_active_status:
                 # Click the appropriate active status button
-                return self._click_active_status_button(active_button_text or primary_status)
+                return self._click_active_status_button(active_button_text or primary_status, custom_comment=custom_comment)
             else:
-                # Handle as lost/inactive status
+                # Handle as lost/inactive status (no comment for lost statuses)
                 return self._select_lost_status(status_key, sub_status)
 
         except Exception as e:
@@ -913,8 +925,14 @@ class AgentProntoService(BaseReferralService):
             traceback.print_exc()
             return False
 
-    def _click_active_status_button(self, status_text: str) -> bool:
-        """Click an active status button (Communicating, Showing, Offer accepted)"""
+    def _click_active_status_button(self, status_text: str, custom_comment: str = None) -> bool:
+        """
+        Click an active status button (Communicating, Showing, Offer accepted).
+
+        Args:
+            status_text: The status button text to click
+            custom_comment: Optional custom comment (from @update notes) to use
+        """
         try:
             logger.info(f"Clicking active status button: {status_text}")
 
@@ -954,14 +972,19 @@ class AgentProntoService(BaseReferralService):
 
             # After clicking status button, a comment form appears
             # Fill in the required comment and submit
-            return self._fill_comment_and_submit()
+            return self._fill_comment_and_submit(custom_comment=custom_comment)
 
         except Exception as e:
             logger.error(f"Error clicking active status button: {e}")
             return False
 
-    def _fill_comment_and_submit(self) -> bool:
-        """Fill in the required comment field and click Submit Update"""
+    def _fill_comment_and_submit(self, custom_comment: str = None) -> bool:
+        """
+        Fill in the required comment field and click Submit Update.
+
+        Args:
+            custom_comment: Optional custom comment (from @update notes) to use instead of default
+        """
         try:
             logger.info("Filling in status update comment...")
 
@@ -989,8 +1012,11 @@ class AgentProntoService(BaseReferralService):
                 return False
 
             # Clear and fill the comment
+            # Priority: custom_comment (@update notes) > same_status_note > default
             textarea.clear()
-            comment = self.same_status_note or "Continuing to work with this referral. Will provide updates as progress is made."
+            comment = custom_comment or self.same_status_note or "Continuing to work with this referral. Will provide updates as progress is made."
+            if custom_comment:
+                logger.info(f"Using @update comment: {custom_comment[:50]}...")
             self.wis.simulated_typing(textarea, comment)
             logger.info(f"Entered comment: {comment[:50]}...")
             self.wis.human_delay(1, 2)
@@ -1326,8 +1352,15 @@ class AgentProntoService(BaseReferralService):
             logger.error(f"Error clicking save button: {e}")
             return False
 
-    def find_and_update_lead(self, lead_name: str, status: Any) -> bool:
-        """Find a lead by name and update their status"""
+    def find_and_update_lead(self, lead_name: str, status: Any, custom_comment: str = None) -> bool:
+        """
+        Find a lead by name and update their status.
+
+        Args:
+            lead_name: Name of the lead to find
+            status: The status to set
+            custom_comment: Optional custom comment (from @update notes) to use
+        """
         try:
             # Navigate to referrals page first
             if not self._verify_referrals_page():
@@ -1338,7 +1371,7 @@ class AgentProntoService(BaseReferralService):
                 return False
 
             # Update the status
-            if not self.update_customers(status):
+            if not self.update_customers(status, custom_comment=custom_comment):
                 return False
 
             # Try to save
@@ -1360,16 +1393,24 @@ class AgentProntoService(BaseReferralService):
         except Exception as e:
             logger.warning(f"Failed to save screenshot: {e}")
 
-    def update_multiple_leads(self, leads_data: List[Tuple[Lead, Any]]) -> Dict[str, Any]:
+    def update_multiple_leads(
+        self,
+        leads_data: List[Tuple[Lead, Any]],
+        comments: Dict[str, str] = None
+    ) -> Dict[str, Any]:
         """
         Update multiple leads in a single browser session (bulk sync).
 
         Args:
             leads_data: List of (Lead, status) tuples
+            comments: Optional dict mapping lead.id -> comment string (from @update notes)
 
         Returns:
             Dict with sync results
         """
+        if comments is None:
+            comments = {}
+
         results = {
             "successful": 0,
             "failed": 0,
@@ -1421,8 +1462,13 @@ class AgentProntoService(BaseReferralService):
                     # Update the active lead context
                     self.update_active_lead(lead, status)
 
+                    # Get comment from @update notes if available
+                    lead_comment = comments.get(lead.id)
+                    if lead_comment:
+                        logger.info(f"Using @update comment for {lead_name}: {lead_comment[:50]}...")
+
                     # Find and update lead
-                    success = self.find_and_update_lead(lead_name, status)
+                    success = self.find_and_update_lead(lead_name, status, custom_comment=lead_comment)
 
                     if success:
                         results["successful"] += 1

@@ -578,7 +578,15 @@ class HomelightService(BaseReferralService):
             # If there's an error, don't skip - proceed with update
             return False
 
-    def _add_sync_note(self, primary_stage: str, sub_stage: Optional[str]) -> bool:
+    def _add_sync_note(self, primary_stage: str, sub_stage: Optional[str], custom_note: str = None) -> bool:
+        """
+        Add a sync note to the HomeLight update.
+
+        Args:
+            primary_stage: The primary stage being set
+            sub_stage: Optional sub-stage
+            custom_note: Optional custom note from @update to append
+        """
         try:
             # Try the specific selector first
             note_field = self.driver_service.find_element(By.CSS_SELECTOR, 'textarea[data-test="connected-notes"]')
@@ -589,8 +597,12 @@ class HomelightService(BaseReferralService):
                 print("Could not locate note field to add sync note")
                 return False
 
-            # Use the same status note from lead source settings
+            # Build note text: base note + optional @update content
             note_text = self.same_status_note
+            if custom_note:
+                # Append @update content to the standard note
+                note_text = f"{note_text}\n\nUpdate: {custom_note}"
+                print(f"[UPDATE] Appending @update note: {custom_note[:50]}...")
 
             note_field.click()
             note_field.clear()
@@ -1393,16 +1405,24 @@ class HomelightService(BaseReferralService):
                 pass
             return False
 
-    def update_multiple_leads(self, leads_data: List[Tuple[Lead, str]]) -> Dict[str, Any]:
+    def update_multiple_leads(
+        self,
+        leads_data: List[Tuple[Lead, str]],
+        comments: Dict[str, str] = None
+    ) -> Dict[str, Any]:
         """
         Update multiple leads in a single browser session
 
         Args:
             leads_data: List of tuples containing (lead, target_status)
+            comments: Optional dict mapping lead.id -> comment string (from @update notes)
 
         Returns:
             Dict with sync results
         """
+        if comments is None:
+            comments = {}
+
         import logging
         logger = logging.getLogger(__name__)
 
@@ -1543,8 +1563,13 @@ class HomelightService(BaseReferralService):
                         
                         print(f"[PEN] Updating stage to '{target_status}'...")
 
+                        # Get comment from @update notes if available
+                        lead_comment = comments.get(lead.id)
+                        if lead_comment:
+                            print(f"[UPDATE] Using @update comment: {lead_comment[:50]}...")
+
                         update_start = time.time()
-                        success = self.update_customers(target_status)
+                        success = self.update_customers(target_status, custom_note=lead_comment)
                         update_time = time.time() - update_start
 
                         if success:
@@ -1677,25 +1702,30 @@ class HomelightService(BaseReferralService):
         return results
 
     def update_multiple_leads_with_tracker(
-        self, 
-        leads_data: List[Tuple[Lead, str]], 
-        sync_id: str, 
-        tracker
+        self,
+        leads_data: List[Tuple[Lead, str]],
+        sync_id: str,
+        tracker,
+        comments: Dict[str, str] = None
     ) -> Dict[str, Any]:
         """
         Update multiple leads with progress tracking via tracker
-        
+
         Args:
             leads_data: List of tuples containing (lead, target_status)
             sync_id: Unique sync ID for tracking
             tracker: SyncStatusTracker instance
-            
+            comments: Optional dict mapping lead.id -> comment string (from @update notes)
+
         Returns:
             Dict with sync results
         """
+        if comments is None:
+            comments = {}
+
         import logging
         logger = logging.getLogger(__name__)
-        
+
         results = {
             "total_leads": len(leads_data),
             "successful": 0,
@@ -1845,8 +1875,14 @@ class HomelightService(BaseReferralService):
 
                         # Only proceed with update if not skipped
                         print(f"[UPDATE] Starting update for {full_name} with status: {target_status}")
+
+                        # Get comment from @update notes if available
+                        lead_comment = comments.get(lead.id)
+                        if lead_comment:
+                            print(f"[UPDATE] Using @update comment: {lead_comment[:50]}...")
+
                         try:
-                            success = self.update_customers(target_status)
+                            success = self.update_customers(target_status, custom_note=lead_comment)
                         except Exception as e:
                             print(f"[ERROR] Exception during update_customers for {full_name}: {e}")
                             import traceback
@@ -2417,7 +2453,14 @@ class HomelightService(BaseReferralService):
             print(f"Error clicking customer: {e}")
             return False
 
-    def update_customers(self, status_to_select: str) -> bool:
+    def update_customers(self, status_to_select: str, custom_note: str = None) -> bool:
+        """
+        Update the customer's stage in HomeLight.
+
+        Args:
+            status_to_select: The status/stage to set
+            custom_note: Optional custom note from @update to append
+        """
         try:
             primary_stage, sub_stage = self._parse_target_status(status_to_select)
             if not primary_stage:
@@ -2425,6 +2468,9 @@ class HomelightService(BaseReferralService):
                 return False
 
             print(f"Syncing HomeLight stage to: {primary_stage}{f' / {sub_stage}' if sub_stage else ''}")
+
+            # Store custom_note for use in _add_sync_note
+            self._custom_note = custom_note
 
             # Wait for detail panel to load
             self.wis.human_delay(2, 3)
@@ -2442,7 +2488,7 @@ class HomelightService(BaseReferralService):
                 return False
 
             print("Adding sync note based on FUB data...")
-            if not self._add_sync_note(primary_stage, sub_stage):
+            if not self._add_sync_note(primary_stage, sub_stage, custom_note=self._custom_note):
                 print("Failed to add sync note")
                 return False
 
