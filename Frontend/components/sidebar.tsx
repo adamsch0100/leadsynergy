@@ -75,21 +75,20 @@ export function SidebarWrapper({ children, role }: SidebarWrapperProps) {
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen">
         <AppSidebar role={role} />
-        <div className="flex-1">
-          <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b bg-background px-6">
-            <SidebarTrigger />
-            <div className="flex flex-1 items-center justify-between">
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-semibold">LeadSynergy</h1>
-              </div>
-              <div className="flex items-center gap-4">
-                <ThemeToggle />
-                <NotificationsMenu role={role} />
-                <UserDropdown role={role} />
-              </div>
+        <div className="flex-1 flex flex-col min-w-0">
+          <header className="sticky top-0 z-30 flex h-16 items-center border-b bg-background px-6">
+            <div className="flex items-center gap-4 shrink-0">
+              <SidebarTrigger />
+              <h1 className="text-xl font-semibold">LeadSynergy</h1>
+            </div>
+            <div className="flex-1" />
+            <div className="flex items-center gap-4 shrink-0">
+              <ThemeToggle />
+              <NotificationsMenu role={role} />
+              <UserDropdown role={role} />
             </div>
           </header>
-          <main className="container mx-auto py-6">{children}</main>
+          <main className="container mx-auto py-6 flex-1">{children}</main>
         </div>
       </div>
     </SidebarProvider>
