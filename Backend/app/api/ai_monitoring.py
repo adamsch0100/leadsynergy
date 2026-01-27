@@ -539,3 +539,180 @@ def get_ai_enabled_leads():
     except Exception as e:
         logger.error(f"Error getting AI-enabled leads: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+
+# ==================== Scheduled Tasks ====================
+
+@ai_monitoring_bp.route('/scheduled-tasks', methods=['GET'])
+def get_scheduled_tasks():
+    """
+    Get upcoming scheduled AI tasks/follow-ups.
+
+    Query params:
+        limit: Max tasks to return (default 50)
+        status: Filter by status (pending, sent, cancelled, failed)
+
+    Returns:
+        JSON array of scheduled tasks
+    """
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        status_filter = request.args.get('status', 'pending')
+
+        supabase = get_supabase_client()
+
+        # Get scheduled messages
+        query = supabase.table('scheduled_messages').select(
+            'id, fub_person_id, message_type, message_content, template_id, '
+            'channel, scheduled_for, status, created_at, sequence_id, sequence_day'
+        )
+
+        if status_filter:
+            query = query.eq('status', status_filter)
+
+        # Order by scheduled time (soonest first for pending, most recent for others)
+        if status_filter == 'pending':
+            query = query.gte('scheduled_for', 'now()').order('scheduled_for', desc=False)
+        else:
+            query = query.order('scheduled_for', desc=True)
+
+        result = query.limit(limit).execute()
+        scheduled_messages = result.data or []
+
+        # Get unique person IDs to fetch names
+        person_ids = list(set(m.get('fub_person_id') for m in scheduled_messages if m.get('fub_person_id')))
+
+        # Try to get lead names from ai_conversations or lead_ai_settings
+        lead_names = {}
+        if person_ids:
+            try:
+                conv_result = supabase.table('ai_conversations').select(
+                    'fub_person_id, lead_first_name, lead_last_name'
+                ).in_('fub_person_id', person_ids).execute()
+
+                for conv in (conv_result.data or []):
+                    pid = conv.get('fub_person_id')
+                    first = conv.get('lead_first_name', '')
+                    last = conv.get('lead_last_name', '')
+                    if first or last:
+                        lead_names[pid] = f"{first} {last}".strip()
+            except Exception as name_err:
+                logger.warning(f"Could not fetch lead names: {name_err}")
+
+        # Enrich tasks with lead names and format for frontend
+        tasks = []
+        for msg in scheduled_messages:
+            person_id = msg.get('fub_person_id')
+            tasks.append({
+                'id': msg.get('id'),
+                'person_id': person_id,
+                'lead_name': lead_names.get(person_id, f"Person #{person_id}"),
+                'message_type': msg.get('message_type'),
+                'message_preview': (msg.get('message_content') or '')[:100] + ('...' if len(msg.get('message_content') or '') > 100 else ''),
+                'template_id': msg.get('template_id'),
+                'channel': msg.get('channel', 'sms'),
+                'scheduled_for': msg.get('scheduled_for'),
+                'status': msg.get('status'),
+                'sequence_id': msg.get('sequence_id'),
+                'sequence_day': msg.get('sequence_day'),
+                'created_at': msg.get('created_at'),
+            })
+
+        # Also get counts by status
+        count_result = supabase.rpc('count_scheduled_by_status', {}).execute()
+        status_counts = {}
+        if count_result.data:
+            for row in count_result.data:
+                status_counts[row.get('status')] = row.get('count', 0)
+
+        # Fallback: count manually if RPC doesn't exist
+        if not status_counts:
+            for status in ['pending', 'sent', 'cancelled', 'failed', 'skipped']:
+                try:
+                    count_res = supabase.table('scheduled_messages').select(
+                        'id', count='exact'
+                    ).eq('status', status).execute()
+                    status_counts[status] = count_res.count or 0
+                except:
+                    pass
+
+        return jsonify({
+            'success': True,
+            'tasks': tasks,
+            'count': len(tasks),
+            'status_counts': status_counts,
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting scheduled tasks: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@ai_monitoring_bp.route('/scheduled-tasks/<task_id>/cancel', methods=['POST'])
+def cancel_scheduled_task(task_id: str):
+    """
+    Cancel a scheduled task.
+
+    Returns:
+        JSON result
+    """
+    try:
+        user_email = get_user_email(request) or 'admin'
+        supabase = get_supabase_client()
+
+        # Update status to cancelled
+        result = supabase.table('scheduled_messages').update({
+            'status': 'cancelled',
+            'cancelled_at': 'now()',
+            'cancelled_by': user_email,
+        }).eq('id', task_id).eq('status', 'pending').execute()
+
+        if result.data:
+            return jsonify({
+                'success': True,
+                'message': 'Task cancelled',
+                'task_id': task_id
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Task not found or already processed'
+            }), 404
+
+    except Exception as e:
+        logger.error(f"Error cancelling task {task_id}: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@ai_monitoring_bp.route('/scheduled-tasks/cancel-for-lead/<int:person_id>', methods=['POST'])
+def cancel_tasks_for_lead(person_id: int):
+    """
+    Cancel all pending scheduled tasks for a specific lead.
+
+    Returns:
+        JSON result with count of cancelled tasks
+    """
+    try:
+        user_email = get_user_email(request) or 'admin'
+        supabase = get_supabase_client()
+
+        # Update all pending tasks for this lead
+        result = supabase.table('scheduled_messages').update({
+            'status': 'cancelled',
+            'cancelled_at': 'now()',
+            'cancelled_by': user_email,
+            'cancellation_reason': 'Manual cancellation from monitor',
+        }).eq('fub_person_id', person_id).eq('status', 'pending').execute()
+
+        cancelled_count = len(result.data) if result.data else 0
+
+        return jsonify({
+            'success': True,
+            'message': f'Cancelled {cancelled_count} tasks for lead {person_id}',
+            'cancelled_count': cancelled_count,
+            'person_id': person_id
+        })
+
+    except Exception as e:
+        logger.error(f"Error cancelling tasks for lead {person_id}: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500

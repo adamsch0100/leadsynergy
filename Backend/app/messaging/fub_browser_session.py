@@ -171,45 +171,94 @@ class FUBBrowserSession:
         Handle FUB's 'new location' security check by fetching the
         verification link from email and navigating to it.
         """
-        logger.info("Attempting to auto-verify FUB login via email link...")
+        logger.info("=" * 60)
+        logger.info("FUB SECURITY EMAIL VERIFICATION STARTED")
+        logger.info("=" * 60)
+        logger.info(f"FUB account being logged in: {fub_email}")
 
         try:
             from app.utils.email_2fa_helper import Email2FAHelper
+            import os
+
+            # Log what credentials sources are available
+            logger.info("Checking for Gmail credentials...")
+            env_gmail = os.getenv("GMAIL_EMAIL")
+            env_gmail_pwd = os.getenv("GMAIL_APP_PASSWORD")
+            logger.info(f"  Environment GMAIL_EMAIL: {'SET' if env_gmail else 'NOT SET'}")
+            logger.info(f"  Environment GMAIL_APP_PASSWORD: {'SET' if env_gmail_pwd else 'NOT SET'}")
 
             # Create email helper - uses centralized ai_agent_settings (preferred)
             # or falls back to environment variables
             email_helper = await Email2FAHelper.from_settings()
 
             if not email_helper or not email_helper.email_address:
-                logger.error("No email credentials configured for 2FA verification")
+                logger.error("=" * 60)
+                logger.error("GMAIL CREDENTIALS NOT CONFIGURED")
+                logger.error("=" * 60)
+                logger.error("To fix this, you need to configure Gmail credentials:")
+                logger.error("  Option 1: Set GMAIL_EMAIL and GMAIL_APP_PASSWORD environment variables on Railway")
+                logger.error("  Option 2: Configure gmail_email and gmail_app_password in system_settings table")
+                logger.error("")
+                logger.error("To create a Gmail App Password:")
+                logger.error("  1. Go to https://myaccount.google.com/apppasswords")
+                logger.error("  2. Create an app password for 'Mail'")
+                logger.error("  3. Use that 16-character password (not your regular Gmail password)")
                 raise Exception(
                     "Login failed: New location security check. "
                     "Email credentials not configured for auto-verification. "
-                    "Please set gmail_email and gmail_app_password in AI Agent Settings or env vars. "
+                    "Please set GMAIL_EMAIL and GMAIL_APP_PASSWORD in Railway environment variables. "
                     "Please approve the login manually via email."
                 )
 
+            logger.info(f"Gmail helper configured with email: {email_helper.email_address}")
+
             logger.info(f"Checking email inbox for FUB verification link...")
+            logger.info(f"  Search criteria: sender contains 'followupboss', subject contains 'login'")
+            logger.info(f"  Will retry up to 15 times with 3 second delays (max 45 seconds)")
 
             # Get the verification link from the FUB security email
-            with email_helper:
-                verification_link = email_helper.get_verification_link(
-                    sender_contains="followupboss",
-                    subject_contains="login",
-                    link_contains="followupboss.com",
-                    max_age_seconds=300,  # 5 minutes
-                    max_retries=15,
-                    retry_delay=3.0
+            try:
+                with email_helper:
+                    logger.info("  IMAP connection established successfully")
+                    verification_link = email_helper.get_verification_link(
+                        sender_contains="followupboss",
+                        subject_contains="login",
+                        link_contains="followupboss.com",
+                        max_age_seconds=300,  # 5 minutes
+                        max_retries=15,
+                        retry_delay=3.0
+                    )
+            except Exception as imap_error:
+                logger.error(f"IMAP connection/search failed: {imap_error}")
+                logger.error("This could be due to:")
+                logger.error("  1. Wrong Gmail credentials")
+                logger.error("  2. Gmail blocking access from Railway's IP (security)")
+                logger.error("  3. Need to enable 'Less secure app access' or use App Password")
+                logger.error("  4. Network connectivity issues")
+                raise Exception(
+                    f"Login failed: Could not connect to Gmail to retrieve verification link. "
+                    f"Error: {imap_error}"
                 )
 
             if not verification_link:
-                logger.error("Could not find FUB verification link in email")
+                logger.error("=" * 60)
+                logger.error("VERIFICATION LINK NOT FOUND IN EMAIL")
+                logger.error("=" * 60)
+                logger.error("The FUB verification email was not found. Possible causes:")
+                logger.error("  1. Email hasn't arrived yet (FUB can be slow)")
+                logger.error("  2. Email went to spam folder")
+                logger.error("  3. Wrong Gmail account configured")
+                logger.error("  4. FUB sent the email to a different address")
+                logger.error(f"  Gmail being checked: {email_helper.email_address}")
+                logger.error(f"  FUB account trying to login: {fub_email}")
                 raise Exception(
                     "Login failed: New location security check. "
-                    "Verification email not found. Please check your inbox and try again."
+                    "Verification email not found after 45 seconds. "
+                    "Please check your inbox and approve the login manually, then retry."
                 )
 
-            logger.info(f"Found FUB verification link, navigating to complete login...")
+            logger.info(f"Found FUB verification link: {verification_link[:80]}...")
+            logger.info("Navigating to verification link in browser...")
 
             # Navigate to the verification link in Playwright
             await self.page.goto(verification_link, wait_until="domcontentloaded")
@@ -217,25 +266,35 @@ class FUBBrowserSession:
 
             # Check if we're now logged in
             current_url = self.page.url
+            logger.info(f"After clicking verification link, current URL: {current_url}")
+
             if "login" not in current_url and "signin" not in current_url:
-                logger.info("Email verification successful - now logged in!")
+                logger.info("=" * 60)
+                logger.info("FUB EMAIL VERIFICATION SUCCESSFUL!")
+                logger.info("=" * 60)
                 self._capture_base_url()
                 self._logged_in = True
                 return
 
             # Sometimes FUB redirects to another page - follow it
+            logger.info("Still on login page, waiting for redirect...")
             await self.page.wait_for_load_state("networkidle")
             current_url = self.page.url
+            logger.info(f"After waiting for redirect, current URL: {current_url}")
 
             if "login" not in current_url and "signin" not in current_url:
-                logger.info("Email verification successful after redirect - now logged in!")
+                logger.info("=" * 60)
+                logger.info("FUB EMAIL VERIFICATION SUCCESSFUL (after redirect)!")
+                logger.info("=" * 60)
                 self._capture_base_url()
                 self._logged_in = True
                 return
 
             # If still on login page, the verification link may have expired
+            logger.error("Still on login page after clicking verification link")
+            logger.error("The verification link may have expired or been already used")
             raise Exception(
-                "Login failed: Verification link may have expired. "
+                "Login failed: Verification link may have expired or already been used. "
                 "Please try again."
             )
 

@@ -980,9 +980,84 @@ ACTION REQUIRED: Respond to this lead promptly!
 
             logger.info(f"Created handoff task for person {fub_person_id}: {trigger_type}")
 
+            # Send immediate notifications to agent (SMS via FUB + Email)
+            # SMS is sent to a "notification lead" in FUB (a lead with the agent's phone)
+            # Email is sent to the assigned agent's email address
+            notification_person_id = None
+            if self._db_settings:
+                notification_person_id = self._db_settings.notification_fub_person_id
+
+            agent_info = self._get_agent_contact_info(fub, fub_person_id)
+
+            try:
+                from app.notifications.agent_notifier import AgentNotifier
+                notifier = AgentNotifier(notification_fub_person_id=notification_person_id)
+
+                notifier.notify_agent(
+                    agent_email=agent_info.get("email") if agent_info else None,
+                    agent_name=agent_info.get("name", "Agent") if agent_info else "Agent",
+                    lead_name=f"{lead_profile.first_name} {lead_profile.last_name}",
+                    trigger_type=trigger_type.replace("_", " ").title(),
+                    lead_message=lead_message,
+                    lead_phone=lead_profile.phone,
+                    lead_score=lead_profile.score,
+                    lead_source=lead_profile.source,
+                    fub_person_id=fub_person_id,
+                )
+            except Exception as notify_error:
+                logger.error(f"Failed to notify agent: {notify_error}")
+                # Don't raise - FUB task was still created
+
         except Exception as e:
             logger.error(f"Failed to create handoff task for person {fub_person_id}: {e}")
             # Don't raise - we still want to return the handoff response
+
+    def _get_agent_contact_info(self, fub_client, fub_person_id: int) -> Optional[dict]:
+        """
+        Get assigned agent's contact info from FUB.
+
+        Args:
+            fub_client: FUB API client instance
+            fub_person_id: FUB person ID to look up assigned agent
+
+        Returns:
+            Dict with agent id, name, email, phone or None if not found
+        """
+        try:
+            # Get person to find assigned agent
+            person = fub_client.get_person(str(fub_person_id))
+            if not person:
+                logger.warning(f"Could not fetch person {fub_person_id} for agent lookup")
+                return None
+
+            assigned_to = person.get("assignedTo", {})
+
+            # assignedTo can be a dict with {id, name} or just a user ID
+            if isinstance(assigned_to, dict):
+                agent_id = assigned_to.get("id")
+            else:
+                agent_id = assigned_to
+
+            if not agent_id:
+                logger.info(f"No assigned agent for person {fub_person_id}")
+                return None
+
+            # Get agent details
+            agent = fub_client.get_user(str(agent_id))
+            if not agent:
+                logger.warning(f"Could not fetch agent {agent_id}")
+                return None
+
+            return {
+                "id": agent_id,
+                "name": agent.get("name", "Agent"),
+                "email": agent.get("email"),
+                "phone": agent.get("phone") or agent.get("cellPhone") or agent.get("mobilePhone"),
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting agent contact info: {e}")
+            return None
 
     def _handle_channel_preference(
         self,

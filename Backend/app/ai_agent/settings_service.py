@@ -55,6 +55,7 @@ class AIAgentSettings:
 
     # Feature flags
     is_enabled: bool = False  # AI auto-respond OFF by default - must be explicitly enabled
+    auto_enable_new_leads: bool = False  # Auto-enable AI for new leads coming in
     use_llm_for_all_responses: bool = True
     use_templates_as_fallback: bool = True
     enable_a_b_testing: bool = True
@@ -105,6 +106,13 @@ class AIAgentSettings:
     fub_login_email: Optional[str] = None
     fub_login_password: Optional[str] = None  # Should be encrypted in DB
     fub_login_type: str = "email"  # email, google, microsoft
+
+    # Agent Notification Settings
+    # To receive hot lead notifications, create a "lead" in FUB with the agent's
+    # phone number, then paste that lead's FUB Person ID here.
+    # Example: Create lead "Adam Notifications" with phone (916) 555-1234
+    # Then set notification_fub_person_id to that lead's ID (e.g., 12345678)
+    notification_fub_person_id: Optional[int] = None  # FUB person ID to text for hot lead alerts
 
     # NOTE: Gmail credentials moved to system_settings (global, program-wide)
     # Use get_gmail_credentials() to access them
@@ -179,6 +187,7 @@ class AIAgentSettings:
             auto_handoff_score=row.get('auto_handoff_score') or 80,
             max_ai_messages_per_lead=row.get('max_ai_messages_per_lead') or 15,
             is_enabled=row.get('is_enabled', True),
+            auto_enable_new_leads=row.get('auto_enable_new_leads', False),
             qualification_questions=row.get('qualification_questions') or [],
             custom_scripts=row.get('custom_scripts') or {},
             # Re-engagement settings
@@ -192,6 +201,8 @@ class AIAgentSettings:
             fub_login_email=row.get('fub_login_email'),
             fub_login_password=row.get('fub_login_password'),
             fub_login_type=row.get('fub_login_type') or "email",
+            # Agent Notification
+            notification_fub_person_id=row.get('notification_fub_person_id'),
             # NOTE: Gmail credentials now in system_settings (global)
             # LLM Model Configuration
             llm_provider=row.get('llm_provider') or "openrouter",
@@ -362,16 +373,25 @@ class AIAgentSettingsService:
             data = {
                 "agent_name": settings.agent_name,
                 "brokerage_name": settings.brokerage_name,
+                "team_members": settings.team_members,
                 "personality_tone": settings.personality_tone,
                 "response_delay_seconds": settings.response_delay_seconds,
+                "max_response_length": settings.max_response_length,
                 "working_hours_start": settings.working_hours_start.strftime('%H:%M'),
                 "working_hours_end": settings.working_hours_end.strftime('%H:%M'),
                 "timezone": settings.timezone,
                 "auto_handoff_score": settings.auto_handoff_score,
                 "max_ai_messages_per_lead": settings.max_ai_messages_per_lead,
                 "is_enabled": settings.is_enabled,
+                "auto_enable_new_leads": settings.auto_enable_new_leads,
                 "qualification_questions": settings.qualification_questions,
                 "custom_scripts": settings.custom_scripts,
+                # LLM Model settings
+                "llm_provider": settings.llm_provider,
+                "llm_model": settings.llm_model,
+                "llm_model_fallback": settings.llm_model_fallback,
+                # Agent notification
+                "notification_fub_person_id": settings.notification_fub_person_id,
             }
 
             # Add user/org ID

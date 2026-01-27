@@ -24,6 +24,9 @@ import {
   Zap,
   ArrowUpRight,
   ArrowDownRight,
+  Timer,
+  Send,
+  X,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
@@ -81,6 +84,21 @@ interface IntentDistribution {
   percentage: number
 }
 
+interface ScheduledTask {
+  id: string
+  person_id: number
+  lead_name: string
+  message_type: string
+  message_preview: string
+  template_id: string
+  channel: string
+  scheduled_for: string
+  status: string
+  sequence_id: string
+  sequence_day: number
+  created_at: string
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export default function AIAnalyticsPage() {
@@ -98,6 +116,8 @@ export default function AIAnalyticsPage() {
   const [reviewCounts, setReviewCounts] = useState<any>({})
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null)
   const [isMonitorPanelOpen, setIsMonitorPanelOpen] = useState(false)
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([])
+  const [scheduledTasksCounts, setScheduledTasksCounts] = useState<any>({})
 
   // Load user session
   useEffect(() => {
@@ -154,12 +174,45 @@ export default function AIAnalyticsPage() {
     }
   }, [user])
 
+  const fetchScheduledTasks = useCallback(async () => {
+    if (!user) return
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/ai-monitoring/scheduled-tasks?status=pending&limit=20`, {
+        headers: { 'X-User-ID': user.id }
+      })
+      const data = await response.json()
+      if (data.success) {
+        setScheduledTasks(data.tasks || [])
+        setScheduledTasksCounts(data.status_counts || {})
+      }
+    } catch (err) {
+      console.error('Failed to fetch scheduled tasks:', err)
+    }
+  }, [user])
+
+  const cancelScheduledTask = async (taskId: string) => {
+    if (!user) return
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/ai-monitoring/scheduled-tasks/${taskId}/cancel`, {
+        method: 'POST',
+        headers: { 'X-User-ID': user.id }
+      })
+      const data = await response.json()
+      if (data.success) {
+        fetchScheduledTasks()
+      }
+    } catch (err) {
+      console.error('Failed to cancel task:', err)
+    }
+  }
+
   useEffect(() => {
     if (user) {
       fetchAnalytics()
       fetchReviewQueue()
+      fetchScheduledTasks()
     }
-  }, [user, period, fetchAnalytics, fetchReviewQueue])
+  }, [user, period, fetchAnalytics, fetchReviewQueue, fetchScheduledTasks])
 
   const openLeadMonitor = (personId: number) => {
     setSelectedPersonId(personId)
@@ -339,6 +392,99 @@ export default function AIAnalyticsPage() {
             onLeadClick={openLeadMonitor}
             defaultOpen={true}
           />
+
+          {/* Scheduled Tasks */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Timer className="h-5 w-5" />
+                Scheduled Follow-ups
+                {scheduledTasks.length > 0 && (
+                  <Badge variant="secondary" className="ml-2">
+                    {scheduledTasks.length} pending
+                  </Badge>
+                )}
+              </CardTitle>
+              <CardDescription>
+                Upcoming AI-scheduled messages and follow-ups
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {scheduledTasks.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+                  <CheckCircle2 className="h-8 w-8 mb-2 opacity-50" />
+                  <p>No scheduled follow-ups</p>
+                  <p className="text-xs mt-1">Messages will appear here when scheduled</p>
+                </div>
+              ) : (
+                <ScrollArea className="h-[300px]">
+                  <div className="space-y-2">
+                    {scheduledTasks.map((task) => (
+                      <div
+                        key={task.id}
+                        className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                            task.channel === 'sms' ? 'bg-blue-100 text-blue-600' :
+                            task.channel === 'email' ? 'bg-purple-100 text-purple-600' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>
+                            <Send className="h-4 w-4" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p
+                                className="font-medium text-sm truncate cursor-pointer hover:underline"
+                                onClick={() => openLeadMonitor(task.person_id)}
+                              >
+                                {task.lead_name}
+                              </p>
+                              <Badge variant="outline" className="text-xs shrink-0">
+                                {task.channel.toUpperCase()}
+                              </Badge>
+                              {task.sequence_day > 0 && (
+                                <Badge variant="secondary" className="text-xs shrink-0">
+                                  Day {task.sequence_day}
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground truncate">
+                              {task.message_preview || task.message_type?.replace(/_/g, ' ')}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              <Clock className="h-3 w-3 inline mr-1" />
+                              {new Date(task.scheduled_for).toLocaleString('en-US', {
+                                weekday: 'short',
+                                month: 'short',
+                                day: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-muted-foreground hover:text-destructive shrink-0"
+                          onClick={() => cancelScheduledTask(task.id)}
+                          title="Cancel this scheduled message"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+              {scheduledTasksCounts.pending > 0 && scheduledTasks.length < scheduledTasksCounts.pending && (
+                <p className="text-xs text-muted-foreground mt-3 text-center">
+                  Showing {scheduledTasks.length} of {scheduledTasksCounts.pending} pending tasks
+                </p>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Review Queue */}
           <Card>

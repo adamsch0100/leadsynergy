@@ -304,18 +304,20 @@ def get_dashboard_data():
     Get all dashboard data in a single call (for efficiency).
 
     Query params:
-        organization_id: Required org ID
+        organization_id: Optional org ID
+        user_id: Optional user ID (alternative to org_id)
         period: Time period
 
     Returns:
         JSON object with all dashboard data
     """
     user_id, org_id = get_user_info(request)
+    filter_user_id = request.args.get('user_id') or user_id
     filter_org_id = request.args.get('organization_id') or org_id
     period_str = request.args.get('period', '30d')
 
-    if not filter_org_id:
-        return jsonify({"error": "Organization ID is required"}), 400
+    if not filter_user_id and not filter_org_id:
+        return jsonify({"error": "User ID or Organization ID is required"}), 400
 
     try:
         supabase = get_supabase_client()
@@ -326,16 +328,19 @@ def get_dashboard_data():
         # but for simplicity, we'll call them sequentially
         summary = run_async(service.get_metrics_summary(
             organization_id=filter_org_id,
+            user_id=filter_user_id,
             period=period,
         ))
 
         funnel = run_async(service.get_conversion_funnel(
             organization_id=filter_org_id,
+            user_id=filter_user_id,
             period=period,
         ))
 
         daily = run_async(service.get_metrics_by_day(
             organization_id=filter_org_id,
+            user_id=filter_user_id,
             period=period,
         ))
 
@@ -346,17 +351,15 @@ def get_dashboard_data():
 
         return jsonify({
             "success": True,
-            "dashboard": {
-                "summary": summary.to_dict(),
-                "funnel": funnel.to_dict(),
-                "daily": daily,
-                "intents": dict(sorted(
-                    intents.items(),
-                    key=lambda x: x[1],
-                    reverse=True
-                )[:10]),  # Top 10 intents
-                "period": period_str,
-            }
+            "summary": summary.to_dict() if summary else {},
+            "funnel": funnel.to_dict() if funnel else {},
+            "daily_metrics": daily or [],
+            "intents": [
+                {"intent": k, "count": v, "percentage": (v / max(sum(intents.values()), 1)) * 100}
+                for k, v in sorted(intents.items(), key=lambda x: x[1], reverse=True)[:10]
+            ] if intents else [],
+            "ab_tests": [],  # TODO: Add A/B test results
+            "period": period_str,
         })
 
     except Exception as e:

@@ -25,13 +25,19 @@ import {
   Key,
   Send,
   Eye,
-  EyeOff
+  EyeOff,
+  Bell,
+  Mail,
+  Shield
 } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
 
 interface AISettings {
   is_enabled: boolean
+  auto_enable_new_leads: boolean  // Auto-enable AI for new leads
   agent_name: string
   brokerage_name: string
   team_members: string  // Human agent names (e.g., "Adam and Mandi")
@@ -49,6 +55,8 @@ interface AISettings {
   llm_provider: string
   llm_model: string
   llm_model_fallback: string
+  // Agent Notification
+  notification_fub_person_id: number | null
 }
 
 interface FUBLoginSettings {
@@ -67,6 +75,7 @@ const DEFAULT_FUB_LOGIN: FUBLoginSettings = {
 
 const DEFAULT_SETTINGS: AISettings = {
   is_enabled: true,
+  auto_enable_new_leads: false,
   agent_name: "Sarah",
   brokerage_name: "",
   team_members: "",  // e.g., "Adam and Mandi"
@@ -84,6 +93,8 @@ const DEFAULT_SETTINGS: AISettings = {
   llm_provider: "openrouter",
   llm_model: "xiaomi/mimo-v2-flash:free",
   llm_model_fallback: "deepseek/deepseek-r1-0528:free",
+  // Agent Notification
+  notification_fub_person_id: null,
 }
 
 // Available LLM Models (OpenRouter free tier)
@@ -127,6 +138,21 @@ export default function AISettingsPage() {
   const [isTestingFubLogin, setIsTestingFubLogin] = useState(false)
   const [fubLoginMessage, setFubLoginMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
   const [showPassword, setShowPassword] = useState(false)
+
+  // Gmail credentials state (for FUB verification emails, 2FA, etc.)
+  const [gmailEmail, setGmailEmail] = useState("")
+  const [gmailAppPassword, setGmailAppPassword] = useState("")
+  const [gmailConfigured, setGmailConfigured] = useState(false)
+  const [isSavingGmail, setIsSavingGmail] = useState(false)
+  const [gmailMessage, setGmailMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  const [showGmailPassword, setShowGmailPassword] = useState(false)
+
+  // FUB API Key state
+  const [fubApiKey, setFubApiKey] = useState("")
+  const [fubApiKeyConfigured, setFubApiKeyConfigured] = useState(false)
+  const [isSavingApiKey, setIsSavingApiKey] = useState(false)
+  const [apiKeyMessage, setApiKeyMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  const [showApiKey, setShowApiKey] = useState(false)
 
   // Load user session
   useEffect(() => {
@@ -324,8 +350,121 @@ export default function AISettingsPage() {
   useEffect(() => {
     if (user) {
       fetchFubLoginSettings()
+      fetchGmailSettings()
+      fetchApiKeyStatus()
     }
   }, [user])
+
+  // Fetch Gmail settings
+  const fetchGmailSettings = async () => {
+    if (!user) return
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/supabase/system-settings`, {
+        headers: { 'X-User-ID': user.id }
+      })
+      const data = await res.json()
+      if (data.success && data.data) {
+        if (data.data.gmail_email) {
+          setGmailEmail(data.data.gmail_email)
+          setGmailConfigured(true)
+        }
+        if (data.data.gmail_app_password) {
+          setGmailConfigured(true)
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch Gmail settings:', err)
+    }
+  }
+
+  // Save Gmail settings
+  const handleSaveGmail = async () => {
+    if (!user) return
+    setIsSavingGmail(true)
+    setGmailMessage(null)
+
+    try {
+      const payload: Record<string, string> = {}
+      if (gmailEmail) payload.gmail_email = gmailEmail
+      if (gmailAppPassword) payload.gmail_app_password = gmailAppPassword
+
+      const res = await fetch(`${API_BASE_URL}/api/supabase/system-settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-ID': user.id
+        },
+        body: JSON.stringify(payload)
+      })
+      const data = await res.json()
+      if (data.success) {
+        setGmailMessage({ type: 'success', text: 'Gmail credentials saved successfully!' })
+        setGmailConfigured(true)
+        setGmailAppPassword('') // Clear password after saving
+        setTimeout(() => setGmailMessage(null), 5000)
+      } else {
+        setGmailMessage({ type: 'error', text: data.error || 'Failed to save Gmail credentials' })
+      }
+    } catch (err) {
+      setGmailMessage({ type: 'error', text: 'Failed to save Gmail credentials' })
+    } finally {
+      setIsSavingGmail(false)
+    }
+  }
+
+  // Fetch FUB API key status
+  const fetchApiKeyStatus = async () => {
+    if (!user) return
+    try {
+      const supabase = createClient()
+      const { data: userData } = await supabase.from('users').select('fub_api_key').eq('id', user.id).single()
+      if (userData) {
+        setFubApiKeyConfigured(!!userData.fub_api_key)
+      }
+    } catch (err) {
+      console.error('Failed to fetch API key status:', err)
+    }
+  }
+
+  // Save FUB API key
+  const handleSaveApiKey = async () => {
+    if (!user || !fubApiKey) return
+    setIsSavingApiKey(true)
+    setApiKeyMessage(null)
+
+    try {
+      const supabase = createClient()
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+
+      if (!token) {
+        setApiKeyMessage({ type: 'error', text: 'Session expired. Please refresh the page.' })
+        return
+      }
+
+      const res = await fetch(`${API_BASE_URL}/api/supabase/users/current/profile/api-key`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ fub_api_key: fubApiKey })
+      })
+      const data = await res.json()
+      if (data.success) {
+        setApiKeyMessage({ type: 'success', text: 'FUB API key saved successfully!' })
+        setFubApiKeyConfigured(true)
+        setFubApiKey('') // Clear after saving
+        setTimeout(() => setApiKeyMessage(null), 5000)
+      } else {
+        setApiKeyMessage({ type: 'error', text: data.error || 'Failed to save API key' })
+      }
+    } catch (err) {
+      setApiKeyMessage({ type: 'error', text: 'Failed to save FUB API key' })
+    } finally {
+      setIsSavingApiKey(false)
+    }
+  }
 
   if (isLoading) {
     return (
@@ -395,9 +534,9 @@ export default function AISettingsPage() {
             <MessageSquare className="h-4 w-4" />
             Qualification
           </TabsTrigger>
-          <TabsTrigger value="sms-login" className="flex items-center gap-2">
-            <Key className="h-4 w-4" />
-            SMS Login
+          <TabsTrigger value="credentials" className="flex items-center gap-2">
+            <Shield className="h-4 w-4" />
+            Credentials
           </TabsTrigger>
         </TabsList>
 
@@ -570,6 +709,43 @@ export default function AISettingsPage() {
         {/* Behavior Tab */}
         <TabsContent value="behavior">
           <div className="grid gap-6 md:grid-cols-2">
+            {/* New Lead Settings Card - Full Width */}
+            <Card className="md:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5" />
+                  New Lead Settings
+                </CardTitle>
+                <CardDescription>Configure how AI handles newly created leads</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between p-4 rounded-lg border bg-muted/30">
+                  <div className="space-y-1">
+                    <Label htmlFor="auto_enable_new_leads" className="text-base font-medium">
+                      Auto-enable AI for new leads
+                    </Label>
+                    <p className="text-sm text-muted-foreground">
+                      When enabled, AI will automatically start engaging with new leads as they come in from FUB.
+                      When disabled, you must manually enable AI for each lead (via FUB "AI Follow-up" tag or dashboard).
+                    </p>
+                  </div>
+                  <Switch
+                    id="auto_enable_new_leads"
+                    checked={settings.auto_enable_new_leads}
+                    onCheckedChange={(checked) => setSettings({ ...settings, auto_enable_new_leads: checked })}
+                  />
+                </div>
+                {!settings.auto_enable_new_leads && (
+                  <Alert>
+                    <Users className="h-4 w-4" />
+                    <AlertDescription>
+                      <strong>Manual opt-in mode:</strong> New leads will NOT receive AI messages until you add the "AI Follow-up" tag in FUB or enable them in the LeadSynergy dashboard.
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle>Response Settings</CardTitle>
@@ -657,6 +833,62 @@ export default function AISettingsPage() {
                     After this many messages, the AI will hand off to a human agent
                   </p>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Bell className="h-5 w-5" />
+                  Agent Notifications
+                </CardTitle>
+                <CardDescription>Get instant SMS alerts when hot leads are detected</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="notification_person_id">Notification Lead ID (FUB Person ID)</Label>
+                  <Input
+                    id="notification_person_id"
+                    type="text"
+                    value={settings.notification_fub_person_id || ''}
+                    onChange={(e) => {
+                      let value = e.target.value
+                      // Extract person ID from FUB URL if pasted
+                      // Handles: https://saahomes.followupboss.com/2/people/view/3296
+                      // Or: app.followupboss.com/app/people/12345678
+                      const urlMatch = value.match(/people\/(?:view\/)?(\d+)/)
+                      if (urlMatch) {
+                        value = urlMatch[1]
+                      }
+                      // Only allow numbers
+                      const numericValue = value.replace(/\D/g, '')
+                      setSettings({
+                        ...settings,
+                        notification_fub_person_id: numericValue ? parseInt(numericValue) : null
+                      })
+                    }}
+                    placeholder="e.g., 12345678 or paste FUB URL"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter the FUB Person ID or paste the full FUB URL - the ID will be extracted automatically
+                  </p>
+                </div>
+
+                <Alert>
+                  <Bell className="h-4 w-4" />
+                  <AlertDescription>
+                    <strong>How to set up instant notifications:</strong>
+                    <ol className="mt-2 ml-4 space-y-1 list-decimal text-sm">
+                      <li>Create a lead in FUB named "LeadSynergy Alerts" (or similar)</li>
+                      <li>Set the phone number to your cell phone</li>
+                      <li>Copy that lead's Person ID from the FUB URL (e.g., <code className="bg-muted px-1 rounded">app.followupboss.com/app/people/<strong>12345678</strong></code>)</li>
+                      <li>Paste the ID above</li>
+                    </ol>
+                    <p className="mt-2 text-sm">
+                      When a hot lead is detected, you'll receive an SMS instantly through FUB!
+                    </p>
+                  </AlertDescription>
+                </Alert>
               </CardContent>
             </Card>
           </div>
@@ -780,168 +1012,243 @@ export default function AISettingsPage() {
           </Card>
         </TabsContent>
 
-        {/* SMS Login Tab */}
-        <TabsContent value="sms-login">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Key className="h-5 w-5" />
-                Follow Up Boss Login
-              </CardTitle>
-              <CardDescription>
-                Enter your FUB login credentials to enable AI-powered SMS sending.
-                The AI agent will use these credentials to send text messages on your behalf.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {fubLoginMessage && (
-                <Alert className={fubLoginMessage.type === 'success' ? 'bg-green-50 border-green-200' : ''} variant={fubLoginMessage.type === 'error' ? 'destructive' : 'default'}>
-                  {fubLoginMessage.type === 'success' ? (
-                    <CheckCircle className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <AlertTriangle className="h-4 w-4" />
-                  )}
-                  <AlertDescription className={fubLoginMessage.type === 'success' ? 'text-green-800' : ''}>
-                    {fubLoginMessage.text}
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="fub_login_type">Login Method</Label>
-                    <Select
-                      value={fubLogin.fub_login_type}
-                      onValueChange={(value: 'email' | 'google' | 'microsoft') =>
-                        setFubLogin({ ...fubLogin, fub_login_type: value })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="email">Email & Password</SelectItem>
-                        <SelectItem value="google">Google SSO</SelectItem>
-                        <SelectItem value="microsoft">Microsoft SSO</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      How you normally log into Follow Up Boss
-                    </p>
+        {/* Credentials Tab - All API keys and login credentials in one place */}
+        <TabsContent value="credentials">
+          <div className="space-y-6">
+            {/* FUB API Key Section */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Key className="h-5 w-5" />
+                      Follow Up Boss API Key
+                    </CardTitle>
+                    <CardDescription>
+                      Required for lead synchronization, webhooks, and data access
+                    </CardDescription>
                   </div>
-
-                  <div className="grid gap-2">
-                    <Label htmlFor="fub_login_email">FUB Login Email</Label>
+                  <Badge variant={fubApiKeyConfigured ? "default" : "secondary"}>
+                    {fubApiKeyConfigured ? "Configured" : "Not Configured"}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {apiKeyMessage && (
+                  <Alert className={apiKeyMessage.type === 'success' ? 'bg-green-50 border-green-200' : ''} variant={apiKeyMessage.type === 'error' ? 'destructive' : 'default'}>
+                    {apiKeyMessage.type === 'success' ? <CheckCircle className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4" />}
+                    <AlertDescription className={apiKeyMessage.type === 'success' ? 'text-green-800' : ''}>{apiKeyMessage.text}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="grid gap-2">
+                  <Label htmlFor="fub-api-key">FUB API Key</Label>
+                  <div className="relative">
                     <Input
-                      id="fub_login_email"
+                      id="fub-api-key"
+                      type={showApiKey ? "text" : "password"}
+                      value={fubApiKey}
+                      onChange={(e) => setFubApiKey(e.target.value)}
+                      placeholder={fubApiKeyConfigured ? "Enter new API key to update" : "Enter your Follow Up Boss API key"}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                    >
+                      {showApiKey ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Find your API key in FUB under Admin → API
+                  </p>
+                </div>
+                <Button onClick={handleSaveApiKey} disabled={isSavingApiKey || !fubApiKey}>
+                  {isSavingApiKey ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Saving...</> : 'Save API Key'}
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Separator />
+
+            {/* Gmail Credentials Section */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Mail className="h-5 w-5" />
+                      Gmail IMAP Access
+                    </CardTitle>
+                    <CardDescription>
+                      Used to automatically retrieve FUB verification emails and 2FA codes
+                    </CardDescription>
+                  </div>
+                  <Badge variant={gmailConfigured ? "default" : "secondary"}>
+                    {gmailConfigured ? "Configured" : "Not Configured"}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {gmailMessage && (
+                  <Alert className={gmailMessage.type === 'success' ? 'bg-green-50 border-green-200' : ''} variant={gmailMessage.type === 'error' ? 'destructive' : 'default'}>
+                    {gmailMessage.type === 'success' ? <CheckCircle className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4" />}
+                    <AlertDescription className={gmailMessage.type === 'success' ? 'text-green-800' : ''}>{gmailMessage.text}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="gmail-email">Gmail Email Address</Label>
+                    <Input
+                      id="gmail-email"
                       type="email"
-                      value={fubLogin.fub_login_email}
-                      onChange={(e) => setFubLogin({ ...fubLogin, fub_login_email: e.target.value })}
-                      placeholder="your@email.com"
+                      value={gmailEmail}
+                      onChange={(e) => setGmailEmail(e.target.value)}
+                      placeholder="your-email@gmail.com"
                     />
                     <p className="text-xs text-muted-foreground">
-                      The email you use to sign into FUB
+                      The Gmail that receives FUB security emails
                     </p>
                   </div>
-
                   <div className="grid gap-2">
-                    <Label htmlFor="fub_login_password">
-                      FUB Password
-                      {fubLogin.has_password && (
-                        <span className="ml-2 text-xs text-green-600 font-normal">(saved)</span>
-                      )}
+                    <Label htmlFor="gmail-app-password">
+                      Google App Password
+                      {gmailConfigured && <span className="ml-2 text-xs text-green-600 font-normal">(saved)</span>}
                     </Label>
                     <div className="relative">
                       <Input
-                        id="fub_login_password"
-                        type={showPassword ? "text" : "password"}
-                        value={fubLogin.fub_login_password}
-                        onChange={(e) => setFubLogin({ ...fubLogin, fub_login_password: e.target.value })}
-                        placeholder={fubLogin.has_password ? "••••••••••••" : "Enter password"}
+                        id="gmail-app-password"
+                        type={showGmailPassword ? "text" : "password"}
+                        value={gmailAppPassword}
+                        onChange={(e) => setGmailAppPassword(e.target.value)}
+                        placeholder={gmailConfigured ? "••••••••••••" : "xxxx xxxx xxxx xxxx"}
                       />
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
                         className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                        onClick={() => setShowPassword(!showPassword)}
+                        onClick={() => setShowGmailPassword(!showGmailPassword)}
                       >
-                        {showPassword ? (
-                          <EyeOff className="h-4 w-4 text-muted-foreground" />
-                        ) : (
-                          <Eye className="h-4 w-4 text-muted-foreground" />
-                        )}
+                        {showGmailPassword ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {fubLogin.has_password
-                        ? "Leave blank to keep existing password, or enter a new one"
-                        : "Your FUB account password"}
+                      <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                        Generate an App Password
+                      </a>
+                      {" "}(not your regular password)
                     </p>
                   </div>
                 </div>
+                <Alert>
+                  <Mail className="h-4 w-4" />
+                  <AlertDescription>
+                    <strong>Why is this needed?</strong>
+                    <p className="mt-1 text-sm">
+                      When FUB detects a login from a new location (like our server), it sends a verification email.
+                      We use Gmail IMAP to automatically read these emails and complete the login process.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+                <Button onClick={handleSaveGmail} disabled={isSavingGmail || (!gmailEmail && !gmailAppPassword)}>
+                  {isSavingGmail ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Saving...</> : 'Save Gmail Credentials'}
+                </Button>
+              </CardContent>
+            </Card>
 
-                <div className="space-y-4">
-                  <Alert>
-                    <Key className="h-4 w-4" />
-                    <AlertDescription>
-                      <strong>Why is this needed?</strong>
-                      <p className="mt-1 text-sm">
-                        FUB's API only logs messages - it doesn't actually send SMS.
-                        We use browser automation to send real text messages through the FUB web interface,
-                        just like you would manually.
-                      </p>
-                    </AlertDescription>
+            <Separator />
+
+            {/* FUB Browser Login Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Send className="h-5 w-5" />
+                  FUB Browser Login (for SMS Sending)
+                </CardTitle>
+                <CardDescription>
+                  Your FUB login credentials to enable AI-powered SMS sending via browser automation
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {fubLoginMessage && (
+                  <Alert className={fubLoginMessage.type === 'success' ? 'bg-green-50 border-green-200' : ''} variant={fubLoginMessage.type === 'error' ? 'destructive' : 'default'}>
+                    {fubLoginMessage.type === 'success' ? <CheckCircle className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4" />}
+                    <AlertDescription className={fubLoginMessage.type === 'success' ? 'text-green-800' : ''}>{fubLoginMessage.text}</AlertDescription>
                   </Alert>
-
-                  <Alert>
-                    <CheckCircle className="h-4 w-4" />
-                    <AlertDescription>
-                      <strong>Security</strong>
-                      <p className="mt-1 text-sm">
-                        Your credentials are stored securely and only used to send messages
-                        on your behalf. We never share your login information.
+                )}
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="fub_login_type">Login Method</Label>
+                      <Select
+                        value={fubLogin.fub_login_type}
+                        onValueChange={(value: 'email' | 'google' | 'microsoft') => setFubLogin({ ...fubLogin, fub_login_type: value })}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="email">Email & Password</SelectItem>
+                          <SelectItem value="google">Google SSO</SelectItem>
+                          <SelectItem value="microsoft">Microsoft SSO</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="fub_login_email">FUB Login Email</Label>
+                      <Input
+                        id="fub_login_email"
+                        type="email"
+                        value={fubLogin.fub_login_email}
+                        onChange={(e) => setFubLogin({ ...fubLogin, fub_login_email: e.target.value })}
+                        placeholder="your@email.com"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="fub_login_password">
+                        FUB Password
+                        {fubLogin.has_password && <span className="ml-2 text-xs text-green-600 font-normal">(saved)</span>}
+                      </Label>
+                      <div className="relative">
+                        <Input
+                          id="fub_login_password"
+                          type={showPassword ? "text" : "password"}
+                          value={fubLogin.fub_login_password}
+                          onChange={(e) => setFubLogin({ ...fubLogin, fub_login_password: e.target.value })}
+                          placeholder={fubLogin.has_password ? "••••••••••••" : "Enter password"}
+                        />
+                        <Button type="button" variant="ghost" size="sm" className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent" onClick={() => setShowPassword(!showPassword)}>
+                          {showPassword ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {fubLogin.has_password ? "Leave blank to keep existing, or enter new" : "Your FUB account password"}
                       </p>
-                    </AlertDescription>
-                  </Alert>
-
-                  <div className="flex gap-2 pt-4">
-                    <Button
-                      onClick={handleSaveFubLogin}
-                      disabled={isSavingFubLogin || !fubLogin.fub_login_email}
-                    >
-                      {isSavingFubLogin ? (
-                        <>
-                          <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        'Save Credentials'
-                      )}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={handleTestFubLogin}
-                      disabled={isTestingFubLogin || (!fubLogin.has_password && !fubLogin.fub_login_password)}
-                    >
-                      {isTestingFubLogin ? (
-                        <>
-                          <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                          Testing...
-                        </>
-                      ) : (
-                        <>
-                          <Send className="mr-2 h-4 w-4" />
-                          Test Login
-                        </>
-                      )}
-                    </Button>
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <Alert>
+                      <Key className="h-4 w-4" />
+                      <AlertDescription>
+                        <strong>Why is this needed?</strong>
+                        <p className="mt-1 text-sm">
+                          FUB's API doesn't send SMS - we use browser automation to send real texts through the FUB web interface.
+                        </p>
+                      </AlertDescription>
+                    </Alert>
+                    <div className="flex gap-2 pt-4">
+                      <Button onClick={handleSaveFubLogin} disabled={isSavingFubLogin || !fubLogin.fub_login_email}>
+                        {isSavingFubLogin ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Saving...</> : 'Save FUB Login'}
+                      </Button>
+                      <Button variant="outline" onClick={handleTestFubLogin} disabled={isTestingFubLogin || (!fubLogin.has_password && !fubLogin.fub_login_password)}>
+                        {isTestingFubLogin ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Testing...</> : <><Send className="mr-2 h-4 w-4" />Test Login</>}
+                      </Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
       </Tabs>
 

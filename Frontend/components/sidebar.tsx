@@ -248,11 +248,6 @@ function AppSidebar({ role }: { role: "admin" | "agent" }) {
       icon: Building2,
     },
     {
-      title: "System Settings",
-      href: "/admin/system",
-      icon: Settings,
-    },
-    {
       title: "Profile Settings",
       href: "/admin/profile",
       icon: User2,

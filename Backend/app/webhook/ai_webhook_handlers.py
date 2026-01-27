@@ -206,7 +206,35 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             logger.warning(f"Could not resolve organization/user for person {person_id}")
             return
 
-        # Check per-lead AI settings first (most specific)
+        # ============================================
+        # AI ENABLE CHECK - TWO-LEVEL OPT-IN MODEL
+        # ============================================
+        # Level 1: Global switch (master kill switch)
+        # Level 2: Per-lead setting (must be explicitly enabled)
+        #
+        # Logic:
+        # - Global OFF → System disabled, nothing works
+        # - Global ON + Per-lead not enabled → AI does NOT respond
+        # - Global ON + Per-lead enabled → AI responds
+        # ============================================
+
+        # First, check the GLOBAL switch (master kill switch)
+        from app.ai_agent.settings_service import get_agent_settings
+        ai_settings = await get_agent_settings(supabase, organization_id, user_id)
+
+        if not ai_settings.is_enabled:
+            logger.info(f"Skipping person {person_id} - AI system is GLOBALLY DISABLED")
+            await log_ai_message(
+                conversation_id=None,
+                fub_person_id=person_id,
+                direction="inbound",
+                channel="sms",
+                message_content=message_content,
+                extracted_data={"ai_disabled": True, "reason": "AI system globally disabled"},
+            )
+            return
+
+        # Global is ON - now check per-lead setting (OPT-IN model)
         from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
         lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
         per_lead_enabled = await lead_ai_service.is_ai_enabled_for_lead(
@@ -215,37 +243,22 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             user_id=user_id,
         )
 
-        # If per-lead setting exists, use it
-        if per_lead_enabled is not None:
-            if not per_lead_enabled:
-                logger.info(f"Skipping person {person_id} - AI disabled for this specific lead")
-                await log_ai_message(
-                    conversation_id=None,
-                    fub_person_id=person_id,
-                    direction="inbound",
-                    channel="sms",
-                    message_content=message_content,
-                    extracted_data={"ai_disabled": True, "reason": "AI disabled for this lead"},
-                )
-                return
-            logger.info(f"AI enabled for this specific lead {person_id}")
-        else:
-            # No per-lead setting - check global AI settings
-            from app.ai_agent.settings_service import get_agent_settings
-            ai_settings = await get_agent_settings(supabase, organization_id, user_id)
+        # OPT-IN MODEL: Lead must be EXPLICITLY enabled
+        # If per_lead_enabled is None (no setting) or False, AI does NOT respond
+        if per_lead_enabled is not True:
+            reason = "AI not enabled for this lead" if per_lead_enabled is None else "AI explicitly disabled for this lead"
+            logger.info(f"Skipping person {person_id} - {reason} (per_lead_enabled={per_lead_enabled})")
+            await log_ai_message(
+                conversation_id=None,
+                fub_person_id=person_id,
+                direction="inbound",
+                channel="sms",
+                message_content=message_content,
+                extracted_data={"ai_disabled": True, "reason": reason},
+            )
+            return
 
-            if not ai_settings.is_enabled:
-                logger.info(f"Skipping person {person_id} - AI auto-respond is disabled globally for this user/org")
-                await log_ai_message(
-                    conversation_id=None,
-                    fub_person_id=person_id,
-                    direction="inbound",
-                    channel="sms",
-                    message_content=message_content,
-                    extracted_data={"ai_disabled": True, "reason": "AI auto-respond disabled globally"},
-                )
-                return
-            logger.info(f"AI auto-respond enabled globally for user/org - processing message for person {person_id}")
+        logger.info(f"AI ENABLED for lead {person_id} - global=ON, per_lead=True")
 
         # Fetch person data for profile building
         fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
@@ -1122,10 +1135,35 @@ async def process_new_lead(webhook_data: Dict[str, Any], resource_uri: str, reso
             logger.warning(f"Could not resolve organization/user for new lead {person_id}")
             return
 
-        # Check if AI agent is enabled
+        # Check if AI agent is enabled (global switch)
         settings = await get_ai_agent_settings(organization_id, user_id)
         if not settings or not settings.get('is_enabled', True):
             logger.info(f"AI agent not enabled for organization {organization_id}")
+            return
+
+        # Check if auto_enable_new_leads is set
+        auto_enable_new_leads = settings.get('auto_enable_new_leads', False)
+
+        if auto_enable_new_leads:
+            # Auto-enable AI for this new lead
+            from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+            lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
+
+            success = await lead_ai_service.enable_ai_for_lead(
+                fub_person_id=person_id,
+                organization_id=organization_id,
+                user_id=user_id,
+                reason='auto_enable_new_leads',
+                enabled_by='system',
+            )
+
+            if success:
+                logger.info(f"AI auto-enabled for new lead {person_id} (auto_enable_new_leads=True)")
+            else:
+                logger.warning(f"Failed to auto-enable AI for new lead {person_id}")
+        else:
+            # Auto-enable is OFF - new leads require manual opt-in
+            logger.info(f"Skipping new lead {person_id} - auto_enable_new_leads is OFF (requires manual opt-in via FUB tag)")
             return
 
         # Check compliance
@@ -1453,6 +1491,7 @@ async def get_ai_agent_settings(organization_id: str, user_id: str) -> Optional[
         # Return defaults
         return {
             "is_enabled": True,
+            "auto_enable_new_leads": False,
             "response_delay_seconds": 30,
             "working_hours_start": "08:00",
             "working_hours_end": "20:00",

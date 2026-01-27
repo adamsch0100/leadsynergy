@@ -76,6 +76,7 @@ def get_settings():
             "settings": {
                 "agent_name": settings.agent_name,
                 "brokerage_name": settings.brokerage_name,
+                "team_members": settings.team_members,
                 "personality_tone": settings.personality_tone,
                 "response_delay_seconds": settings.response_delay_seconds,
                 "max_response_length": settings.max_response_length,
@@ -85,6 +86,7 @@ def get_settings():
                 "auto_handoff_score": settings.auto_handoff_score,
                 "max_ai_messages_per_lead": settings.max_ai_messages_per_lead,
                 "is_enabled": settings.is_enabled,
+                "auto_enable_new_leads": settings.auto_enable_new_leads,
                 "qualification_questions": settings.qualification_questions,
                 "custom_scripts": settings.custom_scripts,
                 # Re-engagement settings
@@ -93,6 +95,12 @@ def get_settings():
                 "re_engagement_max_attempts": settings.re_engagement_max_attempts,
                 "long_term_nurture_after_days": settings.long_term_nurture_after_days,
                 "re_engagement_channels": settings.re_engagement_channels,
+                # LLM Model settings
+                "llm_provider": settings.llm_provider,
+                "llm_model": settings.llm_model,
+                "llm_model_fallback": settings.llm_model_fallback,
+                # Agent notification
+                "notification_fub_person_id": settings.notification_fub_person_id,
             }
         })
 
@@ -137,8 +145,9 @@ def update_settings():
         if 'brokerage_name' in data:
             current_settings.brokerage_name = data['brokerage_name']
         if 'personality_tone' in data:
-            if data['personality_tone'] not in ['friendly_casual', 'professional', 'energetic']:
-                return jsonify({"error": "Invalid personality_tone. Must be: friendly_casual, professional, or energetic"}), 400
+            valid_tones = ['friendly_casual', 'professional', 'energetic', 'enthusiastic', 'consultative']
+            if data['personality_tone'] not in valid_tones:
+                return jsonify({"error": f"Invalid personality_tone. Must be one of: {', '.join(valid_tones)}"}), 400
             current_settings.personality_tone = data['personality_tone']
         if 'response_delay_seconds' in data:
             current_settings.response_delay_seconds = int(data['response_delay_seconds'])
@@ -158,6 +167,8 @@ def update_settings():
             current_settings.max_ai_messages_per_lead = int(data['max_ai_messages_per_lead'])
         if 'is_enabled' in data:
             current_settings.is_enabled = bool(data['is_enabled'])
+        if 'auto_enable_new_leads' in data:
+            current_settings.auto_enable_new_leads = bool(data['auto_enable_new_leads'])
         if 'qualification_questions' in data:
             current_settings.qualification_questions = data['qualification_questions']
         if 'custom_scripts' in data:
@@ -173,6 +184,19 @@ def update_settings():
             current_settings.long_term_nurture_after_days = int(data['long_term_nurture_after_days'])
         if 're_engagement_channels' in data:
             current_settings.re_engagement_channels = data['re_engagement_channels']
+        # Team members
+        if 'team_members' in data:
+            current_settings.team_members = data['team_members']
+        # LLM Model settings
+        if 'llm_provider' in data:
+            current_settings.llm_provider = data['llm_provider']
+        if 'llm_model' in data:
+            current_settings.llm_model = data['llm_model']
+        if 'llm_model_fallback' in data:
+            current_settings.llm_model_fallback = data['llm_model_fallback']
+        # Agent notification
+        if 'notification_fub_person_id' in data:
+            current_settings.notification_fub_person_id = int(data['notification_fub_person_id']) if data['notification_fub_person_id'] else None
 
         # Save settings
         success = run_async(service.save_settings(current_settings, user_id, org_id))

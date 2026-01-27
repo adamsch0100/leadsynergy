@@ -958,6 +958,60 @@ MIGRATIONS = [
                 EXECUTE FUNCTION update_ai_conversation_timestamp();
             """,
         ]
+    },
+    {
+        'version': '20250127_fix_personality_tone_constraint',
+        'description': 'Fix personality_tone constraint to allow all frontend options and add notification_fub_person_id',
+        'sql_statements': [
+            # Drop the old restrictive constraint
+            """
+            DO $$ BEGIN
+                ALTER TABLE ai_agent_settings
+                    DROP CONSTRAINT IF EXISTS ai_agent_settings_tone_check;
+            EXCEPTION
+                WHEN undefined_object THEN null;
+            END $$;
+            """,
+            # Add new constraint with all valid personality tones
+            """
+            DO $$ BEGIN
+                ALTER TABLE ai_agent_settings
+                    ADD CONSTRAINT ai_agent_settings_tone_check
+                    CHECK (personality_tone IS NULL OR personality_tone IN (
+                        'friendly_casual', 'professional', 'energetic', 'enthusiastic', 'consultative'
+                    ));
+            EXCEPTION
+                WHEN duplicate_object THEN null;
+            END $$;
+            """,
+            # Add notification_fub_person_id column if not exists
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS notification_fub_person_id BIGINT;
+            """,
+            # Add team_members column if not exists
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS team_members VARCHAR(255);
+            """,
+            # Add max_response_length column if not exists
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS max_response_length INTEGER DEFAULT 160;
+            """,
+            # Add LLM model columns if not exist
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS llm_provider VARCHAR(50) DEFAULT 'openrouter',
+                ADD COLUMN IF NOT EXISTS llm_model VARCHAR(100) DEFAULT 'xiaomi/mimo-v2-flash:free',
+                ADD COLUMN IF NOT EXISTS llm_model_fallback VARCHAR(100) DEFAULT 'deepseek/deepseek-r1-0528:free';
+            """,
+            # Add auto_enable_new_leads column - when enabled, new leads automatically get AI enabled
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS auto_enable_new_leads BOOLEAN DEFAULT false;
+            """,
+        ]
     }
 ]
 
