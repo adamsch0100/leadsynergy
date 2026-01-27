@@ -71,18 +71,45 @@ def get_friendly_source_name(source: str) -> str:
 
 # Fast-path keyword patterns (obvious triggers - no AI needed)
 HANDOFF_KEYWORDS = {
-    # Scheduling intent
+    # =========================================================================
+    # BUYER TRIGGERS
+    # =========================================================================
+    # Scheduling intent - buyer wants to see a property
     "schedule_showing": [
         r"schedule.*showing", r"set up a showing", r"book a showing",
         r"schedule a tour", r"when can (i|we) see",
     ],
+    # Explicit offer intent - buyer ready to make an offer
+    "price_negotiation": [
+        r"make an offer", r"submit an offer", r"ready to offer", r"want to (bid|offer)",
+    ],
+
+    # =========================================================================
+    # SELLER TRIGGERS
+    # =========================================================================
+    # Listing intent - seller wants to list their home
+    "ready_to_list": [
+        r"(ready to|want to|need to) (list|sell)",
+        r"list my (home|house|property|place)",
+        r"put.*(home|house|property) on (the )?market",
+        r"when can (we|i|you) list",
+        r"start the listing process",
+    ],
+    # Valuation request - seller wants to know home value
+    "home_valuation": [
+        r"what('s| is) my (home|house|property) worth",
+        r"home (value|valuation|appraisal)",
+        r"how much (is|can|could) my (home|house|property)",
+        r"(get|want|need) a (cma|comparative market analysis)",
+        r"what (can|could|would) (i|we) (get|sell|list) for",
+    ],
+
+    # =========================================================================
+    # GENERAL TRIGGERS
+    # =========================================================================
     # Explicit call request
     "wants_call": [
         r"call me", r"give me a call", r"can you call", r"please call",
-    ],
-    # Explicit offer intent
-    "price_negotiation": [
-        r"make an offer", r"submit an offer", r"ready to offer", r"want to (bid|offer)",
     ],
 }
 
@@ -105,25 +132,54 @@ STRONG BUYING SIGNALS (any of these = likely hot lead):
 - Asking about availability / move-in dates
 - Discussing contingencies, inspections, or offer terms
 
+STRONG SELLING SIGNALS (any of these = likely hot seller):
+- Ready to list / put home on market
+- Asking about home value / what they can get
+- Asking about listing process / how it works
+- Already started packing / preparing to move
+- Mentioning they've found their next home
+- Job relocation / transfer driving timeline
+- Life event (divorce, death, estate, downsizing)
+- Asking about staging, repairs, or prep work
+- Discussing timing of sale vs purchase
+- Comparing agent commission / services
+- Asking about marketing plan / how you'll sell it
+- "Ready to get this done" / "Need to move fast"
+- Mentioning they've been thinking about selling
+- Asking about market conditions for sellers
+- Questions about net proceeds / what they'll walk away with
+
 MODERATE SIGNALS (consider handoff if multiple present):
 - Increased response frequency / engagement
 - Longer, more detailed messages
-- Asking about specific neighborhoods or schools
+- Asking about specific neighborhoods or schools (buyer)
 - Budget/price discussions getting specific
-- Mentioning they've been pre-approved
+- Mentioning they've been pre-approved (buyer)
 - Referencing other agents they're talking to
-- Emotional language about their search
+- Emotional language about their search/sale
+- Asking about timeline / how long things take
+- Questions about the process
 """
 
 # Acknowledgment messages for each handoff type
 HANDOFF_ACKNOWLEDGMENTS = {
+    # Buyer triggers
     "schedule_showing": "I'd love to get you in to see that property! Let me connect you with {agent_name} to find a time that works for you. They'll reach out shortly!",
+    "price_negotiation": "This is exciting! Making an offer is a big step. Let me get {agent_name} involved - they're the expert on negotiations.",
+
+    # Seller triggers
+    "ready_to_list": "That's exciting - sounds like you're ready to get your home on the market! Let me connect you with {agent_name} who can walk you through the listing process. They'll reach out shortly!",
+    "home_valuation": "Great question! {agent_name} can provide a detailed analysis of your home's value based on recent sales in your area. They'll reach out to set up a time to discuss.",
+
+    # General triggers
     "wants_call": "Absolutely, a call is a great idea! I'll have {agent_name} give you a call. What's the best time to reach you?",
     "urgent_timeline": "I understand time is of the essence! Let me get {agent_name} on this right away - they'll reach out within the hour.",
     "complex_question": "Great question! That's something {agent_name} can explain better than I can. Let me connect you with them.",
-    "price_negotiation": "This is exciting! Making an offer is a big step. Let me get {agent_name} involved - they're the expert on negotiations.",
+
+    # AI-detected hot leads
     "hot_lead": "This is exciting - sounds like you're ready to take the next step! Let me get {agent_name} involved so we can make this happen. They'll reach out shortly!",
     "high_intent": "I can tell you're serious about this - that's great! Let me connect you with {agent_name} who can give you their full attention. They'll be in touch soon!",
+    "hot_seller": "Sounds like you're ready to make a move! Let me get {agent_name} involved to discuss your options. They'll reach out shortly!",
 }
 
 
@@ -225,7 +281,7 @@ def _quick_intent_score(message: str) -> int:
     score = 0
     msg_lower = message.lower()
 
-    # Strong signals (+25 each)
+    # Strong signals (+25 each) - BUYER signals
     strong_signals = [
         r"ready to (move forward|get started|buy|make an offer|act)",
         r"let'?s do (this|it)",
@@ -240,6 +296,15 @@ def _quick_intent_score(message: str) -> int:
         r"(i'?m|we'?re) (pre-?approved|ready|serious)",
         r"(found|saw|love) (a|the|this) (house|home|property|place)",
         r"(can'?t|don'?t want to) (wait|lose|miss) (this|it)",
+        # Strong signals - SELLER signals
+        r"(ready to|want to|need to) (list|sell)",
+        r"(put|get) .*(home|house|property) on (the )?market",
+        r"(when|how soon) can (we|i|you) list",
+        r"(found|buying|closing on) (a|our|my) (new|next) (home|house|place)",
+        r"(already|started) (packing|moving|preparing)",
+        r"(job|work) (relocation|transfer|moving)",
+        r"(need|have) to sell (fast|quickly|asap|immediately)",
+        r"(got|received|have) (a|an) (offer|transfer|new job)",
     ]
 
     for pattern in strong_signals:
@@ -248,7 +313,7 @@ def _quick_intent_score(message: str) -> int:
             if score >= 70:
                 return min(score, 100)
 
-    # Moderate signals (+15 each)
+    # Moderate signals (+15 each) - BUYER signals
     moderate_signals = [
         r"(very|really|super) (interested|excited|serious)",
         r"(want|need|looking) to (see|tour|visit)",
@@ -260,6 +325,16 @@ def _quick_intent_score(message: str) -> int:
         r"(down payment|financing|mortgage|loan) (ready|approved|in place)",
         r"(comparing|deciding between|narrowed down)",
         r"(specific|particular) (house|property|address|listing)",
+        # Moderate signals - SELLER signals
+        r"what('s| is) my (home|house|property) worth",
+        r"(cma|comparative market analysis)",
+        r"(listing|selling) process",
+        r"how (do|should) (i|we) (prepare|get ready) to (sell|list)",
+        r"(thinking about|considering) (selling|listing)",
+        r"(staging|repairs|updates) (before|to) (sell|list)",
+        r"(divorce|estate|downsizing|upsizing)",
+        r"(how long|how much time) to sell",
+        r"(what|how much) (can|could|would) (i|we) (get|sell|list) for",
     ]
 
     for pattern in moderate_signals:
