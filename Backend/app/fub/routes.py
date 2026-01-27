@@ -1159,9 +1159,6 @@ def toggle_ai_agent():
                     lead_ai_service.disable_ai_for_lead(
                         fub_person_id=str(fub_person_id),
                         organization_id=organization_id or "default",
-                        user_id=user_id,
-                        reason="embedded_app_toggle",
-                        disabled_by=user_id or "embedded_app",
                     )
                 )
         finally:
