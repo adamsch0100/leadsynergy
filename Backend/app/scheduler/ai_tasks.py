@@ -90,6 +90,44 @@ def send_scheduled_message(
                 _mark_message_failed(supabase, message_id, f"Compliance: {compliance_result.reason}")
                 return {"success": False, "error": compliance_result.reason}
 
+        # ====================================================================
+        # DEDUPLICATION CHECK: Did lead respond since this message was scheduled?
+        # Prevents sending automated messages when lead is in active conversation
+        # ====================================================================
+        try:
+            # Check if the scheduled message was cancelled (race condition protection)
+            msg_result = supabase.table("scheduled_messages").select("status", "scheduled_for").eq(
+                "id", message_id
+            ).single().execute()
+
+            if msg_result.data and msg_result.data.get("status") != "pending":
+                logger.info(f"[DEDUP] Message {message_id} already {msg_result.data['status']}, skipping")
+                return {"success": False, "skipped": True, "reason": "already_processed"}
+
+            # Check if lead responded recently (within last 5 minutes)
+            # This catches race conditions where lead responds just as message fires
+            conv_result = supabase.table("ai_conversations").select(
+                "last_lead_response_at"
+            ).eq("fub_person_id", fub_person_id).single().execute()
+
+            if conv_result.data and conv_result.data.get("last_lead_response_at"):
+                last_response = datetime.fromisoformat(
+                    conv_result.data["last_lead_response_at"].replace('Z', '+00:00')
+                )
+                minutes_since_response = (datetime.utcnow() - last_response.replace(tzinfo=None)).total_seconds() / 60
+
+                if minutes_since_response < 5:
+                    logger.info(
+                        f"[DEDUP] Lead {fub_person_id} responded {minutes_since_response:.1f} min ago, "
+                        f"skipping scheduled message {message_id}"
+                    )
+                    _mark_message_skipped(supabase, message_id, "lead_responded_recently")
+                    return {"success": False, "skipped": True, "reason": "lead_responded_recently"}
+
+        except Exception as dedup_error:
+            # Don't block sending if dedup check fails - just log and continue
+            logger.warning(f"[DEDUP] Check failed (continuing): {dedup_error}")
+
         # Render template if provided
         final_message = message_content
         if template_id and not message_content:
@@ -1047,6 +1085,15 @@ def _mark_message_failed(supabase, message_id: str, error: str):
         "status": "failed",
         "error_message": error,
         "failed_at": datetime.utcnow().isoformat(),
+    }).eq("id", message_id).execute()
+
+
+def _mark_message_skipped(supabase, message_id: str, reason: str):
+    """Mark a scheduled message as skipped (deduplication)."""
+    supabase.table("scheduled_messages").update({
+        "status": "skipped",
+        "skipped_reason": reason,
+        "skipped_at": datetime.utcnow().isoformat(),
     }).eq("id", message_id).execute()
 
 

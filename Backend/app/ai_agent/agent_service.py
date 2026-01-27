@@ -807,18 +807,74 @@ class AIAgentService:
         lead_profile: LeadProfile,
         fub_person_id: int,
     ) -> AgentResponse:
-        """Handle opt-out request."""
-        # Record opt-out
+        """
+        Handle opt-out request - CRITICAL compliance function.
+
+        When a lead says STOP/unsubscribe/remove me:
+        1. Record opt-out in compliance database
+        2. Cancel ALL pending follow-ups immediately
+        3. Update FUB stage to Dead
+        4. Send confirmation message
+        5. Never contact them again
+        """
+        logger.info(f"[OPT-OUT] Processing opt-out for person {fub_person_id}")
+
+        # 1. Record opt-out in compliance database
         await self.compliance_checker.record_opt_out(
             phone_number=lead_profile.phone,
             fub_person_id=fub_person_id,
+            reason="Lead requested opt-out (STOP keyword)",
         )
 
+        # 2. Cancel ALL pending follow-ups immediately
+        try:
+            from app.scheduler.ai_tasks import cancel_lead_sequences
+            cancel_lead_sequences.delay(
+                fub_person_id=fub_person_id,
+                reason="opt_out_requested"
+            )
+            logger.info(f"[OPT-OUT] Cancelled all pending follow-ups for person {fub_person_id}")
+        except Exception as e:
+            logger.error(f"[OPT-OUT] Error cancelling sequences: {e}")
+
+        # 3. Update FUB stage to Dead and add opt-out tag
+        try:
+            from app.database.fub_api_client import FUBApiClient
+            fub = FUBApiClient()
+
+            # Update stage to Dead
+            fub.update_person(fub_person_id, {"stage": "Dead"})
+
+            # Add opt-out tag for tracking
+            fub.add_tag(fub_person_id, "ai_opted_out")
+
+            # Add note explaining the opt-out
+            fub.add_note(
+                person_id=fub_person_id,
+                note_content="<b>Lead Opted Out</b><br><br>The lead requested to stop receiving messages. All automated follow-ups have been cancelled. Do not contact unless they reach out first.",
+            )
+
+            logger.info(f"[OPT-OUT] Updated FUB stage to Dead for person {fub_person_id}")
+        except Exception as e:
+            logger.error(f"[OPT-OUT] Error updating FUB: {e}")
+
+        # 4. Update conversation state
+        if self.supabase:
+            try:
+                self.supabase.table("ai_conversations").update({
+                    "state": "opted_out",
+                    "opted_out_at": datetime.utcnow().isoformat(),
+                }).eq("fub_person_id", fub_person_id).execute()
+            except Exception as e:
+                logger.error(f"[OPT-OUT] Error updating conversation state: {e}")
+
+        # 5. Send confirmation message
         response.response_text = "You've been unsubscribed. Thanks, and best of luck with your search!"
         response.result = ProcessingResult.SUCCESS
         response.detected_intent = Intent.OPT_OUT.value
         response.template_used = "opt_out"
 
+        logger.info(f"[OPT-OUT] Opt-out complete for person {fub_person_id}")
         return response
 
     async def _create_handoff_task(
@@ -846,20 +902,38 @@ class AIAgentService:
 
         # Task titles based on trigger type
         task_titles = {
+            # Buyer triggers
             "schedule_showing": "Lead wants to schedule showing",
+            "price_negotiation": "Lead ready to make offer",
+            # Seller triggers
+            "ready_to_list": "SELLER ready to list their home",
+            "home_valuation": "Seller wants home valuation/CMA",
+            "hot_seller": "HOT SELLER - Ready to list",
+            # General triggers
             "wants_call": "Lead requested phone call",
             "urgent_timeline": "URGENT: Lead has time-sensitive needs",
             "complex_question": "Lead has question requiring expertise",
-            "price_negotiation": "Lead ready to make offer",
+            # AI-detected hot leads
+            "hot_lead": "HOT LEAD - AI detected high buying intent",
+            "high_intent": "High intent lead - ready to act",
         }
 
         # Task priorities - some are more urgent than others
         task_priorities = {
+            # Buyer triggers
             "schedule_showing": "high",
+            "price_negotiation": "high",
+            # Seller triggers
+            "ready_to_list": "high",
+            "home_valuation": "high",
+            "hot_seller": "high",
+            # General triggers
             "wants_call": "high",
             "urgent_timeline": "high",
             "complex_question": "medium",
-            "price_negotiation": "high",
+            # AI-detected hot leads
+            "hot_lead": "high",
+            "high_intent": "high",
         }
 
         title = task_titles.get(trigger_type, f"AI Handoff: {trigger_type}")
