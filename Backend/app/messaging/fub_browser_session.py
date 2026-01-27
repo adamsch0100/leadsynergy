@@ -482,16 +482,85 @@ class FUBBrowserSession:
         ]
 
         # Step 1: Click Messages tab to open the messaging panel
+        # Use multiple approaches to ensure we click the right element
+        messages_clicked = False
+
+        # Approach 1: Try using page.locator with text matching (most reliable)
         try:
-            messages_tab = await self._find_element_by_selectors(messages_tab_selectors)
-            if messages_tab:
-                logger.info("Found Messages tab, clicking it")
-                await messages_tab.click()
-                await self._human_delay(1, 2)  # Wait for panel to load
-            else:
-                logger.info("Messages tab not found, it may already be open")
+            logger.info("Trying to click Messages tab using locator...")
+            messages_locator = self.page.locator('text="Messages"').first
+            if await messages_locator.count() > 0:
+                await messages_locator.click()
+                messages_clicked = True
+                logger.info("Clicked Messages tab using text locator")
+                await self._human_delay(1.5, 2.5)  # Wait for panel to load
         except Exception as e:
-            logger.debug(f"Messages tab click failed: {e}")
+            logger.debug(f"Locator approach failed: {e}")
+
+        # Approach 2: Try clicking by the bubble icon parent
+        if not messages_clicked:
+            try:
+                logger.info("Trying to click Messages tab using bubble icon...")
+                bubble_icon = await self.page.query_selector('.BaseIcon-bubble')
+                if bubble_icon:
+                    # Click the parent element which should be the tab
+                    parent = await bubble_icon.evaluate_handle('el => el.closest("div[class*=BoxTabPadding]") || el.parentElement.parentElement')
+                    if parent:
+                        await parent.as_element().click()
+                        messages_clicked = True
+                        logger.info("Clicked Messages tab via bubble icon parent")
+                        await self._human_delay(1.5, 2.5)
+            except Exception as e:
+                logger.debug(f"Bubble icon approach failed: {e}")
+
+        # Approach 3: Use JavaScript to click
+        if not messages_clicked:
+            try:
+                logger.info("Trying to click Messages tab using JavaScript...")
+                clicked = await self.page.evaluate('''() => {
+                    // Find all elements containing "Messages" text
+                    const elements = document.querySelectorAll('*');
+                    for (const el of elements) {
+                        if (el.textContent && el.textContent.trim() === 'Messages' &&
+                            el.closest('[class*="BoxTabPadding"]')) {
+                            el.closest('[class*="BoxTabPadding"]').click();
+                            return true;
+                        }
+                    }
+                    // Fallback: find by bubble icon
+                    const bubble = document.querySelector('.BaseIcon-bubble');
+                    if (bubble) {
+                        const tab = bubble.closest('div');
+                        if (tab) {
+                            tab.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }''')
+                if clicked:
+                    messages_clicked = True
+                    logger.info("Clicked Messages tab using JavaScript")
+                    await self._human_delay(1.5, 2.5)
+            except Exception as e:
+                logger.debug(f"JavaScript approach failed: {e}")
+
+        # Approach 4: Original selector approach as fallback
+        if not messages_clicked:
+            try:
+                messages_tab = await self._find_element_by_selectors(messages_tab_selectors)
+                if messages_tab:
+                    logger.info("Found Messages tab using selectors, clicking it")
+                    await messages_tab.click()
+                    messages_clicked = True
+                    await self._human_delay(1.5, 2.5)
+                else:
+                    logger.warning("Messages tab not found with any method")
+            except Exception as e:
+                logger.debug(f"Selector approach failed: {e}")
+
+        if not messages_clicked:
+            logger.warning("Could not click Messages tab - compose area may not be visible")
 
         # Take another screenshot after clicking Messages tab
         await self.page.screenshot(path=os.path.join(debug_dir, f"debug_after_messages_tab_{person_id}.png"))
