@@ -241,6 +241,21 @@ class MessageType(Enum):
     RESUME_OBJECTION = "resume_objection"             # Address lingering concern
     RESUME_GENERAL = "resume_general"                 # General check-in with context
 
+    # ============================================================================
+    # LONG-TERM NURTURE MESSAGE TYPES (30+ days)
+    # Varied content to keep leads engaged over months without being repetitive
+    # Philosophy: Provide VALUE every single time, never just "checking in"
+    # ============================================================================
+    MARKET_UPDATE = "market_update"                   # Monthly market stats for their area
+    SEASONAL_CONTENT = "seasonal_content"             # Seasonal tips (spring market, winter prep)
+    NEW_LISTING_ALERT = "new_listing_alert"           # "Just saw something that might fit..."
+    REQUALIFY_CHECK = "requalify_check"               # "Has anything changed?" (90/180 day)
+    RATE_ALERT = "rate_alert"                         # Interest rate change notification
+    NEIGHBORHOOD_SPOTLIGHT = "neighborhood_spotlight" # Highlight area they showed interest in
+    SUCCESS_STORY = "success_story"                   # Recent client success in their area
+    MARKET_OPPORTUNITY = "market_opportunity"         # "Great time to buy/sell because..."
+    ANNIVERSARY_CHECKIN = "anniversary_checkin"       # "It's been X months..."
+
 
 @dataclass
 class FollowUpStep:
@@ -538,45 +553,204 @@ class FollowUpManager:
         ),
     ]
 
-    # Long-term nurture (monthly touchpoints)
-    # For leads with 6+ month timeline - stay top of mind without pressure
-    # UPDATED: Alternates SMS and Email for multi-channel nurture
+    # ==========================================================================
+    # LONG-TERM NURTURE SEQUENCE (Months 1-12+)
+    # ==========================================================================
+    # Philosophy: Every message provides VALUE. Never just "checking in."
+    # Varied content keeps leads engaged without feeling spammed.
+    #
+    # Research: 70% of leads buy within 12 months, but often not from
+    # the first agent they talked to. The agent who stays in touch WINS.
+    #
+    # Content Types Rotated:
+    # - Market updates (local stats, trends)
+    # - New listing alerts (properties matching their criteria)
+    # - Success stories (social proof)
+    # - Seasonal content (spring market tips, etc.)
+    # - Re-qualification checks (has your situation changed?)
+    # - Rate alerts (when rates drop/rise significantly)
+    # - Neighborhood spotlights (areas they expressed interest in)
+    # ==========================================================================
     SEQUENCE_NURTURE = [
-        # Month 1 - Email with market update
+        # ======================================================================
+        # MONTH 1 (Day 30) - Market Update Email
+        # Lead just finished 7-day intensive with no response
+        # Provide value: local market data they can use
+        # ======================================================================
         FollowUpStep(
             delay_days=30,
             channel="email",
-            message_type=MessageType.MONTHLY_TOUCHPOINT,
+            message_type=MessageType.MARKET_UPDATE,
         ),
-        # Month 2 - SMS check-in
+
+        # ======================================================================
+        # MONTH 1.5 (Day 45) - SMS New Listing Alert
+        # Make them feel like you're actively looking for them
+        # ======================================================================
+        FollowUpStep(
+            delay_days=45,
+            channel="sms",
+            message_type=MessageType.NEW_LISTING_ALERT,
+        ),
+
+        # ======================================================================
+        # MONTH 2 (Day 60) - Email Success Story
+        # Social proof: show you're actively helping people like them
+        # ======================================================================
         FollowUpStep(
             delay_days=60,
+            channel="email",
+            message_type=MessageType.SUCCESS_STORY,
+        ),
+
+        # ======================================================================
+        # MONTH 2.5 (Day 75) - SMS Soft Check-in
+        # Keep it light, offer to help
+        # ======================================================================
+        FollowUpStep(
+            delay_days=75,
             channel="sms",
             message_type=MessageType.GENTLE_FOLLOWUP,
         ),
-        # Month 3 - Email with value
+
+        # ======================================================================
+        # MONTH 3 (Day 90) - Re-qualification Check (EMAIL)
+        # CRITICAL: Has their situation changed? Timeline? Budget?
+        # This often revives leads who didn't respond initially
+        # ======================================================================
         FollowUpStep(
             delay_days=90,
             channel="email",
-            message_type=MessageType.MONTHLY_TOUCHPOINT,
+            message_type=MessageType.REQUALIFY_CHECK,
         ),
-        # Month 4 - SMS
+
+        # ======================================================================
+        # MONTH 4 (Day 120) - SMS Market Opportunity
+        # "Great time to buy/sell because..."
+        # ======================================================================
         FollowUpStep(
             delay_days=120,
             channel="sms",
-            message_type=MessageType.VALUE_ADD,
+            message_type=MessageType.MARKET_OPPORTUNITY,
         ),
-        # Month 5 - Email
+
+        # ======================================================================
+        # MONTH 4.5 (Day 135) - Email Neighborhood Spotlight
+        # Deep dive into an area they showed interest in
+        # ======================================================================
+        FollowUpStep(
+            delay_days=135,
+            channel="email",
+            message_type=MessageType.NEIGHBORHOOD_SPOTLIGHT,
+        ),
+
+        # ======================================================================
+        # MONTH 5 (Day 150) - SMS New Listing Alert
+        # Another property that might catch their eye
+        # ======================================================================
         FollowUpStep(
             delay_days=150,
-            channel="email",
-            message_type=MessageType.MONTHLY_TOUCHPOINT,
+            channel="sms",
+            message_type=MessageType.NEW_LISTING_ALERT,
         ),
-        # Month 6 - SMS + offer to re-engage
+
+        # ======================================================================
+        # MONTH 6 (Day 180) - Re-qualification Check #2 (SMS)
+        # 6-month mark - important checkpoint
+        # "It's been a few months - are you still looking?"
+        # ======================================================================
         FollowUpStep(
             delay_days=180,
             channel="sms",
-            message_type=MessageType.GENTLE_FOLLOWUP,
+            message_type=MessageType.REQUALIFY_CHECK,
+        ),
+
+        # ======================================================================
+        # MONTH 7 (Day 210) - Email Market Update
+        # Fresh market data for their area
+        # ======================================================================
+        FollowUpStep(
+            delay_days=210,
+            channel="email",
+            message_type=MessageType.MARKET_UPDATE,
+        ),
+
+        # ======================================================================
+        # MONTH 8 (Day 240) - SMS Seasonal Content
+        # Timely tips based on season
+        # ======================================================================
+        FollowUpStep(
+            delay_days=240,
+            channel="sms",
+            message_type=MessageType.SEASONAL_CONTENT,
+        ),
+
+        # ======================================================================
+        # MONTH 9 (Day 270) - Email Success Story
+        # Another social proof touchpoint
+        # ======================================================================
+        FollowUpStep(
+            delay_days=270,
+            channel="email",
+            message_type=MessageType.SUCCESS_STORY,
+        ),
+
+        # ======================================================================
+        # MONTH 10 (Day 300) - SMS Value Add
+        # General value, keep the door open
+        # ======================================================================
+        FollowUpStep(
+            delay_days=300,
+            channel="sms",
+            message_type=MessageType.VALUE_ADD,
+        ),
+
+        # ======================================================================
+        # MONTH 11 (Day 330) - Email Market Opportunity
+        # Why now might be a good time
+        # ======================================================================
+        FollowUpStep(
+            delay_days=330,
+            channel="email",
+            message_type=MessageType.MARKET_OPPORTUNITY,
+        ),
+
+        # ======================================================================
+        # MONTH 12 (Day 365) - Anniversary Check-in (EMAIL)
+        # "It's been a year since we connected..."
+        # Often triggers response from leads who ARE ready now
+        # ======================================================================
+        FollowUpStep(
+            delay_days=365,
+            channel="email",
+            message_type=MessageType.ANNIVERSARY_CHECKIN,
+        ),
+    ]
+
+    # ==========================================================================
+    # YEAR 2+ ANNUAL NURTURE (for leads still not converted after Year 1)
+    # Quarterly touchpoints to stay top of mind
+    # ==========================================================================
+    SEQUENCE_ANNUAL = [
+        FollowUpStep(
+            delay_days=90,   # Q1 - relative to when this sequence starts
+            channel="email",
+            message_type=MessageType.MARKET_UPDATE,
+        ),
+        FollowUpStep(
+            delay_days=180,  # Q2
+            channel="sms",
+            message_type=MessageType.REQUALIFY_CHECK,
+        ),
+        FollowUpStep(
+            delay_days=270,  # Q3
+            channel="email",
+            message_type=MessageType.SUCCESS_STORY,
+        ),
+        FollowUpStep(
+            delay_days=365,  # Q4 / Anniversary
+            channel="email",
+            message_type=MessageType.ANNIVERSARY_CHECKIN,
         ),
     ]
 
@@ -739,6 +913,64 @@ class FollowUpManager:
             "Hey {first_name}! Wanted to see if there's anything I can do to help. Send listings? Answer questions? Just let me know!",
             "{first_name}, thinking of you! If you're still looking in {area}, I'd love to help. Any questions I can answer?",
         ],
+
+        # ======================================================================
+        # LONG-TERM NURTURE TEMPLATES (30+ days)
+        # Every message provides VALUE - never just "checking in"
+        # ======================================================================
+
+        # MARKET_UPDATE - Monthly market stats for their area
+        MessageType.MARKET_UPDATE: [
+            "Subject: {area} Market Update - What's Changed\n\nHey {first_name},\n\nQuick update on what I'm seeing in {area}:\n\n- Homes are selling in about {dom} days on average\n- Prices have {price_trend} about {percent_change}% this month\n- Inventory is {inventory_trend}\n\nWhat this means for you: {market_insight}\n\nIf you want to chat about what this means for your timeline, I'm always here!\n\n{agent_name}\n{agent_phone}",
+        ],
+
+        # NEW_LISTING_ALERT - "Just saw something that might fit..."
+        MessageType.NEW_LISTING_ALERT: [
+            "{first_name}, just saw a new listing in {area} that made me think of you - {bedrooms}BR in a great location. Want me to send you the details?",
+            "Hey {first_name}! A {property_type} just hit the market in {area}. Thought of you immediately. Interested?",
+            "{first_name}, new listing alert! Something just came up in {area} that matches what you were looking for. Want me to send it over?",
+        ],
+
+        # SUCCESS_STORY - Recent client success in their area
+        MessageType.SUCCESS_STORY: [
+            "Subject: Just helped a family find their dream home in {area}\n\nHey {first_name},\n\nQuick success story I wanted to share:\n\nJust helped a family close on a beautiful home in {area}. They were in a similar situation - wanted to {lead_type_action} but weren't sure about timing.\n\nWe found them something that checked all their boxes, and they're thrilled with the result.\n\nWhen you're ready to make your move, I'd love to help you have the same experience. No pressure - just wanted you to know what's possible!\n\nBest,\n{agent_name}",
+        ],
+
+        # REQUALIFY_CHECK - "Has anything changed?" (90/180 day)
+        MessageType.REQUALIFY_CHECK: [
+            "{first_name}, it's been a few months since we connected! I wanted to check in - has anything changed with your home search? Still looking in {area}?",
+            "Hey {first_name}! Just wanted to see if your situation has changed at all. Are you still thinking about {lead_type_action} in {area}? I'm here if you need anything!",
+            "Subject: Quick check-in, {first_name}\n\nHey {first_name},\n\nIt's been a little while since we last talked, and I wanted to check in.\n\nHas anything changed with your plans? Still looking in {area}? Timeline shifted at all?\n\nNo pressure either way - just want to make sure I'm here when you need me!\n\nBest,\n{agent_name}",
+        ],
+
+        # RATE_ALERT - Interest rate change notification
+        MessageType.RATE_ALERT: [
+            "{first_name}, heads up! Interest rates just {rate_direction} to around {current_rate}%. This could affect your buying power. Want me to break down what it means for you?",
+            "Hey {first_name}! Quick rate update - mortgage rates have {rate_direction}. If you've been on the fence, this might be worth discussing. Let me know if you have questions!",
+        ],
+
+        # NEIGHBORHOOD_SPOTLIGHT - Highlight area they showed interest in
+        MessageType.NEIGHBORHOOD_SPOTLIGHT: [
+            "Subject: Why {area} is getting attention right now\n\nHey {first_name},\n\nSince you mentioned interest in {area}, I wanted to share some insider info:\n\n- {neighborhood_fact_1}\n- {neighborhood_fact_2}\n- {neighborhood_fact_3}\n\nIt's a great area, and I've helped several families find homes there recently.\n\nWant me to keep an eye out for new listings in this area specifically? Just let me know!\n\n{agent_name}",
+        ],
+
+        # MARKET_OPPORTUNITY - "Great time to buy/sell because..."
+        MessageType.MARKET_OPPORTUNITY: [
+            "{first_name}, quick thought - the {area} market is {market_condition} right now. Could be a good time to {lead_type_action}. Want to chat about it?",
+            "Hey {first_name}! Seeing some interesting movement in {area}. {market_insight} Might be worth a conversation if you're still thinking about it!",
+        ],
+
+        # SEASONAL_CONTENT - Seasonal tips
+        MessageType.SEASONAL_CONTENT: [
+            "{first_name}, quick tip for {season}: {seasonal_tip}. If you're still thinking about {lead_type_action}, this is good to keep in mind!",
+            "Hey {first_name}! With {season} approaching, here's what I'm seeing in {area}: {seasonal_insight}. Let me know if you have questions!",
+        ],
+
+        # ANNIVERSARY_CHECKIN - "It's been X months..."
+        MessageType.ANNIVERSARY_CHECKIN: [
+            "Subject: It's been a year, {first_name}!\n\nHey {first_name},\n\nCan you believe it's been about a year since we first connected?\n\nI just wanted to reach out and see how things are going. Did you ever find what you were looking for? Or are you still in the market?\n\nEither way, I'm still here if you ever need real estate help. No expiration date on my support!\n\nHope all is well,\n{agent_name}\n{agent_phone}",
+            "Hey {first_name}, it's been about a year since we first talked about {area}! Just wanted to check in. Still looking? Things change - I'm here if you need me!",
+        ],
     }
 
     def __init__(self, supabase_client=None):
@@ -838,20 +1070,35 @@ class FollowUpManager:
             MessageType.VALUE_WITH_CTA,     # Appointment CTA should be personalized
             MessageType.VALUE_ADD_LISTING,  # Property-specific content
             MessageType.STRATEGIC_BREAKUP,  # Break-up message is high-stakes
-            # NEW: All email types should use AI for personalization
+            # All email types should use AI for personalization
             MessageType.EMAIL_WELCOME,      # Day 0 - Full intro needs personalization
             MessageType.EMAIL_VALUE,        # Day 1 - Market insights personalized
             MessageType.EMAIL_MARKET_REPORT,  # Day 3 - Market report personalized
             MessageType.EMAIL_SOCIAL_PROOF,   # Day 5 - Success story personalized
             MessageType.EMAIL_FINAL,          # Day 7 - Final close personalized
             MessageType.HELPFUL_CHECKIN,      # Day 6 - Soft SMS personalized
+            # Long-term nurture types - AI makes these feel personal and current
+            MessageType.MARKET_UPDATE,        # AI can reference current market data
+            MessageType.NEW_LISTING_ALERT,    # AI personalizes to their criteria
+            MessageType.SUCCESS_STORY,        # AI crafts relevant success stories
+            MessageType.REQUALIFY_CHECK,      # AI references their original search
+            MessageType.RATE_ALERT,           # AI contextualizes rate changes
+            MessageType.NEIGHBORHOOD_SPOTLIGHT,  # AI personalizes to their interests
+            MessageType.MARKET_OPPORTUNITY,   # AI crafts timely market insights
+            MessageType.SEASONAL_CONTENT,     # AI makes seasonal content relevant
+            MessageType.ANNIVERSARY_CHECKIN,  # AI references their journey
+            # Smart re-engagement - context-aware, MUST use AI
+            MessageType.RESUME_QUALIFICATION,
+            MessageType.RESUME_SCHEDULING,
+            MessageType.RESUME_OBJECTION,
+            MessageType.RESUME_GENERAL,
         }
 
         # Message types that work well as templates
         template_preferred_types = {
             MessageType.GENTLE_FOLLOWUP,    # Simple check-ins work as templates
             MessageType.SOCIAL_PROOF,       # Social proof can be templated
-            MessageType.MONTHLY_TOUCHPOINT, # Nurture works with templates
+            MessageType.MONTHLY_TOUCHPOINT, # Basic monthly works with templates
             MessageType.RVM_INTRO,          # Voice scripts need consistency
             MessageType.CALL_CHECKIN,       # Call scripts need consistency
         }
@@ -861,8 +1108,8 @@ class FollowUpManager:
         if message_type in template_preferred_types:
             return False
 
-        # Default: use AI for qualification questions
-        return "qualify" in message_type.value.lower()
+        # Default: use AI for qualification questions and anything not explicitly templated
+        return "qualify" in message_type.value.lower() or "email" in message_type.value.lower()
 
     async def schedule_followup_sequence(
         self,
@@ -1488,6 +1735,16 @@ async def generate_followup_message(
         MessageType.RESUME_SCHEDULING: "Resume scheduling. Re-offer appointment times, acknowledge they were busy.",
         MessageType.RESUME_OBJECTION: "Resume after objection. Acknowledge their concern and offer new perspective or information.",
         MessageType.RESUME_GENERAL: "General check-in with context. Reference your previous conversation, don't start from scratch.",
+        # Long-term nurture types (30+ days) - VALUE EVERY TIME
+        MessageType.MARKET_UPDATE: "Monthly market update. Share 2-3 real market stats for their area. Make it useful, not just 'checking in'.",
+        MessageType.NEW_LISTING_ALERT: "New listing alert. Mention a property that matches their criteria. Be specific about why you thought of them.",
+        MessageType.SUCCESS_STORY: "Success story. Share a recent win helping someone similar to them. Make it relatable to their situation.",
+        MessageType.REQUALIFY_CHECK: "Re-qualification check. It's been a while - ask if their situation has changed. Timeline? Budget? Still looking?",
+        MessageType.RATE_ALERT: "Rate alert. Interest rates changed - explain what it means for their buying power or selling timing.",
+        MessageType.NEIGHBORHOOD_SPOTLIGHT: "Neighborhood spotlight. Share insider info about an area they liked. Schools, restaurants, developments.",
+        MessageType.MARKET_OPPORTUNITY: "Market opportunity. Explain why NOW might be good timing for them. Be specific, not generic.",
+        MessageType.SEASONAL_CONTENT: "Seasonal content. Share timely tips based on the season. Spring market? Holiday slowdown? New year fresh start?",
+        MessageType.ANNIVERSARY_CHECKIN: "Anniversary check-in. It's been ~6 months or ~1 year. Warm, reflective, door-always-open message.",
     }.get(message_type, "Follow up naturally.")
 
     # Build conversation context section for smart re-engagement

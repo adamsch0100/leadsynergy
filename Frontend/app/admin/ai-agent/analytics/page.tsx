@@ -27,6 +27,9 @@ import {
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
+import { AIActivityFeed, LeadAIPanel } from "@/components/ai-monitor"
+import { Badge } from "@/components/ui/badge"
+import { ScrollArea } from "@/components/ui/scroll-area"
 
 interface MetricsSummary {
   total_conversations: number
@@ -91,6 +94,10 @@ export default function AIAnalyticsPage() {
   const [dailyMetrics, setDailyMetrics] = useState<DailyMetric[]>([])
   const [abTests, setAbTests] = useState<ABTestResult[]>([])
   const [intents, setIntents] = useState<IntentDistribution[]>([])
+  const [reviewQueue, setReviewQueue] = useState<any[]>([])
+  const [reviewCounts, setReviewCounts] = useState<any>({})
+  const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null)
+  const [isMonitorPanelOpen, setIsMonitorPanelOpen] = useState(false)
 
   // Load user session
   useEffect(() => {
@@ -131,11 +138,33 @@ export default function AIAnalyticsPage() {
     }
   }, [user, period])
 
+  const fetchReviewQueue = useCallback(async () => {
+    if (!user) return
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/ai-monitoring/review-queue`, {
+        headers: { 'X-User-ID': user.id }
+      })
+      const data = await response.json()
+      if (data.success) {
+        setReviewQueue(data.review_queue || [])
+        setReviewCounts(data.counts || {})
+      }
+    } catch (err) {
+      console.error('Failed to fetch review queue:', err)
+    }
+  }, [user])
+
   useEffect(() => {
     if (user) {
       fetchAnalytics()
+      fetchReviewQueue()
     }
-  }, [user, period, fetchAnalytics])
+  }, [user, period, fetchAnalytics, fetchReviewQueue])
+
+  const openLeadMonitor = (personId: number) => {
+    setSelectedPersonId(personId)
+    setIsMonitorPanelOpen(true)
+  }
 
   const MetricCard = ({
     title,
@@ -288,11 +317,132 @@ export default function AIAnalyticsPage() {
 
       <Tabs defaultValue="overview" className="space-y-6">
         <TabsList>
+          <TabsTrigger value="monitor" className="relative">
+            Monitor
+            {reviewCounts.total > 0 && (
+              <Badge variant="destructive" className="ml-1 h-5 px-1.5 text-xs">
+                {reviewCounts.total}
+              </Badge>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="funnel">Conversion Funnel</TabsTrigger>
           <TabsTrigger value="abtests">A/B Tests</TabsTrigger>
           <TabsTrigger value="intents">Intent Analysis</TabsTrigger>
         </TabsList>
+
+        {/* Monitor Tab */}
+        <TabsContent value="monitor" className="space-y-6">
+          {/* Activity Feed */}
+          <AIActivityFeed
+            userId={user?.id}
+            onLeadClick={openLeadMonitor}
+            defaultOpen={true}
+          />
+
+          {/* Review Queue */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5" />
+                Review Queue
+              </CardTitle>
+              <CardDescription>
+                Leads requiring attention: {reviewCounts.escalated || 0} escalated, {reviewCounts.pending_notes || 0} with pending notes
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {reviewQueue.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+                  <CheckCircle2 className="h-8 w-8 mb-2 opacity-50" />
+                  <p>No leads require review</p>
+                  <p className="text-xs mt-1">All AI conversations are running smoothly</p>
+                </div>
+              ) : (
+                <ScrollArea className="h-[300px]">
+                  <div className="space-y-2">
+                    {reviewQueue.map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 cursor-pointer transition-colors"
+                        onClick={() => openLeadMonitor(item.person_id)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-2 h-2 rounded-full ${
+                            item.priority === 'high' ? 'bg-red-500' :
+                            item.priority === 'medium' ? 'bg-yellow-500' : 'bg-gray-400'
+                          }`} />
+                          <div>
+                            <p className="font-medium text-sm">Person #{item.person_id}</p>
+                            <p className="text-xs text-muted-foreground">{item.reason}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={item.type === 'escalated' ? 'destructive' : 'secondary'}>
+                            {item.type === 'escalated' ? 'Escalated' : 'Pending Notes'}
+                          </Badge>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              openLeadMonitor(item.person_id)
+                            }}
+                          >
+                            View
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Quick Stats */}
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-lg bg-red-100 flex items-center justify-center">
+                    <AlertTriangle className="h-5 w-5 text-red-600" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">{reviewCounts.escalated || 0}</p>
+                    <p className="text-xs text-muted-foreground">Escalated</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-lg bg-yellow-100 flex items-center justify-center">
+                    <Clock className="h-5 w-5 text-yellow-600" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">{reviewCounts.pending_notes || 0}</p>
+                    <p className="text-xs text-muted-foreground">Pending Notes</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-lg bg-blue-100 flex items-center justify-center">
+                    <Users className="h-5 w-5 text-blue-600" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">{reviewCounts.total || 0}</p>
+                    <p className="text-xs text-muted-foreground">Total in Queue</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
 
         {/* Overview Tab */}
         <TabsContent value="overview" className="space-y-6">
@@ -555,6 +705,17 @@ export default function AIAnalyticsPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Lead AI Monitor Panel */}
+      <LeadAIPanel
+        personId={selectedPersonId}
+        isOpen={isMonitorPanelOpen}
+        onClose={() => {
+          setIsMonitorPanelOpen(false)
+          setSelectedPersonId(null)
+        }}
+        userId={user?.id}
+      />
     </SidebarWrapper>
   )
 }

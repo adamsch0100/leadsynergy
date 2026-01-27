@@ -30,6 +30,15 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3001 "') do (
     )
 )
 
+REM Kill orphaned node processes from LeadSynergy/Next.js
+echo Killing orphaned node processes...
+for /f "tokens=2" %%a in ('wmic process where "name='node.exe'" get processid 2^>nul ^| findstr /r "[0-9]"') do (
+    wmic process where "processid=%%a" get commandline 2>nul | findstr /i "LeadSynergy next" >nul && (
+        echo Killing orphaned node process %%a
+        taskkill /PID %%a /F >nul 2>&1
+    )
+)
+
 REM Only kill processes on specific ports used by this project
 
 REM Wait for processes to fully terminate

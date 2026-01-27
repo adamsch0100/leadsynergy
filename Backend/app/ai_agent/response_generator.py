@@ -54,85 +54,66 @@ def get_friendly_source_name(source: str) -> str:
 
 
 # =============================================================================
-# HANDOFF TRIGGER DETECTION
+# INTELLIGENT HANDOFF DETECTION
 # =============================================================================
-# These patterns detect when a lead needs to be connected with a human agent
-# immediately, rather than continuing with AI automation.
+# Two-tier system:
+# 1. FAST PATH: Obvious keyword triggers (immediate handoff)
+# 2. AI SCORING: For messages that FEEL like a hot lead even without exact keywords
+#
+# The AI scoring catches things like:
+# - "I'm ready to move forward"
+# - "Let's do this!"
+# - "Found one I absolutely love"
+# - "We need to act fast on this"
+# - "This is the one"
+#
+# Philosophy: If the lead FEELS hot, hand off. Don't wait for magic words.
 
-HANDOFF_TRIGGERS = {
-    # Scheduling intent - lead wants to see a property
+# Fast-path keyword patterns (obvious triggers - no AI needed)
+HANDOFF_KEYWORDS = {
+    # Scheduling intent
     "schedule_showing": [
-        r"schedule.*showing",
-        r"want to see",
-        r"want to tour",
-        r"can i see",
-        r"can we see",
-        r"let'?s look at",
-        r"tour the",
-        r"can we visit",
-        r"view the",
-        r"when can (i|we) see",
-        r"set up a showing",
-        r"book a showing",
-        r"schedule a tour",
-        r"available to show",
+        r"schedule.*showing", r"set up a showing", r"book a showing",
+        r"schedule a tour", r"when can (i|we) see",
     ],
-    # Call request - lead wants to talk on the phone
+    # Explicit call request
     "wants_call": [
-        r"call me",
-        r"give me a call",
-        r"phone call",
-        r"talk on the phone",
-        r"call my cell",
-        r"can you call",
-        r"please call",
-        r"rather talk",
-        r"prefer to talk",
-        r"can we talk",
-        r"speak (with|to) (you|someone)",
-        r"speak on the phone",
+        r"call me", r"give me a call", r"can you call", r"please call",
     ],
-    # Urgency - lead has time-sensitive needs
-    "urgent_timeline": [
-        r"need.*(by|before) (next|this) week",
-        r"moving (next|this) week",
-        r"closing (soon|shortly|this week)",
-        r"urgent",
-        r"asap",
-        r"immediately",
-        r"right away",
-        r"as soon as possible",
-        r"need to move fast",
-        r"in a rush",
-        r"time sensitive",
-        r"closing in \d+ days?",
-        r"lease (ends|ending|expires) (soon|this month|next month)",
-    ],
-    # Complex questions - needs expert knowledge
-    "complex_question": [
-        r"can you explain",
-        r"how does.*(financing|mortgage|loan|closing|escrow|title) work",
-        r"what about (taxes|financing|closing|inspections|appraisal)",
-        r"legal question",
-        r"tax (question|implications|consequences)",
-        r"what are the fees",
-        r"closing costs",
-        r"hoa (rules|fees|restrictions)",
-        r"zoning",
-        r"permit(s|ting)?",
-    ],
-    # Price negotiation - needs agent expertise
+    # Explicit offer intent
     "price_negotiation": [
-        r"make an offer",
-        r"submit an offer",
-        r"ready to offer",
-        r"want to bid",
-        r"negotiate.*(price|terms)",
-        r"is.*(price|asking) negotiable",
-        r"counter.?offer",
-        r"best (and final|offer)",
+        r"make an offer", r"submit an offer", r"ready to offer", r"want to (bid|offer)",
     ],
 }
+
+# Signals that indicate a HOT lead (used by AI scoring)
+HOT_LEAD_SIGNALS = """
+STRONG BUYING SIGNALS (any of these = likely hot lead):
+- Ready to move forward / take action / get started
+- "Let's do this" / "I'm in" / "Count me in"
+- Found a property they love / excited about a listing
+- Timeline urgency (need to move soon, lease ending, relocating)
+- Asking about next steps / process / what's involved
+- Mentioning pre-approval, down payment, or financing readiness
+- Wanting to see multiple properties / serious about touring
+- Comparing specific properties / narrowing down choices
+- Spouse/partner agreement ("we both love it", "my husband agrees")
+- Life event driving urgency (new job, baby, divorce, death)
+- Frustration with searching / ready to stop looking
+- Specific address or MLS number mentioned with interest
+- "This is the one" / "Perfect for us" / strong enthusiasm
+- Asking about availability / move-in dates
+- Discussing contingencies, inspections, or offer terms
+
+MODERATE SIGNALS (consider handoff if multiple present):
+- Increased response frequency / engagement
+- Longer, more detailed messages
+- Asking about specific neighborhoods or schools
+- Budget/price discussions getting specific
+- Mentioning they've been pre-approved
+- Referencing other agents they're talking to
+- Emotional language about their search
+"""
 
 # Acknowledgment messages for each handoff type
 HANDOFF_ACKNOWLEDGMENTS = {
@@ -141,15 +122,23 @@ HANDOFF_ACKNOWLEDGMENTS = {
     "urgent_timeline": "I understand time is of the essence! Let me get {agent_name} on this right away - they'll reach out within the hour.",
     "complex_question": "Great question! That's something {agent_name} can explain better than I can. Let me connect you with them.",
     "price_negotiation": "This is exciting! Making an offer is a big step. Let me get {agent_name} involved - they're the expert on negotiations.",
+    "hot_lead": "This is exciting - sounds like you're ready to take the next step! Let me get {agent_name} involved so we can make this happen. They'll reach out shortly!",
+    "high_intent": "I can tell you're serious about this - that's great! Let me connect you with {agent_name} who can give you their full attention. They'll be in touch soon!",
 }
 
 
-def detect_handoff_triggers(message: str) -> Optional[str]:
+def detect_handoff_triggers(message: str, use_ai_scoring: bool = True) -> Optional[str]:
     """
-    Detect if a message contains a handoff trigger that requires human agent.
+    Intelligent handoff detection using two-tier system:
+    1. FAST PATH: Check for obvious keyword triggers
+    2. AI SCORING: Assess "hot lead" signals even without exact keywords
+
+    The AI scoring catches leads who are ready but don't use magic words like
+    "schedule showing". Instead they might say "I'm ready!" or "Let's do this!"
 
     Args:
         message: The lead's message text
+        use_ai_scoring: Whether to use AI for hot lead detection (default True)
 
     Returns:
         Trigger type (str) if detected, None otherwise
@@ -159,13 +148,228 @@ def detect_handoff_triggers(message: str) -> Optional[str]:
 
     message_lower = message.lower()
 
-    for trigger_type, patterns in HANDOFF_TRIGGERS.items():
+    # =========================================================================
+    # TIER 1: Fast-path keyword detection (no AI needed)
+    # =========================================================================
+    for trigger_type, patterns in HANDOFF_KEYWORDS.items():
         for pattern in patterns:
             if re.search(pattern, message_lower):
-                logger.info(f"Handoff trigger detected: {trigger_type} (pattern: {pattern})")
+                logger.info(f"[HANDOFF] Fast-path trigger: {trigger_type} (pattern: {pattern})")
                 return trigger_type
 
+    # =========================================================================
+    # TIER 2: AI-based hot lead scoring
+    # =========================================================================
+    if use_ai_scoring and len(message) > 20:  # Only score meaningful messages
+        score = score_hot_lead_signals(message)
+        if score >= 70:
+            logger.info(f"[HANDOFF] AI scored HOT LEAD: {score}/100 - triggering handoff")
+            return "hot_lead"
+        elif score >= 50:
+            logger.info(f"[HANDOFF] AI scored HIGH INTENT: {score}/100 - triggering handoff")
+            return "high_intent"
+        elif score >= 30:
+            logger.info(f"[HANDOFF] AI scored moderate intent: {score}/100 - no handoff yet")
+
     return None
+
+
+def score_hot_lead_signals(message: str) -> int:
+    """
+    Use AI to score a message for "hot lead" buying signals.
+
+    Instead of looking for exact keywords, this analyzes the INTENT and
+    SENTIMENT of the message to determine if the lead is ready to act.
+
+    Args:
+        message: The lead's message text
+
+    Returns:
+        Score from 0-100 where:
+        - 70+: Hot lead - definitely hand off
+        - 50-69: High intent - hand off
+        - 30-49: Moderate interest - keep nurturing
+        - <30: Low intent - continue automation
+    """
+    import aiohttp
+    import asyncio
+
+    # Quick heuristic checks first (avoid API call for obvious cases)
+    quick_score = _quick_intent_score(message)
+    if quick_score >= 70:
+        return quick_score
+
+    # For borderline cases, use AI scoring
+    try:
+        # Run async scoring in sync context if needed
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # We're already in async context - can't nest
+            # Fall back to heuristic scoring
+            return quick_score
+        else:
+            return loop.run_until_complete(_ai_score_message(message))
+    except RuntimeError:
+        # No event loop - create one
+        return asyncio.run(_ai_score_message(message))
+    except Exception as e:
+        logger.warning(f"AI scoring failed, using heuristic: {e}")
+        return quick_score
+
+
+def _quick_intent_score(message: str) -> int:
+    """
+    Quick heuristic scoring for obvious hot lead signals.
+    Avoids API calls for clear cases.
+    """
+    score = 0
+    msg_lower = message.lower()
+
+    # Strong signals (+25 each)
+    strong_signals = [
+        r"ready to (move forward|get started|buy|make an offer|act)",
+        r"let'?s do (this|it)",
+        r"(this|that) is the one",
+        r"we (love|found|want) (it|this|that one)",
+        r"(perfect|ideal|exactly what) (we|i) (want|need|looking for)",
+        r"(my|our) (husband|wife|spouse|partner) (agrees|loves|wants)",
+        r"(need|have) to (move|act|decide) (fast|quickly|soon|now)",
+        r"what('s| are) the next step",
+        r"how (do|can) (we|i) (proceed|move forward|make this happen)",
+        r"(when|how soon) can (we|i) (close|move in|get started)",
+        r"(i'?m|we'?re) (pre-?approved|ready|serious)",
+        r"(found|saw|love) (a|the|this) (house|home|property|place)",
+        r"(can'?t|don'?t want to) (wait|lose|miss) (this|it)",
+    ]
+
+    for pattern in strong_signals:
+        if re.search(pattern, msg_lower):
+            score += 25
+            if score >= 70:
+                return min(score, 100)
+
+    # Moderate signals (+15 each)
+    moderate_signals = [
+        r"(very|really|super) (interested|excited|serious)",
+        r"(want|need|looking) to (see|tour|visit)",
+        r"(when|what time|how about) (can we|saturday|sunday|this week|next week)",
+        r"(new job|relocating|moving for work|transferred)",
+        r"(lease|rental|apartment) (ends|ending|expires|up)",
+        r"(expecting|having) a baby",
+        r"(getting|recently) (married|divorced)",
+        r"(down payment|financing|mortgage|loan) (ready|approved|in place)",
+        r"(comparing|deciding between|narrowed down)",
+        r"(specific|particular) (house|property|address|listing)",
+    ]
+
+    for pattern in moderate_signals:
+        if re.search(pattern, msg_lower):
+            score += 15
+
+    # Weak signals (+5 each)
+    weak_signals = [
+        r"interested",
+        r"like (this|that|it)",
+        r"looks (good|nice|great)",
+        r"(tell|send) me more",
+        r"(any|what) availability",
+    ]
+
+    for pattern in weak_signals:
+        if re.search(pattern, msg_lower):
+            score += 5
+
+    # Message length bonus (engaged leads write more)
+    if len(message) > 200:
+        score += 10
+    elif len(message) > 100:
+        score += 5
+
+    # Exclamation marks indicate enthusiasm
+    exclamations = message.count('!')
+    if exclamations >= 3:
+        score += 15
+    elif exclamations >= 1:
+        score += 5
+
+    return min(score, 100)
+
+
+async def _ai_score_message(message: str) -> int:
+    """
+    Use AI to score message for buying intent.
+    Only called for borderline cases where heuristics aren't enough.
+    """
+    import aiohttp
+
+    openrouter_key = os.environ.get('OPENROUTER_API_KEY')
+    anthropic_key = os.environ.get('ANTHROPIC_API_KEY')
+
+    if not openrouter_key and not anthropic_key:
+        return _quick_intent_score(message)
+
+    prompt = f"""Score this real estate lead message for buying/selling readiness on a scale of 0-100.
+
+MESSAGE: "{message}"
+
+SCORING GUIDE:
+{HOT_LEAD_SIGNALS}
+
+Respond with ONLY a number 0-100. Nothing else.
+- 70-100: Hot lead - ready to act NOW
+- 50-69: High intent - very interested, close to ready
+- 30-49: Moderate interest - engaged but not urgent
+- 0-29: Low intent - just browsing or early stage"""
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            if openrouter_key:
+                headers = {
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": "anthropic/claude-3-5-haiku-20241022",  # Fast, cheap model for scoring
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 10,
+                    "temperature": 0,
+                }
+                url = "https://openrouter.ai/api/v1/chat/completions"
+            else:
+                headers = {
+                    "x-api-key": anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": "claude-3-5-haiku-20241022",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 10,
+                }
+                url = "https://api.anthropic.com/v1/messages"
+
+            async with session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=5),  # Quick timeout
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if openrouter_key:
+                        text = data['choices'][0]['message']['content'].strip()
+                    else:
+                        text = data['content'][0]['text'].strip()
+
+                    # Extract number from response
+                    match = re.search(r'\d+', text)
+                    if match:
+                        return min(int(match.group()), 100)
+
+    except Exception as e:
+        logger.warning(f"AI scoring request failed: {e}")
+
+    return _quick_intent_score(message)
 
 
 def get_handoff_acknowledgment(trigger_type: str, agent_name: str = "your agent") -> str:

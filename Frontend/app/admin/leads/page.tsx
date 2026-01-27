@@ -10,9 +10,10 @@ import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Switch } from "@/components/ui/switch"
-import { Clock, Phone, RefreshCw, AlertTriangle, Users, Bot } from "lucide-react"
+import { Clock, Phone, RefreshCw, AlertTriangle, Users, Bot, Eye } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
+import { LeadAIPanel } from "@/components/ai-monitor"
 
 interface Lead {
   id: string
@@ -52,6 +53,13 @@ export default function AdminLeadsPage() {
   const [uniqueSources, setUniqueSources] = useState<string[]>([])
   const [commissionRate, setCommissionRate] = useState(0.03)
   const [aiTogglingLeads, setAiTogglingLeads] = useState<Set<string>>(new Set())
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [isMonitorPanelOpen, setIsMonitorPanelOpen] = useState(false)
+
+  const openMonitorPanel = (lead: Lead) => {
+    setSelectedLead(lead)
+    setIsMonitorPanelOpen(true)
+  }
 
   useEffect(() => {
     const loadUser = async () => {
@@ -405,6 +413,15 @@ export default function AdminLeadsPage() {
                         {lead.ai_enabled === null && (
                           <Badge variant="outline" className="text-xs">Default</Badge>
                         )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openMonitorPanel(lead)}
+                          title="View AI Monitor"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -414,6 +431,18 @@ export default function AdminLeadsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* AI Monitor Panel */}
+      <LeadAIPanel
+        personId={selectedLead ? parseInt(selectedLead.fub_person_id) : null}
+        leadName={selectedLead ? `${selectedLead.first_name} ${selectedLead.last_name}` : undefined}
+        isOpen={isMonitorPanelOpen}
+        onClose={() => {
+          setIsMonitorPanelOpen(false)
+          setSelectedLead(null)
+        }}
+        userId={user?.id}
+      />
     </SidebarWrapper>
   )
 }

@@ -19,7 +19,17 @@
       "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: support SUPABASE_JWT_SECRET in all database files\n\n- Updated supabase_client.py\n- Updated auth.py\n- Updated migrations.py\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git commit:*)",
       "Bash(find:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(railway version:*)",
+      "Bash(where.exe:*)",
+      "Bash(npx @railway/cli:*)",
+      "Bash(npm run dev:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(tasklist:*)",
+      "Bash(powershell:*)",
+      "Bash(node:*)"
     ]
   }
 }

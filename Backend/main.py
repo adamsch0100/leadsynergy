@@ -19,6 +19,7 @@ from app.api.setup import setup_bp
 from app.api.test import test_bp
 from app.api.ai_settings import ai_settings_bp
 from app.api.ai_analytics import ai_analytics_bp
+from app.api.ai_monitoring import ai_monitoring_bp
 from app.billing import billing_bp
 from app.enrichment import enrichment_bp
 from app.fub import fub_bp
@@ -148,6 +149,9 @@ app.register_blueprint(ai_settings_bp, url_prefix='/api/ai-settings')
 
 # Register the AI analytics blueprint
 app.register_blueprint(ai_analytics_bp, url_prefix='/api/ai-analytics')
+
+# Register the AI monitoring blueprint (for monitoring dashboard)
+app.register_blueprint(ai_monitoring_bp, url_prefix='/api/ai-monitoring')
 
 # Register the billing blueprint
 app.register_blueprint(billing_bp, url_prefix='/api/billing')

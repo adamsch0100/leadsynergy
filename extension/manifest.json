@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "LeadSynergy AI Caller",
+  "version": "1.0.0",
+  "description": "AI-powered voice assistant for Follow Up Boss calls",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://*.followupboss.com/*",
+    "wss://api.deepgram.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.followupboss.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LeadSynergy AI Caller"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/*", "audio-worklet.js", "injected.js"],
+      "matches": ["https://*.followupboss.com/*"]
+    }
+  ]
+}

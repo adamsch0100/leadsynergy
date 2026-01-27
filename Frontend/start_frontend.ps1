@@ -27,6 +27,16 @@ function Kill-FrontendProcesses {
         Write-Host "Checking for processes on frontend ports (3000, 3001)..." -ForegroundColor Yellow
         Kill-ProcessOnPort 3000
         Kill-ProcessOnPort 3001
+
+        # Kill orphaned node processes from LeadSynergy Frontend
+        Write-Host "Cleaning up orphaned node processes..." -ForegroundColor Yellow
+        $nodeProcesses = Get-WmiObject Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue
+        foreach ($proc in $nodeProcesses) {
+            if ($proc.CommandLine -like "*LeadSynergy*Frontend*" -or $proc.CommandLine -like "*next*dev*") {
+                Write-Host "  Killing orphaned node process (PID: $($proc.ProcessId))..." -ForegroundColor Yellow
+                Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        }
     } catch {
         Write-Host "No processes found on frontend ports" -ForegroundColor Gray
     }
