@@ -2240,7 +2240,7 @@ def trigger_lead_followup():
             'reengagement_sms': ActionType.REENGAGEMENT_SMS,
             'first_contact_email': ActionType.FIRST_CONTACT_EMAIL,
             'followup_email': ActionType.FOLLOWUP_EMAIL,
-            'channel_switch_email': ActionType.CHANNEL_SWITCH_EMAIL,
+            'reengagement_email': ActionType.REENGAGEMENT_EMAIL,
         }
 
         action_enum = action_type_map.get(action_type, ActionType.FIRST_CONTACT_SMS)
