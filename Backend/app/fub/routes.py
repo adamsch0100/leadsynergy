@@ -2326,59 +2326,99 @@ def simulate_webhook():
 
         logger.info(f"Simulating webhook for lead {fub_person_id}: message='{message[:50]}...', dry_run={dry_run}")
 
-        from app.ai_agent.agent_service import AIAgentService
+        from app.ai_agent import create_agent_service
 
-        # Get FUB API key
-        fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
-        if not fub_api_key:
-            return jsonify({
-                "success": False,
-                "message": "FUB API key not configured"
-            }), 400
-
-        # Process through AI agent
-        service = AIAgentService(fub_api_key=fub_api_key, user_id=None)
+        # Create agent service using the standard factory
+        service = create_agent_service(
+            supabase_client=SupabaseClientSingleton.get_instance(),
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
+        )
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            # Build a minimal lead profile for testing
+            from app.webhook.ai_webhook_handlers import build_lead_profile_from_fub
+            from app.database.fub_api_client import FUBApiClient
+
+            fub_client = FUBApiClient()
+            person_data = fub_client.get_person(fub_person_id)
+
+            if not person_data:
+                return jsonify({
+                    "success": False,
+                    "message": f"Could not fetch person {fub_person_id} from FUB"
+                }), 404
+
+            lead_profile = loop.run_until_complete(
+                build_lead_profile_from_fub(person_data, "default")
+            )
+
             response = loop.run_until_complete(
                 service.process_message(
-                    fub_person_id=fub_person_id,
-                    incoming_message=message,
+                    message=message,
+                    lead_profile=lead_profile,
+                    conversation_context=None,
                     channel=channel,
+                    fub_person_id=fub_person_id,
                 )
             )
+
+            if not response:
+                return jsonify({
+                    "success": False,
+                    "message": "No response generated"
+                }), 500
+
+            result = {
+                "success": True,
+                "dry_run": dry_run,
+                "fub_person_id": fub_person_id,
+                "incoming_message": message,
+                "ai_response": response.response_text,
+                "state": response.conversation_state,
+                "lead_score": response.lead_score,
+                "should_handoff": response.should_handoff,
+                "handoff_reason": response.handoff_reason,
+                "extracted_info": response.extracted_info,
+                "would_send": not dry_run,
+            }
+
+            # If not dry run, actually send the message via Playwright
+            if not dry_run and response.response_text:
+                logger.info(f"[LIVE] Sending message to lead {fub_person_id}: {response.response_text[:50]}...")
+                from app.messaging.playwright_sms_service import PlaywrightSMSService
+                from app.ai_agent.settings_service import get_fub_browser_credentials
+
+                # Get credentials
+                creds = loop.run_until_complete(
+                    get_fub_browser_credentials(
+                        supabase_client=SupabaseClientSingleton.get_instance(),
+                        user_id=None,
+                        organization_id=None,
+                    )
+                )
+
+                if creds:
+                    sms_service = PlaywrightSMSService()
+                    agent_id = creds.get("agent_id", "default")
+                    send_result = loop.run_until_complete(
+                        sms_service.send_sms(
+                            agent_id=agent_id,
+                            person_id=fub_person_id,
+                            message=response.response_text,
+                            credentials=creds,
+                        )
+                    )
+                    result["message_sent"] = send_result.get("success", False)
+                    result["send_result"] = send_result
+                else:
+                    result["message_sent"] = False
+                    result["send_error"] = "No FUB browser credentials configured"
+
+            return jsonify(result)
         finally:
             loop.close()
-
-        if not response:
-            return jsonify({
-                "success": False,
-                "message": "No response generated"
-            }), 500
-
-        result = {
-            "success": True,
-            "dry_run": dry_run,
-            "fub_person_id": fub_person_id,
-            "incoming_message": message,
-            "ai_response": response.message_text,
-            "state": response.conversation_state,
-            "lead_score": response.lead_score,
-            "should_handoff": response.should_handoff,
-            "handoff_reason": response.handoff_reason,
-            "extracted_info": response.extracted_info,
-            "would_send": not dry_run,
-        }
-
-        # If not dry run, we would send the message here
-        if not dry_run:
-            logger.info(f"[LIVE] Would send message to lead {fub_person_id}: {response.message_text[:50]}...")
-            # TODO: Actually send via Playwright SMS service
-            result["message_sent"] = True
-
-        return jsonify(result)
 
     except Exception as e:
         logger.error(f"Error simulating webhook: {e}", exc_info=True)
