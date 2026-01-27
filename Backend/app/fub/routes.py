@@ -1097,6 +1097,8 @@ def toggle_ai_agent():
         - fub_person_id: The FUB person ID
         - enabled: Boolean - whether AI should be active
     """
+    import asyncio
+
     try:
         data = request.get_json()
         fub_person_id = data.get('fub_person_id')
@@ -1118,36 +1120,65 @@ def toggle_ai_agent():
 
         supabase = SupabaseClientSingleton.get_instance()
 
-        # Check if conversation exists
+        # Get user context
+        user_id = None
+        organization_id = None
+        fub_context_str = request.headers.get('X-FUB-Context', '{}')
+        try:
+            fub_context = json.loads(fub_context_str)
+            user_email = fub_context.get('user', {}).get('email')
+            if user_email:
+                user_result = supabase.table('users').select('id, organization_id').eq(
+                    'email', user_email
+                ).single().execute()
+                if user_result.data:
+                    user_id = user_result.data['id']
+                    organization_id = user_result.data.get('organization_id')
+        except Exception:
+            pass
+
+        # Use LeadAISettingsService to properly enable/disable AI for webhooks
+        from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+        lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            if enabled:
+                success = loop.run_until_complete(
+                    lead_ai_service.enable_ai_for_lead(
+                        fub_person_id=str(fub_person_id),
+                        organization_id=organization_id or "default",
+                        user_id=user_id,
+                        reason="embedded_app_toggle",
+                        enabled_by=user_id or "embedded_app",
+                    )
+                )
+            else:
+                success = loop.run_until_complete(
+                    lead_ai_service.disable_ai_for_lead(
+                        fub_person_id=str(fub_person_id),
+                        organization_id=organization_id or "default",
+                        user_id=user_id,
+                        reason="embedded_app_toggle",
+                        disabled_by=user_id or "embedded_app",
+                    )
+                )
+        finally:
+            loop.close()
+
+        # Also update ai_conversations table for backwards compatibility
         result = supabase.table('ai_conversations').select('id').eq(
             'fub_person_id', str(fub_person_id)
         ).limit(1).execute()
 
         if result.data:
-            # Update existing conversation
             supabase.table('ai_conversations').update({
                 'is_active': enabled,
                 'updated_at': datetime.utcnow().isoformat()
             }).eq('fub_person_id', str(fub_person_id)).execute()
-        else:
-            # Get user context for new conversation
-            user_id = None
-            organization_id = None
-            fub_context_str = request.headers.get('X-FUB-Context', '{}')
-            try:
-                fub_context = json.loads(fub_context_str)
-                user_email = fub_context.get('user', {}).get('email')
-                if user_email:
-                    user_result = supabase.table('users').select('id, organization_id').eq(
-                        'email', user_email
-                    ).single().execute()
-                    if user_result.data:
-                        user_id = user_result.data['id']
-                        organization_id = user_result.data.get('organization_id')
-            except Exception:
-                pass
-
-            # Create new conversation record
+        elif enabled:
+            # Create new conversation record if enabling
             supabase.table('ai_conversations').insert({
                 'fub_person_id': str(fub_person_id),
                 'user_id': user_id,
