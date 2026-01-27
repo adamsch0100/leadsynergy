@@ -2250,13 +2250,10 @@ def trigger_lead_followup():
             fub_person_id=fub_person_id,
             action_type=action_enum,
             priority_score=100,  # High priority for manual trigger
-            reason=f"Manual trigger via API",
-            days_since_contact=0,
-            lead_score=0,
-            source="manual_trigger"
+            reason="Manual trigger via API",
         )
 
-        result = {"action": action.__dict__}
+        result = {"action": action.to_dict()}
 
         if execute:
             engine = get_nba_engine()
