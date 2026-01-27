@@ -1012,6 +1012,16 @@ MIGRATIONS = [
                 ADD COLUMN IF NOT EXISTS auto_enable_new_leads BOOLEAN DEFAULT false;
             """,
         ]
+    },
+    {
+        'version': '20250127_add_last_sync_results',
+        'description': 'Add last_sync_results column to lead_source_settings for persisting sync results',
+        'sql_statements': [
+            """
+            ALTER TABLE lead_source_settings
+                ADD COLUMN IF NOT EXISTS last_sync_results JSONB DEFAULT '{}';
+            """,
+        ]
     }
 ]
 

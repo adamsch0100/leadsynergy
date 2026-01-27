@@ -50,26 +50,25 @@ class ReferralExchangeService(BaseReferralService):
         if not self.email or not self.password:
             try:
                 from app.service.lead_source_settings_service import LeadSourceSettingsSingleton
+                import json as _json
                 settings_service = LeadSourceSettingsSingleton.get_instance()
-                # Try different source name variations
-                source_settings = None
-                for name_variant in ["ReferralExchange", "Referral Exchange", "referralexchange"]:
+                # Try different source name variations - check for credentials in each
+                for name_variant in ["Referral Exchange", "ReferralExchange", "referralexchange"]:
                     source_settings = settings_service.get_by_source_name(name_variant)
-                    if source_settings:
-                        break
-                if source_settings and source_settings.metadata:
-                    metadata = source_settings.metadata
-                    if isinstance(metadata, str):
-                        import json
-                        try:
-                            metadata = json.loads(metadata)
-                        except (json.JSONDecodeError, TypeError):
-                            metadata = {}
-                    creds = metadata.get('credentials', {}) if isinstance(metadata, dict) else {}
-                    if creds:
-                        self.email = self.email or creds.get('email')
-                        self.password = self.password or creds.get('password')
-                        self.logger.info(f"Loaded credentials from database for {source_settings.source_name}")
+                    if source_settings and source_settings.metadata:
+                        metadata = source_settings.metadata
+                        if isinstance(metadata, str):
+                            try:
+                                metadata = _json.loads(metadata)
+                            except (_json.JSONDecodeError, TypeError):
+                                metadata = {}
+                        creds = metadata.get('credentials', {}) if isinstance(metadata, dict) else {}
+                        # Only use this source if it has both email and password
+                        if creds and creds.get('email') and creds.get('password'):
+                            self.email = self.email or creds.get('email')
+                            self.password = self.password or creds.get('password')
+                            self.logger.info(f"Loaded credentials from database for {source_settings.source_name}")
+                            break
             except Exception as e:
                 self.logger.warning(f"Could not load credentials from database: {e}")
 
@@ -1249,4 +1248,4 @@ class ReferralExchangeService(BaseReferralService):
         Returns:
             str: The platform name
         """
-        return "ReferralExchange"
+        return "Referral Exchange"

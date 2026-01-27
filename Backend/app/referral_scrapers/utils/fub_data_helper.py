@@ -178,13 +178,19 @@ class FUBDataHelper:
                 print(f"[FUB Helper] Found @update message for {platform_name}: {update_message[:50]}...")
                 comment = update_message
             else:
-                # Priority 2: Try to fetch FUB notes summary for the comment
-                notes_summary = self.fetch_notes_summary(lead)
-                if notes_summary:
-                    comment = notes_summary
-                elif source_settings and hasattr(source_settings, 'same_status_note'):
-                    # Priority 3: Use the configured "same status" note as fallback
-                    comment = source_settings.same_status_note
+                # Priority 2: Try AI-generated update (if enabled)
+                ai_update = self._try_ai_generated_update(lead, platform_name, source_settings, update_message)
+                if ai_update:
+                    print(f"[FUB Helper] Generated AI update for {platform_name}: {ai_update[:50]}...")
+                    comment = ai_update
+                else:
+                    # Priority 3: Try to fetch FUB notes summary for the comment
+                    notes_summary = self.fetch_notes_summary(lead)
+                    if notes_summary:
+                        comment = notes_summary
+                    elif source_settings and hasattr(source_settings, 'same_status_note'):
+                        # Priority 4: Use the configured "same status" note as fallback
+                        comment = source_settings.same_status_note
 
             return status, comment
 
@@ -316,6 +322,45 @@ class FUBDataHelper:
 
             return None
         except Exception:
+            return None
+
+    def _try_ai_generated_update(
+        self,
+        lead: Lead,
+        platform_name: str,
+        source_settings,
+        existing_update: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Try to generate an AI update note if enabled in source settings.
+
+        Args:
+            lead: The lead to generate update for
+            platform_name: Target platform name
+            source_settings: LeadSourceSettings with AI config in metadata
+            existing_update: Existing @update note if any
+
+        Returns:
+            AI-generated update or None if disabled/failed
+        """
+        try:
+            from app.ai_agent.update_note_generator import generate_ai_update_for_sync
+
+            if not source_settings:
+                return None
+
+            return generate_ai_update_for_sync(
+                lead=lead,
+                platform_name=platform_name,
+                source_settings=source_settings,
+                existing_update=existing_update
+            )
+
+        except ImportError:
+            print("[FUB Helper] AI update generator not available")
+            return None
+        except Exception as e:
+            print(f"[FUB Helper] Error generating AI update: {e}")
             return None
 
     def lookup_lead_by_name(self, display_name: str, source: str) -> Optional[Lead]:

@@ -1817,6 +1817,7 @@ def test_fub_login():
         test_password = fub_login_password
         test_type = fub_login_type
         test_user_id = user_id
+        test_org_id = organization_id
 
         # Test login with Playwright
         async def _test_login():
@@ -1833,14 +1834,16 @@ def test_fub_login():
                 }
 
                 # Try to get/create a session (this will attempt login)
-                test_agent_id = f"test_{test_user_id or 'default'}"
-                session = await service.get_or_create_session(test_agent_id, creds)
+                # Use the same agent_id format as production webhook handler
+                # so that the session persists and can be reused
+                agent_id = test_user_id or test_org_id or "default_agent"
+                session = await service.get_or_create_session(agent_id, creds)
 
                 # Verify session is valid
                 is_valid = await session.is_valid()
 
-                # Clean up test session
-                await service.close_session(test_agent_id)
+                # DO NOT close the session - keep it for production use
+                # The whole point of this test is to create/verify a persistent session
 
                 return {
                     "success": True,

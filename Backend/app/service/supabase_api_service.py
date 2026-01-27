@@ -1198,6 +1198,106 @@ def update_lead_source_credentials(source_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@supabase_api.route("/lead-sources/<source_id>/ai-update-settings", methods=["GET", "PUT"])
+def manage_ai_update_settings(source_id):
+    """
+    Get or update AI update note settings for a lead source.
+
+    Settings are stored in metadata.ai_update_settings:
+    - enabled: bool - Enable/disable AI-generated updates
+    - mode: str - 'fallback' (only when no @update), 'always', 'supplement'
+    - save_to_fub: bool - Save generated update as FUB note for audit trail
+    - context_sources: list - What context to include ['messages', 'notes', 'timeline']
+    - tone: str - 'professional', 'concise', 'detailed'
+    - max_length: int - Maximum length of generated update
+    """
+    try:
+        # Get existing source
+        source = lead_source_service.get_by_id(source_id)
+        if not source:
+            return jsonify({"success": False, "error": "Lead source not found"}), 404
+
+        # Get existing metadata
+        if isinstance(source, dict):
+            existing_metadata = source.get("metadata", {}) or {}
+        else:
+            existing_metadata = source.metadata if hasattr(source, 'metadata') and source.metadata else {}
+
+        if isinstance(existing_metadata, str):
+            try:
+                existing_metadata = json.loads(existing_metadata)
+            except (json.JSONDecodeError, TypeError):
+                existing_metadata = {}
+
+        if request.method == "GET":
+            # Return current AI update settings
+            ai_settings = existing_metadata.get("ai_update_settings", {
+                "enabled": False,
+                "mode": "fallback",
+                "save_to_fub": True,
+                "context_sources": ["messages", "notes"],
+                "tone": "professional",
+                "max_length": 300
+            })
+            return jsonify({"success": True, "data": ai_settings}), 200
+
+        # PUT - Update settings
+        data = request.json
+
+        # Validate settings
+        valid_modes = ["fallback", "always", "supplement"]
+        valid_tones = ["professional", "concise", "detailed"]
+        valid_contexts = ["messages", "notes", "timeline", "all"]
+
+        if data.get("mode") and data["mode"] not in valid_modes:
+            return jsonify({"success": False, "error": f"Invalid mode. Must be one of: {valid_modes}"}), 400
+
+        if data.get("tone") and data["tone"] not in valid_tones:
+            return jsonify({"success": False, "error": f"Invalid tone. Must be one of: {valid_tones}"}), 400
+
+        if data.get("context_sources"):
+            invalid = [c for c in data["context_sources"] if c not in valid_contexts]
+            if invalid:
+                return jsonify({"success": False, "error": f"Invalid context sources: {invalid}. Must be from: {valid_contexts}"}), 400
+
+        # Build AI settings
+        ai_settings = existing_metadata.get("ai_update_settings", {})
+        if "enabled" in data:
+            ai_settings["enabled"] = bool(data["enabled"])
+        if "mode" in data:
+            ai_settings["mode"] = data["mode"]
+        if "save_to_fub" in data:
+            ai_settings["save_to_fub"] = bool(data["save_to_fub"])
+        if "context_sources" in data:
+            ai_settings["context_sources"] = data["context_sources"]
+        if "tone" in data:
+            ai_settings["tone"] = data["tone"]
+        if "max_length" in data:
+            ai_settings["max_length"] = min(500, max(50, int(data["max_length"])))
+
+        # Update metadata
+        existing_metadata["ai_update_settings"] = ai_settings
+
+        # Save to database
+        result = (
+            supabase.table("lead_source_settings")
+            .update({"metadata": existing_metadata})
+            .eq("id", source_id)
+            .execute()
+        )
+
+        if not result.data or len(result.data) == 0:
+            return jsonify({"success": False, "error": "Could not update AI settings"}), 500
+
+        logger.info(f"Updated AI update settings for source {source_id}: enabled={ai_settings.get('enabled')}, mode={ai_settings.get('mode')}")
+
+        return jsonify({"success": True, "data": ai_settings}), 200
+
+    except Exception as e:
+        logger.error(f"Error managing AI update settings: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # FUB Stages
 @supabase_api.route("/fub-stages", methods=["GET"])
 def get_fub_stages():

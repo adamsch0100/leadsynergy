@@ -630,29 +630,87 @@ class FUBBrowserSession:
         await self.page.goto(person_url, wait_until="domcontentloaded")
         await self._human_delay(1.5, 2.5)
 
-        # Click Messages tab to see conversation
-        # FUB Jan 2026: Messages tab is a div with BoxTabPadding class containing BaseIcon-bubble
+        # Click Messages tab to see conversation - use the same robust approach as send_sms
         messages_tab_selectors = [
             # Specific FUB selector - BoxTabPadding containing bubble icon
             '.BoxTabPadding:has(.BaseIcon-bubble)',
             '[class*="BoxTabPadding"]:has([class*="bubble"])',
-            # Click the parent of the bubble icon
             '.BaseIcon-bubble',
             '[class*="bubble"]',
-            # Fallback text-based selectors
             'button:has-text("Messages")',
             'a:has-text("Messages")',
             '[role="tab"]:has-text("Messages")',
         ]
 
+        messages_clicked = False
+
+        # Approach 1: Try using page.locator with text matching (most reliable)
         try:
-            messages_tab = await self._find_element_by_selectors(messages_tab_selectors)
-            if messages_tab:
-                logger.info("Found Messages tab, clicking it")
-                await messages_tab.click()
-                await self._human_delay(1, 2)  # Wait for messages to load
+            logger.info("Reading: Trying to click Messages tab using locator...")
+            messages_locator = self.page.locator('text="Messages"').first
+            if await messages_locator.count() > 0:
+                await messages_locator.click()
+                messages_clicked = True
+                logger.info("Reading: Clicked Messages tab using text locator")
+                await self._human_delay(1.5, 2.5)
         except Exception as e:
-            logger.debug(f"Messages tab click failed: {e}")
+            logger.debug(f"Reading: Locator approach failed: {e}")
+
+        # Approach 2: Try clicking by the bubble icon parent
+        if not messages_clicked:
+            try:
+                logger.info("Reading: Trying to click Messages tab using bubble icon...")
+                bubble_icon = await self.page.query_selector('.BaseIcon-bubble')
+                if bubble_icon:
+                    parent = await bubble_icon.evaluate_handle('el => el.closest("div[class*=BoxTabPadding]") || el.parentElement.parentElement')
+                    if parent:
+                        await parent.as_element().click()
+                        messages_clicked = True
+                        logger.info("Reading: Clicked Messages tab via bubble icon parent")
+                        await self._human_delay(1.5, 2.5)
+            except Exception as e:
+                logger.debug(f"Reading: Bubble icon approach failed: {e}")
+
+        # Approach 3: Use JavaScript to click
+        if not messages_clicked:
+            try:
+                logger.info("Reading: Trying to click Messages tab using JavaScript...")
+                clicked = await self.page.evaluate('''() => {
+                    const elements = document.querySelectorAll('*');
+                    for (const el of elements) {
+                        if (el.textContent && el.textContent.trim() === 'Messages' &&
+                            el.closest('[class*="BoxTabPadding"]')) {
+                            el.closest('[class*="BoxTabPadding"]').click();
+                            return true;
+                        }
+                    }
+                    const bubble = document.querySelector('.BaseIcon-bubble');
+                    if (bubble) {
+                        const tab = bubble.closest('div');
+                        if (tab) { tab.click(); return true; }
+                    }
+                    return false;
+                }''')
+                if clicked:
+                    messages_clicked = True
+                    logger.info("Reading: Clicked Messages tab using JavaScript")
+                    await self._human_delay(1.5, 2.5)
+            except Exception as e:
+                logger.debug(f"Reading: JavaScript approach failed: {e}")
+
+        # Approach 4: Original selector approach as fallback
+        if not messages_clicked:
+            try:
+                messages_tab = await self._find_element_by_selectors(messages_tab_selectors)
+                if messages_tab:
+                    logger.info("Reading: Found Messages tab using selectors, clicking it")
+                    await messages_tab.click()
+                    messages_clicked = True
+                    await self._human_delay(1.5, 2.5)
+                else:
+                    logger.warning("Reading: Messages tab not found with any method")
+            except Exception as e:
+                logger.debug(f"Reading: Messages tab click failed: {e}")
 
         # FUB message structure (observed Jan 2025):
         # - Messages are in a conversation thread
