@@ -1564,6 +1564,17 @@ async def process_email_cache_update(webhook_data: Dict[str, Any]):
         if not person_id:
             return
 
+        # CRITICAL: If this is an INCOMING email from the lead, cancel pending follow-ups
+        # This ensures the AI agent stops automation when the lead responds via email
+        is_incoming = email.get('isIncoming', False)
+        if is_incoming:
+            logger.info(f"[EMAIL] Incoming email from lead {person_id} - cancelling pending sequences")
+            from app.scheduler.ai_tasks import cancel_lead_sequences
+            cancel_lead_sequences.delay(
+                fub_person_id=person_id,
+                reason="lead_responded_email"
+            )
+
         # Resolve organization
         organization_id = await resolve_organization_for_person(person_id)
         if not organization_id:
@@ -1793,6 +1804,20 @@ async def process_call_cache_update(webhook_data: Dict[str, Any]):
 
         if not person_id:
             return
+
+        # CRITICAL: If this is an INCOMING call or a CONNECTED call, cancel pending follow-ups
+        # This ensures the AI agent stops automation when there's phone contact with the lead
+        direction = call.get('direction', '').lower()
+        outcome = call.get('outcome', '').lower()
+
+        # Cancel on: incoming calls, or any connected call (agent spoke with lead)
+        if direction == 'incoming' or outcome in ['connected', 'answered', 'voicemail']:
+            logger.info(f"[CALL] Call detected for lead {person_id} (direction={direction}, outcome={outcome}) - cancelling pending sequences")
+            from app.scheduler.ai_tasks import cancel_lead_sequences
+            cancel_lead_sequences.delay(
+                fub_person_id=person_id,
+                reason=f"phone_contact_{direction}_{outcome}"
+            )
 
         organization_id = await resolve_organization_for_person(person_id)
         if not organization_id:

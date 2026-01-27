@@ -249,15 +249,22 @@ class NextBestActionEngine:
         - No response received
         - Not in blocked stage
         - No pending follow-up scheduled
+
+        SMART RE-ENGAGEMENT:
+        Instead of generic follow-ups, we check the conversation state
+        and choose the appropriate RESUME_* trigger so the AI can
+        pick up where it left off with full context.
         """
         actions = []
 
         try:
             # Query conversations where we sent a message and haven't heard back
+            # Include qualification_data for smart re-engagement context
             threshold = datetime.utcnow() - timedelta(hours=self.SILENT_THRESHOLD_HOURS)
 
             query = self.supabase.table("ai_conversations").select(
-                "fub_person_id, state, last_ai_message_at, last_lead_response_at, lead_score"
+                "fub_person_id, state, last_ai_message_at, last_lead_response_at, lead_score, "
+                "qualification_data, last_topic, unanswered_questions, objections_raised"
             ).lt(
                 "last_ai_message_at", threshold.isoformat()
             ).neq(
@@ -304,15 +311,60 @@ class NextBestActionEngine:
                 # Check TCPA hours
                 is_allowed, next_allowed = is_within_tcpa_hours()
 
+                # ============================================================
+                # SMART RE-ENGAGEMENT: Choose trigger based on conversation state
+                # ============================================================
+                conv_state = conv.get("state", "initial")
+                qualification_data = conv.get("qualification_data") or {}
+                objections = conv.get("objections_raised") or []
+
+                # Determine the appropriate trigger based on state
+                if conv_state in ["qualifying", "initial"]:
+                    trigger = FollowUpTrigger.RESUME_QUALIFICATION
+                    reason = "Lead went silent during qualification - picking up where we left off"
+                elif conv_state == "scheduling":
+                    trigger = FollowUpTrigger.RESUME_SCHEDULING
+                    reason = "Lead went silent while scheduling - re-offering appointment times"
+                elif objections:
+                    trigger = FollowUpTrigger.RESUME_OBJECTION
+                    reason = f"Lead had objection: {objections[-1] if objections else 'unknown'} - addressing concern"
+                else:
+                    trigger = FollowUpTrigger.NO_RESPONSE
+                    reason = "Lead went silent - needs follow-up"
+
+                # Build conversation summary for context-aware follow-up
+                answered_questions = []
+                if qualification_data:
+                    if qualification_data.get("timeline"):
+                        answered_questions.append(f"Timeline: {qualification_data['timeline']}")
+                    if qualification_data.get("budget"):
+                        answered_questions.append(f"Budget: {qualification_data['budget']}")
+                    if qualification_data.get("location"):
+                        answered_questions.append(f"Location: {qualification_data['location']}")
+                    if qualification_data.get("pre_approved") is not None:
+                        answered_questions.append(f"Pre-approved: {'Yes' if qualification_data['pre_approved'] else 'No'}")
+
+                conversation_summary = {
+                    "last_topic": conv.get("last_topic", "General introduction"),
+                    "answered_questions": ", ".join(answered_questions) if answered_questions else "None yet",
+                    "open_questions": conv.get("unanswered_questions", "Timeline, budget, location"),
+                    "objections": ", ".join(objections) if objections else "None",
+                    "score": lead_score,
+                    "state": conv_state,
+                }
+
+                logger.info(f"Smart re-engagement for {fub_person_id}: trigger={trigger.value}, state={conv_state}")
+
                 actions.append(RecommendedAction(
                     fub_person_id=fub_person_id,
                     action_type=ActionType.FOLLOWUP_SMS,
                     priority_score=priority,
-                    reason="Lead went silent - needs follow-up",
+                    reason=reason,
                     execute_at=datetime.utcnow() if is_allowed else next_allowed,
                     message_context={
-                        "trigger": FollowUpTrigger.NO_RESPONSE.value,
-                        "state": conv.get("state"),
+                        "trigger": trigger.value,
+                        "state": conv_state,
+                        "conversation_summary": conversation_summary,
                     }
                 ))
 

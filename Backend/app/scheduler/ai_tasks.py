@@ -388,31 +388,64 @@ def cancel_lead_sequences(self, fub_person_id: int, reason: str = None):
     Use when lead converts, opts out, or is handed off.
     Also schedules re-engagement check for later.
 
+    This is a CRITICAL function for the autonomous AI agent:
+    - Called whenever a lead responds (SMS, email, phone)
+    - Prevents automated messages from being sent while in active conversation
+    - Schedules check_dormant_lead to restart automation if lead goes silent
+
     Args:
         fub_person_id: FUB person ID
         reason: Reason for cancellation
     """
     from app.database.supabase_client import get_supabase_client
 
-    logger.info(f"Cancelling sequences for person {fub_person_id}: {reason}")
+    logger.info(f"[CANCEL] Cancelling sequences for person {fub_person_id} (reason: {reason or 'lead_responded'})")
 
     supabase = get_supabase_client()
+    total_cancelled = 0
 
-    # Update all pending messages to cancelled
-    result = supabase.table("scheduled_messages").update({
-        "status": "cancelled",
-        "cancelled_reason": reason,
-        "cancelled_at": datetime.utcnow().isoformat(),
-    }).eq("fub_person_id", fub_person_id).eq("status", "pending").execute()
+    # Cancel from scheduled_messages table
+    try:
+        result = supabase.table("scheduled_messages").update({
+            "status": "cancelled",
+            "cancelled_reason": reason or "lead_responded",
+            "cancelled_at": datetime.utcnow().isoformat(),
+        }).eq("fub_person_id", fub_person_id).eq("status", "pending").execute()
 
-    cancelled_count = len(result.data) if result.data else 0
-    logger.info(f"Cancelled {cancelled_count} messages for person {fub_person_id}")
+        count = len(result.data) if result.data else 0
+        total_cancelled += count
+        if count > 0:
+            logger.info(f"[CANCEL] Cancelled {count} scheduled_messages for person {fub_person_id}")
+    except Exception as e:
+        logger.warning(f"[CANCEL] Error cancelling scheduled_messages: {e}")
+
+    # Also cancel from ai_scheduled_followups table if it exists
+    try:
+        result = supabase.table("ai_scheduled_followups").update({
+            "status": "cancelled",
+            "cancelled_reason": reason or "lead_responded",
+            "cancelled_at": datetime.utcnow().isoformat(),
+        }).eq("fub_person_id", fub_person_id).eq("status", "pending").execute()
+
+        count = len(result.data) if result.data else 0
+        total_cancelled += count
+        if count > 0:
+            logger.info(f"[CANCEL] Cancelled {count} ai_scheduled_followups for person {fub_person_id}")
+    except Exception as e:
+        # Table might not exist, that's OK
+        logger.debug(f"[CANCEL] ai_scheduled_followups table: {e}")
+
+    logger.info(f"[CANCEL] Total cancelled: {total_cancelled} pending follow-ups for person {fub_person_id}")
 
     # Update conversation to track last lead response
-    supabase.table("ai_conversations").update({
-        "last_human_message_at": datetime.utcnow().isoformat(),
-        "state": "engaged",  # Mark as engaged (active conversation)
-    }).eq("fub_person_id", fub_person_id).execute()
+    try:
+        supabase.table("ai_conversations").update({
+            "last_human_message_at": datetime.utcnow().isoformat(),
+            "last_lead_response_at": datetime.utcnow().isoformat(),
+            "state": "engaged",  # Mark as engaged (active conversation)
+        }).eq("fub_person_id", fub_person_id).execute()
+    except Exception as e:
+        logger.warning(f"[CANCEL] Error updating ai_conversations: {e}")
 
     # Schedule re-engagement check for later (24 hours by default)
     # This will restart automation if the lead goes quiet
@@ -420,8 +453,9 @@ def cancel_lead_sequences(self, fub_person_id: int, reason: str = None):
         kwargs={"fub_person_id": fub_person_id},
         countdown=86400,  # 24 hours
     )
+    logger.info(f"[CANCEL] Scheduled re-engagement check in 24h for person {fub_person_id}")
 
-    return {"success": True, "cancelled_count": cancelled_count}
+    return {"success": True, "cancelled_count": total_cancelled}
 
 
 @shared_task(bind=True)
@@ -1165,11 +1199,146 @@ def _log_ai_interaction(supabase, fub_person_id: int, incoming: str, response):
 # ============================================================================
 # SEQUENCE DEFINITIONS
 # ============================================================================
+#
+# Research backing these cadences:
+# - MIT Study: 21x higher conversion within 5 minutes (speed critical)
+# - LeadSimple: 78% of sales go to first responder
+# - Industry data: 8-12 touchpoints needed to close a deal
+# - Robert Slack mega-team: 45-day campaign = 34% → 65% connection rate
+# - Strategic break-up message (Day 7) = highest response rate
+#
+# ============================================================================
 
 SEQUENCES = {
+    # ==========================================================================
+    # 7-DAY INTENSIVE SEQUENCE - Research-backed aggressive follow-up
+    # ==========================================================================
+    # Total: 14 touches over 7 days (9 SMS + 5 Email)
+    # After Day 7, transitions to monthly nurture if no response
+    # ==========================================================================
+    "new_lead_7day": {
+        "name": "New Lead 7-Day Intensive",
+        "description": "World-class 7-day follow-up based on MIT/LeadSimple research",
+        "steps": [
+            # ===== DAY 0: Speed-to-Lead (handled by trigger_instant_ai_response) =====
+            # Initial SMS + Email are sent instantly via AI generation
+            # This sequence picks up 4 hours later
+
+            # Day 0, +4 hours: Gentle check-in
+            {
+                "step": 1,
+                "delay_minutes": 240,  # 4 hours
+                "channel": "sms",
+                "type": "followup_gentle",
+                "ai_generate": True,  # Use AI to generate contextual message
+            },
+
+            # ===== DAY 1: Value-focused =====
+            # Day 1, 10am: Value SMS with market insight
+            {
+                "step": 2,
+                "delay_minutes": 1020,  # ~17 hours (next day 10am-ish)
+                "channel": "sms",
+                "type": "followup_value",
+                "ai_generate": True,
+            },
+            # Day 1, 2pm: Value email with market data
+            {
+                "step": 3,
+                "delay_minutes": 1260,  # ~21 hours (next day 2pm-ish)
+                "channel": "email",
+                "type": "followup_value",
+                "ai_generate": True,
+            },
+
+            # ===== DAY 2: Question-based (easy to respond) =====
+            {
+                "step": 4,
+                "delay_minutes": 2520,  # Day 2, ~11am
+                "channel": "sms",
+                "type": "followup_question",
+                "ai_generate": True,
+            },
+
+            # ===== DAY 3: Resource offer =====
+            # Day 3, 10am: Resource email
+            {
+                "step": 5,
+                "delay_minutes": 3900,  # Day 3, ~10am
+                "channel": "email",
+                "type": "followup_resource",
+                "ai_generate": True,
+            },
+            # Day 3, 3pm: Casual check-in
+            {
+                "step": 6,
+                "delay_minutes": 4200,  # Day 3, ~3pm
+                "channel": "sms",
+                "type": "followup_casual",
+                "ai_generate": True,
+            },
+
+            # ===== DAY 4: Timing/urgency (soft) =====
+            {
+                "step": 7,
+                "delay_minutes": 5580,  # Day 4, ~12pm
+                "channel": "sms",
+                "type": "followup_timing",
+                "ai_generate": True,
+            },
+
+            # ===== DAY 5: Social proof =====
+            # Day 5, 10am: Success story email
+            {
+                "step": 8,
+                "delay_minutes": 6900,  # Day 5, ~10am
+                "channel": "email",
+                "type": "followup_social_proof",
+                "ai_generate": True,
+            },
+            # Day 5, 4pm: Soft no-pressure SMS
+            {
+                "step": 9,
+                "delay_minutes": 7260,  # Day 5, ~4pm
+                "channel": "sms",
+                "type": "followup_soft",
+                "ai_generate": True,
+            },
+
+            # ===== DAY 6: Helpful offer =====
+            {
+                "step": 10,
+                "delay_minutes": 8640,  # Day 6, ~11am
+                "channel": "sms",
+                "type": "followup_helpful",
+                "ai_generate": True,
+            },
+
+            # ===== DAY 7: Strategic Break-Up (highest response rate!) =====
+            # Day 7, 10am: Warm close email
+            {
+                "step": 11,
+                "delay_minutes": 10020,  # Day 7, ~10am
+                "channel": "email",
+                "type": "followup_final",
+                "ai_generate": True,
+            },
+            # Day 7, 3pm: Final SMS - transition to monthly
+            {
+                "step": 12,
+                "delay_minutes": 10320,  # Day 7, ~3pm
+                "channel": "sms",
+                "type": "followup_final",
+                "ai_generate": True,
+                "triggers_nurture": True,  # After this, move to monthly nurture
+            },
+        ],
+    },
+
+    # Legacy 24-hour sequence (kept for backwards compatibility)
     "new_lead_24h": {
-        "name": "New Lead 24-Hour Sequence",
-        "description": "Aggressive but friendly follow-up for fresh leads",
+        "name": "New Lead 24-Hour Sequence (Legacy)",
+        "description": "Shorter follow-up - use new_lead_7day instead",
         "steps": [
             {
                 "step": 1,
@@ -1203,6 +1372,7 @@ SEQUENCES = {
             },
         ],
     },
+
     "post_showing": {
         "name": "Post-Showing Follow-up",
         "description": "Follow up after property showing",
@@ -1223,7 +1393,30 @@ SEQUENCES = {
     },
 }
 
+# ============================================================================
+# NURTURE SEQUENCES - For leads after Day 7 intensive or opted for long-term
+# ============================================================================
+
 NURTURE_SEQUENCES = {
+    # Monthly check-ins after 7-day intensive completes
+    "post_intensive_monthly": {
+        "name": "Monthly Nurture (Post-Intensive)",
+        "description": "Monthly touchpoints after 7-day intensive sequence",
+        "steps": [
+            # Week 2 (Day 14): First monthly check-in
+            {"step": 1, "delay_days": 7, "channel": "sms", "type": "nurture_checkin", "ai_generate": True},
+            # Week 3 (Day 21): Market update email
+            {"step": 2, "delay_days": 14, "channel": "email", "type": "nurture_market_update", "ai_generate": True},
+            # Month 1 (Day 30): Monthly SMS
+            {"step": 3, "delay_days": 23, "channel": "sms", "type": "nurture_value", "ai_generate": True},
+            # Month 2 (Day 60): Email with new listings
+            {"step": 4, "delay_days": 53, "channel": "email", "type": "nurture_new_listing", "ai_generate": True},
+            # Month 3 (Day 90): Re-engagement attempt
+            {"step": 5, "delay_days": 83, "channel": "sms", "type": "re_engage_warm", "ai_generate": True},
+            # Continues monthly after this...
+        ],
+    },
+
     "8x8": {
         "name": "8x8 Nurture Cadence",
         "description": "8 touches over 8 weeks for long-term nurture",
@@ -1238,6 +1431,7 @@ NURTURE_SEQUENCES = {
             {"step": 8, "delay_days": 56, "channel": "sms", "template_id": "re_engage_cold"},
         ],
     },
+
     "monthly": {
         "name": "Monthly Check-in",
         "description": "Monthly touchpoint for cold leads",
@@ -1450,68 +1644,75 @@ def trigger_instant_ai_response(
             return {"success": False, "error": f"Compliance: {compliance_result.reason}"}
 
         # ================================================================
-        # INTELLIGENT FIRST CONTACT - Use AI for context-aware message
+        # INTELLIGENT FIRST CONTACT - AI-Powered SMS + Email
+        # Uses full lead context: source, location, timeline, financing
         # ================================================================
-        from app.ai_agent.response_generator import AIResponseGenerator, LeadProfile
-        from app.ai_agent.followup_manager import FollowUpManager, MessageType
+        from app.ai_agent.response_generator import LeadProfile
+        from app.ai_agent.initial_outreach_generator import (
+            generate_initial_outreach,
+            LeadContext,
+        )
+        from app.email.ai_email_service import get_ai_email_service, EmailCategory
 
         # Build rich lead profile for intelligent context
         lead_profile = LeadProfile.from_fub_data(person_data)
 
-        # Try to use AI for intelligent first contact
-        message = None
+        # Get events for additional context (timeline, financing, etc.)
+        events = []
         try:
-            response_generator = AIResponseGenerator(
-                personality=settings.personality_tone,
-                agent_name=settings.agent_name,
-                brokerage_name=settings.brokerage_name,
-            )
+            import requests
+            import base64
+            import os
+            fub_api_key = os.getenv('FUB_API_KEY')
+            if fub_api_key:
+                headers = {
+                    'Authorization': f'Basic {base64.b64encode(f"{fub_api_key}:".encode()).decode()}',
+                }
+                resp = requests.get(
+                    f'https://api.followupboss.com/v1/events?personId={fub_person_id}&limit=5',
+                    headers=headers,
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    events = resp.json().get('events', [])
+                    logger.info(f"Got {len(events)} events for lead context")
+        except Exception as e:
+            logger.warning(f"Could not fetch events for context: {e}")
 
-            # Generate AI-powered first contact with full lead context
-            ai_response = asyncio.run(
-                response_generator.generate_response(
-                    incoming_message="",  # Empty for first contact
-                    conversation_history=[],
-                    lead_context={
-                        "first_name": first_name,
-                        "score": lead_profile.score,
-                        "source": source or lead_profile.source,
-                    },
-                    current_state="initial",
-                    qualification_data={},
-                    lead_profile=lead_profile,
+        # Get lead's email for email outreach
+        emails = person_data.get("emails", [])
+        lead_email = emails[0].get("value") if emails else None
+
+        # Generate AI-powered initial outreach (SMS + Email)
+        message = None
+        outreach = None
+        try:
+            outreach = asyncio.run(
+                generate_initial_outreach(
+                    person_data=person_data,
+                    events=events,
+                    agent_name=settings.agent_name,
+                    agent_email=settings.agent_email or "",
+                    agent_phone=settings.agent_phone or "",
+                    brokerage_name=settings.brokerage_name,
                 )
             )
 
-            if ai_response.quality.value in ["excellent", "good", "acceptable"]:
-                message = ai_response.response_text
-                logger.info(f"AI-generated intelligent first contact for {fub_person_id}")
-            else:
-                logger.warning(f"AI response quality insufficient, using template fallback")
+            message = outreach.sms_message
+            logger.info(
+                f"AI-generated initial outreach for {fub_person_id} "
+                f"(model: {outreach.model_used}, context: {outreach.context_used})"
+            )
 
         except Exception as ai_error:
-            logger.warning(f"AI first contact failed, using template: {ai_error}")
+            logger.warning(f"AI initial outreach failed, using fallback: {ai_error}")
 
-        # Fallback to templates if AI failed
+        # Fallback if AI generation failed
         if not message:
-            templates = FollowUpManager.MESSAGE_TEMPLATES.get(MessageType.FIRST_CONTACT, [])
-            if templates:
-                template = random.choice(templates)
-                # Determine area from profile
-                area = (
-                    lead_profile.preferred_neighborhoods[0] if lead_profile.preferred_neighborhoods
-                    else lead_profile.preferred_cities[0] if lead_profile.preferred_cities
-                    else person_data.get("addresses", [{}])[0].get("city", "your area") if person_data.get("addresses")
-                    else "your area"
-                )
-                message = template.format(
-                    first_name=first_name,
-                    agent_name=settings.agent_name,
-                    brokerage=settings.brokerage_name,
-                    area=area,
-                )
-            else:
-                message = f"Hey {first_name}! {settings.agent_name} here. Saw you were looking at homes - exciting! When are you thinking of making a move?"
+            # Build context for smart fallback
+            lead_ctx = LeadContext.from_fub_data(person_data, events)
+            location = lead_ctx.get_location_str()
+            message = f"Hey {first_name}! {settings.agent_name} here. Saw you were checking out {location} - great area! What's got you interested in that neighborhood?"
 
         # SEND THE MESSAGE IMMEDIATELY
         sms_service = FUBSMSService()
@@ -1521,7 +1722,48 @@ def trigger_instant_ai_response(
         )
 
         if result.get("success"):
-            logger.info(f"✅ Instant first contact sent to person {fub_person_id}")
+            logger.info(f"✅ Instant SMS sent to person {fub_person_id}")
+
+            # ================================================================
+            # SEND IMMEDIATE EMAIL (if we have email and generated content)
+            # ================================================================
+            email_sent = False
+            if lead_email and outreach and outreach.email_body:
+                try:
+                    email_service = get_ai_email_service()
+                    email_result = email_service.send_email(
+                        to_email=lead_email,
+                        subject=outreach.email_subject,
+                        html_content=outreach.email_body,
+                        text_content=outreach.email_text,
+                        from_email=settings.agent_email,
+                        from_name=settings.agent_name,
+                        fub_person_id=fub_person_id,
+                        category=EmailCategory.WELCOME,
+                        template_id="ai_initial_outreach_v1",
+                        log_to_fub=True,
+                    )
+
+                    if email_result.success:
+                        email_sent = True
+                        logger.info(f"✅ Instant EMAIL sent to person {fub_person_id}")
+
+                        # Log the email
+                        supabase.table("ai_message_log").insert({
+                            "fub_person_id": fub_person_id,
+                            "direction": "outbound",
+                            "channel": "email",
+                            "message_content": outreach.email_subject,
+                            "intent_detected": "first_contact_instant_email",
+                            "created_at": datetime.utcnow().isoformat(),
+                        }).execute()
+                    else:
+                        logger.warning(f"Email send failed: {email_result.error}")
+
+                except Exception as email_error:
+                    logger.warning(f"Could not send instant email: {email_error}")
+            elif not lead_email:
+                logger.info(f"No email address for person {fub_person_id}, skipping email")
 
             # Mark first AI contact timestamp
             supabase.table("ai_conversations").upsert({
@@ -1532,7 +1774,7 @@ def trigger_instant_ai_response(
                 "state": "initial",
             }, on_conflict="fub_person_id").execute()
 
-            # Log the message
+            # Log the SMS message
             supabase.table("ai_message_log").insert({
                 "fub_person_id": fub_person_id,
                 "direction": "outbound",
@@ -1567,7 +1809,12 @@ def trigger_instant_ai_response(
             return {
                 "success": True,
                 "fub_person_id": fub_person_id,
-                "message_sent": True,
+                "sms_sent": True,
+                "email_sent": email_sent,
+                "sms_message": message,
+                "email_subject": outreach.email_subject if outreach else None,
+                "context_used": outreach.context_used if outreach else None,
+                "model_used": outreach.model_used if outreach else "fallback",
                 "sequence_scheduled": sequence_result["total_scheduled"],
             }
 

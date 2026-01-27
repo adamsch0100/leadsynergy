@@ -46,6 +46,8 @@ from app.ai_agent.response_generator import (
     LeadProfile,
     ResponseQuality,
     ToolResponse,
+    detect_handoff_triggers,
+    get_handoff_acknowledgment,
 )
 from app.ai_agent.tool_executor import ToolExecutor, ExecutionResult
 from app.ai_agent.intent_detector import (
@@ -431,7 +433,35 @@ class AIAgentService:
             response.detected_intent = detected.primary_intent.value
             response.detected_sentiment = detected.sentiment
 
-            # Step 3: Check for immediate handoff triggers
+            # Step 2.5: Check for smart handoff triggers (showing requests, call requests, etc.)
+            handoff_trigger = detect_handoff_triggers(message)
+            if handoff_trigger:
+                logger.info(f"Smart handoff trigger detected for {lead_id}: {handoff_trigger}")
+
+                # Create FUB task for the agent
+                await self._create_handoff_task(
+                    fub_person_id=fub_person_id,
+                    trigger_type=handoff_trigger,
+                    lead_message=message,
+                    lead_profile=lead_profile,
+                )
+
+                # Get acknowledgment message
+                agent_name = self.settings.agent_name or lead_profile.assigned_agent or "your agent"
+                response.response_text = get_handoff_acknowledgment(handoff_trigger, agent_name)
+                response.should_handoff = True
+                response.handoff_reason = f"Lead trigger: {handoff_trigger}"
+                response.result = ProcessingResult.HANDOFF_TRIGGERED
+                response.template_used = f"handoff_{handoff_trigger}"
+                response.response_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+                # Update conversation state to handed_off
+                if conversation_context:
+                    conversation_context.state = ConversationState.HANDED_OFF
+
+                return response
+
+            # Step 3: Check for immediate handoff triggers (frustration, profanity, explicit requests)
             if self._should_immediate_handoff(detected, lead_profile):
                 return await self._handle_handoff(
                     response=response,
@@ -790,6 +820,95 @@ class AIAgentService:
         response.template_used = "opt_out"
 
         return response
+
+    async def _create_handoff_task(
+        self,
+        fub_person_id: int,
+        trigger_type: str,
+        lead_message: str,
+        lead_profile: LeadProfile,
+    ):
+        """
+        Create a FUB task for the agent when a handoff is triggered.
+
+        This ensures the human agent is immediately notified and has
+        context about what the lead wants.
+
+        Args:
+            fub_person_id: FUB person ID
+            trigger_type: Type of handoff trigger (schedule_showing, wants_call, etc.)
+            lead_message: The lead's message that triggered the handoff
+            lead_profile: Lead profile for context
+        """
+        if not fub_person_id:
+            logger.warning("Cannot create handoff task without fub_person_id")
+            return
+
+        # Task titles based on trigger type
+        task_titles = {
+            "schedule_showing": "Lead wants to schedule showing",
+            "wants_call": "Lead requested phone call",
+            "urgent_timeline": "URGENT: Lead has time-sensitive needs",
+            "complex_question": "Lead has question requiring expertise",
+            "price_negotiation": "Lead ready to make offer",
+        }
+
+        # Task priorities - some are more urgent than others
+        task_priorities = {
+            "schedule_showing": "high",
+            "wants_call": "high",
+            "urgent_timeline": "high",
+            "complex_question": "medium",
+            "price_negotiation": "high",
+        }
+
+        title = task_titles.get(trigger_type, f"AI Handoff: {trigger_type}")
+        priority = task_priorities.get(trigger_type, "medium")
+
+        # Build task description with context
+        description = f"""AI Agent detected a handoff trigger and transferred this lead.
+
+TRIGGER: {trigger_type.replace('_', ' ').title()}
+
+LEAD MESSAGE:
+"{lead_message}"
+
+LEAD INFO:
+- Name: {lead_profile.first_name} {lead_profile.last_name}
+- Score: {lead_profile.score}/100 ({lead_profile.score_label})
+- Source: {lead_profile.source}
+- Timeline: {lead_profile.timeline or 'Unknown'}
+- Pre-approved: {'Yes' if lead_profile.is_pre_approved else 'No' if lead_profile.is_pre_approved is not None else 'Unknown'}
+
+ACTION REQUIRED: Respond to this lead promptly!
+"""
+
+        try:
+            from app.database.fub_api_client import FUBApiClient
+            from datetime import timedelta
+
+            fub = FUBApiClient()
+
+            # Create task in FUB
+            due_date = datetime.utcnow() + timedelta(hours=2)  # Due in 2 hours
+
+            fub.create_task(
+                person_id=fub_person_id,
+                description=f"{title}\n\n{description}",
+                due_at=due_date.isoformat() + "Z",
+            )
+
+            # Also add a note for visibility
+            fub.add_note(
+                person_id=fub_person_id,
+                note_content=f"<b>AI Agent Handoff</b><br><br>Trigger: {trigger_type}<br>Lead said: \"{lead_message[:200]}...\"<br><br>The AI has responded and alerted the team.",
+            )
+
+            logger.info(f"Created handoff task for person {fub_person_id}: {trigger_type}")
+
+        except Exception as e:
+            logger.error(f"Failed to create handoff task for person {fub_person_id}: {e}")
+            # Don't raise - we still want to return the handoff response
 
     def _handle_channel_preference(
         self,

@@ -16,6 +16,10 @@ Integrates with Celery for scheduled task execution and respects:
 """
 
 import logging
+import os
+import re
+import json
+import aiohttp
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, time
 from typing import Optional, Dict, Any, List, Tuple
@@ -27,6 +31,13 @@ except ImportError:
     # Python 3.8 fallback
     from backports.zoneinfo import ZoneInfo
 import pytz
+
+# Import source name mapping from initial outreach generator for consistent naming
+try:
+    from app.ai_agent.initial_outreach_generator import SOURCE_NAME_MAP
+except ImportError:
+    # Fallback if not available
+    SOURCE_NAME_MAP = {}
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +182,11 @@ class FollowUpTrigger(Enum):
     RE_ENGAGEMENT = "re_engagement"  # Been a while since contact
     EVENT_BASED = "event_based"  # Property match, price drop, etc.
 
+    # Smart re-engagement triggers (context-aware)
+    RESUME_QUALIFICATION = "resume_qualification"  # Was in qualification flow
+    RESUME_SCHEDULING = "resume_scheduling"        # Was scheduling appointment
+    RESUME_OBJECTION = "resume_objection"          # Had unresolved objection
+
 
 class MessageType(Enum):
     """Type of follow-up message."""
@@ -203,6 +219,27 @@ class MessageType(Enum):
     # Voice messages (for when voice_enabled=True)
     RVM_INTRO = "rvm_intro"
     CALL_CHECKIN = "call_checkin"
+
+    # ============================================================================
+    # NEW EMAIL MESSAGE TYPES - Multi-channel follow-up (added for email integration)
+    # ============================================================================
+    EMAIL_WELCOME = "email_welcome"             # Day 0 - Initial welcome email with full intro
+    EMAIL_VALUE = "email_value"                 # Day 1 - Market insights + appointment slots
+    EMAIL_SOCIAL_PROOF = "email_social_proof"   # Day 5 - Success story / case study
+    EMAIL_FINAL = "email_final"                 # Day 7 - Warm close, door open
+
+    # Additional SMS types
+    HELPFUL_CHECKIN = "helpful_checkin"         # Day 6 - Soft helpful SMS
+
+    # ============================================================================
+    # SMART RE-ENGAGEMENT MESSAGE TYPES
+    # These are context-aware messages that reference the previous conversation
+    # instead of generic follow-ups. The AI knows what was discussed.
+    # ============================================================================
+    RESUME_QUALIFICATION = "resume_qualification"     # Pick up qualification questions
+    RESUME_SCHEDULING = "resume_scheduling"           # Re-offer appointment times
+    RESUME_OBJECTION = "resume_objection"             # Address lingering concern
+    RESUME_GENERAL = "resume_general"                 # General check-in with context
 
 
 @dataclass
@@ -279,16 +316,18 @@ class FollowUpManager:
     # Robert Slack mega-team: 45-day text campaign = 34% -> 65% connections
     # 78% of sales go to first responder (LeadSimple)
     #
-    # With voice_enabled=False (default): 7 touches over 7 days
-    # With voice_enabled=True: 11 touches over 7 days
+    # UPDATED: Multi-channel approach with EMAIL throughout
+    # With voice_enabled=False (default): 12 touches over 7 days (7 SMS + 5 Email)
+    # With voice_enabled=True: 16 touches over 7 days (7 SMS + 5 Email + 4 Voice)
     #
     # Each step includes:
     # - Qualification questions to gather intel
     # - Appointment CTAs using "assumptive close" technique
     # - Strategic break-up message (highest response rate!)
+    # - EMAIL integrated throughout for multi-channel reach
     # ==========================================================================
     SEQUENCE_NEW_LEAD = [
-        # Step 1: Day 0, 0 min - IMMEDIATE first contact + qualify timeline
+        # Step 1: Day 0, 0 min - IMMEDIATE first contact SMS
         FollowUpStep(
             delay_days=0,
             delay_minutes=0,
@@ -296,7 +335,15 @@ class FollowUpManager:
             message_type=MessageType.FIRST_CONTACT,
             skip_if_disabled=None,  # Always send
         ),
-        # Step 2: Day 0, 5 min - RVM intro (if voice enabled)
+        # Step 2: Day 0, 2 min - Welcome EMAIL (full intro + value)
+        FollowUpStep(
+            delay_days=0,
+            delay_minutes=2,
+            channel="email",
+            message_type=MessageType.EMAIL_WELCOME,
+            skip_if_disabled=None,  # Always send - email establishes professionalism
+        ),
+        # Step 3: Day 0, 5 min - RVM intro (if voice enabled)
         FollowUpStep(
             delay_days=0,
             delay_minutes=5,
@@ -304,7 +351,7 @@ class FollowUpManager:
             message_type=MessageType.RVM_INTRO,
             skip_if_disabled="voice_enabled",  # Skip if voice OFF
         ),
-        # Step 3: Day 0, 30 min - Value + appointment CTA
+        # Step 4: Day 0, 30 min - Value SMS + appointment CTA
         FollowUpStep(
             delay_days=0,
             delay_minutes=30,
@@ -312,7 +359,7 @@ class FollowUpManager:
             message_type=MessageType.VALUE_WITH_CTA,
             skip_if_disabled=None,  # Always send
         ),
-        # Step 4: Day 0, 2 hours - Call check-in (if voice enabled)
+        # Step 5: Day 0, 2 hours - Call check-in (if voice enabled)
         FollowUpStep(
             delay_days=0,
             delay_minutes=120,
@@ -320,7 +367,7 @@ class FollowUpManager:
             message_type=MessageType.CALL_CHECKIN,
             skip_if_disabled="voice_enabled",  # Skip if voice OFF
         ),
-        # Step 5: Day 1, AM - Qualify motivation
+        # Step 6: Day 1, AM - Qualify motivation SMS
         FollowUpStep(
             delay_days=1,
             delay_minutes=0,  # Morning
@@ -328,15 +375,23 @@ class FollowUpManager:
             message_type=MessageType.QUALIFY_MOTIVATION,
             skip_if_disabled=None,
         ),
-        # Step 6: Day 1, PM - Call follow-up (if voice enabled)
+        # Step 7: Day 1, PM - Value EMAIL with market insights
         FollowUpStep(
             delay_days=1,
-            delay_minutes=480,  # 8 hours after morning = afternoon
+            delay_minutes=360,  # 6 hours after morning = early afternoon
+            channel="email",
+            message_type=MessageType.EMAIL_VALUE,
+            skip_if_disabled=None,
+        ),
+        # Step 8: Day 1, Late PM - Call follow-up (if voice enabled)
+        FollowUpStep(
+            delay_days=1,
+            delay_minutes=540,  # 9 hours after morning = late afternoon
             channel="call",
             message_type=MessageType.CALL_CHECKIN,
             skip_if_disabled="voice_enabled",
         ),
-        # Step 7: Day 2 - Property value add
+        # Step 9: Day 2 - Property value add SMS
         FollowUpStep(
             delay_days=2,
             delay_minutes=0,
@@ -344,7 +399,7 @@ class FollowUpManager:
             message_type=MessageType.VALUE_ADD_LISTING,
             skip_if_disabled=None,
         ),
-        # Step 8: Day 3 - Email market report + time slots
+        # Step 10: Day 3 - Email market report + time slots
         FollowUpStep(
             delay_days=3,
             delay_minutes=0,
@@ -352,7 +407,7 @@ class FollowUpManager:
             message_type=MessageType.EMAIL_MARKET_REPORT,
             skip_if_disabled=None,
         ),
-        # Step 9: Day 4 - Social proof SMS
+        # Step 11: Day 4 - Social proof SMS
         FollowUpStep(
             delay_days=4,
             delay_minutes=0,
@@ -360,18 +415,42 @@ class FollowUpManager:
             message_type=MessageType.SOCIAL_PROOF,
             skip_if_disabled=None,
         ),
-        # Step 10: Day 5 - Final call attempt (if voice enabled)
+        # Step 12: Day 5, AM - Social proof EMAIL (success story)
         FollowUpStep(
             delay_days=5,
             delay_minutes=0,
+            channel="email",
+            message_type=MessageType.EMAIL_SOCIAL_PROOF,
+            skip_if_disabled=None,
+        ),
+        # Step 13: Day 5, PM - Call attempt (if voice enabled)
+        FollowUpStep(
+            delay_days=5,
+            delay_minutes=360,  # 6 hours later = afternoon
             channel="call",
             message_type=MessageType.CALL_CHECKIN,
             skip_if_disabled="voice_enabled",
         ),
-        # Step 11: Day 7 - Strategic break-up (highest response rate!)
+        # Step 14: Day 6 - Helpful check-in SMS (soft touch)
+        FollowUpStep(
+            delay_days=6,
+            delay_minutes=0,
+            channel="sms",
+            message_type=MessageType.HELPFUL_CHECKIN,
+            skip_if_disabled=None,
+        ),
+        # Step 15: Day 7, AM - Final EMAIL (warm close, door open)
         FollowUpStep(
             delay_days=7,
             delay_minutes=0,
+            channel="email",
+            message_type=MessageType.EMAIL_FINAL,
+            skip_if_disabled=None,
+        ),
+        # Step 16: Day 7, PM - Strategic break-up SMS (highest response rate!)
+        FollowUpStep(
+            delay_days=7,
+            delay_minutes=360,  # 6 hours later = afternoon
             channel="sms",
             message_type=MessageType.STRATEGIC_BREAKUP,
             skip_if_disabled=None,
@@ -461,11 +540,43 @@ class FollowUpManager:
 
     # Long-term nurture (monthly touchpoints)
     # For leads with 6+ month timeline - stay top of mind without pressure
+    # UPDATED: Alternates SMS and Email for multi-channel nurture
     SEQUENCE_NURTURE = [
+        # Month 1 - Email with market update
         FollowUpStep(
             delay_days=30,
             channel="email",
             message_type=MessageType.MONTHLY_TOUCHPOINT,
+        ),
+        # Month 2 - SMS check-in
+        FollowUpStep(
+            delay_days=60,
+            channel="sms",
+            message_type=MessageType.GENTLE_FOLLOWUP,
+        ),
+        # Month 3 - Email with value
+        FollowUpStep(
+            delay_days=90,
+            channel="email",
+            message_type=MessageType.MONTHLY_TOUCHPOINT,
+        ),
+        # Month 4 - SMS
+        FollowUpStep(
+            delay_days=120,
+            channel="sms",
+            message_type=MessageType.VALUE_ADD,
+        ),
+        # Month 5 - Email
+        FollowUpStep(
+            delay_days=150,
+            channel="email",
+            message_type=MessageType.MONTHLY_TOUCHPOINT,
+        ),
+        # Month 6 - SMS + offer to re-engage
+        FollowUpStep(
+            delay_days=180,
+            channel="sms",
+            message_type=MessageType.GENTLE_FOLLOWUP,
         ),
     ]
 
@@ -591,6 +702,43 @@ class FollowUpManager:
             # This is used as context for AI voice or human agent
             "Hi {first_name}, this is {agent_name} calling about your home search in {area}. Do you have a quick minute to chat?",
         ],
+
+        # ======================================================================
+        # NEW EMAIL TEMPLATES - Multi-channel follow-up sequence
+        # These provide fallback templates when AI generation is unavailable
+        # ======================================================================
+
+        # EMAIL_WELCOME - Day 0, Initial welcome email with full intro
+        # Goal: Establish professionalism, introduce yourself, offer value
+        MessageType.EMAIL_WELCOME: [
+            "Subject: Nice to meet you, {first_name}!\n\nHey {first_name},\n\nI just sent you a quick text, but wanted to follow up here too!\n\nI'm {agent_name} with {brokerage}. I saw you're interested in {area} - great choice! I specialize in that area and would love to help.\n\nA few things I can do for you:\n- Send you new listings as soon as they hit the market\n- Share insider info on neighborhoods\n- Answer any questions about the process\n\nWhat's your timeline looking like? Just reply to this email or text me back!\n\nTalk soon,\n{agent_name}\n{agent_phone}",
+        ],
+
+        # EMAIL_VALUE - Day 1, Market insights + appointment slots
+        # Goal: Provide real value, multiple appointment options
+        MessageType.EMAIL_VALUE: [
+            "Subject: {area} Market Update + Quick Question\n\nHey {first_name},\n\nWanted to share what I'm seeing in {area} right now:\n\n- Average days on market: {dom} days\n- Price trend: {trend}\n- Hot tip: {market_insight}\n\nI've got some time this week if you want to chat strategy. Would any of these work?\n\n- {slot_1}\n- {slot_2}\n- {slot_3}\n\nOr just reply with what works for you!\n\n{agent_name}",
+        ],
+
+        # EMAIL_SOCIAL_PROOF - Day 5, Success story / case study
+        # Goal: Build credibility through specific success stories
+        MessageType.EMAIL_SOCIAL_PROOF: [
+            "Subject: How I helped a family just like you in {area}\n\nHey {first_name},\n\nQuick story I thought you'd appreciate:\n\nI recently helped a family find their dream home in {area}. They were in a similar situation - looking to {lead_type_action} and weren't sure where to start.\n\nWithin {timeframe}, we found them the perfect place:\n- Great neighborhood\n- Under budget\n- Beat out 3 other offers\n\nI'd love to do the same for you when you're ready. No pressure at all - just wanted you to know what's possible!\n\nHere when you need me,\n{agent_name}\n{agent_phone}",
+        ],
+
+        # EMAIL_FINAL - Day 7, Warm close, door open
+        # Goal: Leave on a positive note, door always open
+        MessageType.EMAIL_FINAL: [
+            "Subject: {first_name}, one last thing...\n\nHey {first_name},\n\nI've reached out a few times and haven't heard back - totally understand! Life gets busy.\n\nI'm going to give you some space, but I wanted to leave you with this:\n\n- My door is always open\n- If your situation changes, just reply to this email\n- No judgment, no pressure - I'm here when YOU'RE ready\n\nWishing you all the best with your home search. If you ever need anything real estate related, I'm just a text or email away.\n\nTake care,\n{agent_name}\n{agent_phone}",
+        ],
+
+        # HELPFUL_CHECKIN - Day 6, Soft helpful SMS
+        # Goal: Offer specific help without being pushy
+        MessageType.HELPFUL_CHECKIN: [
+            "{first_name}, just checking in! Is there anything specific I can help you with - questions about neighborhoods, the market, or the buying process? I'm here if you need me!",
+            "Hey {first_name}! Wanted to see if there's anything I can do to help. Send listings? Answer questions? Just let me know!",
+            "{first_name}, thinking of you! If you're still looking in {area}, I'd love to help. Any questions I can answer?",
+        ],
     }
 
     def __init__(self, supabase_client=None):
@@ -683,12 +831,20 @@ class FollowUpManager:
             True if AI should generate the message, False to use template
         """
         # Message types that benefit from AI personalization
+        # ALL EMAILS should use AI for rich, context-aware content
         ai_preferred_types = {
             MessageType.FIRST_CONTACT,      # First impression matters - personalize
             MessageType.VALUE_ADD,          # Value should be contextual
             MessageType.VALUE_WITH_CTA,     # Appointment CTA should be personalized
             MessageType.VALUE_ADD_LISTING,  # Property-specific content
             MessageType.STRATEGIC_BREAKUP,  # Break-up message is high-stakes
+            # NEW: All email types should use AI for personalization
+            MessageType.EMAIL_WELCOME,      # Day 0 - Full intro needs personalization
+            MessageType.EMAIL_VALUE,        # Day 1 - Market insights personalized
+            MessageType.EMAIL_MARKET_REPORT,  # Day 3 - Market report personalized
+            MessageType.EMAIL_SOCIAL_PROOF,   # Day 5 - Success story personalized
+            MessageType.EMAIL_FINAL,          # Day 7 - Final close personalized
+            MessageType.HELPFUL_CHECKIN,      # Day 6 - Soft SMS personalized
         }
 
         # Message types that work well as templates
@@ -697,6 +853,7 @@ class FollowUpManager:
             MessageType.SOCIAL_PROOF,       # Social proof can be templated
             MessageType.MONTHLY_TOUCHPOINT, # Nurture works with templates
             MessageType.RVM_INTRO,          # Voice scripts need consistency
+            MessageType.CALL_CHECKIN,       # Call scripts need consistency
         }
 
         if message_type in ai_preferred_types:
@@ -820,6 +977,42 @@ class FollowUpManager:
         if self.supabase:
             await self._save_scheduled_followups(scheduled_followups)
 
+        # ================================================================
+        # NEW: Auto-schedule nurture continuation after NEW_LEAD sequence
+        # If no response after Day 7, continue with monthly nurture
+        # ================================================================
+        nurture_scheduled = 0
+        if trigger == FollowUpTrigger.NEW_LEAD:
+            # Schedule nurture starting Day 30 (after Day 7 intensive ends)
+            nurture_base_time = base_time + timedelta(days=7)  # Start counting from Day 7
+            nurture_followups = []
+
+            for step_index, step in enumerate(self.SEQUENCE_NURTURE):
+                scheduled_at = nurture_base_time + timedelta(days=step.delay_days)
+                scheduled_at = self._adjust_for_working_hours(scheduled_at, lead_timezone)
+
+                actual_channel = self._resolve_channel(step.channel, preferred_channel)
+
+                followup = ScheduledFollowUp(
+                    id=str(uuid.uuid4()),
+                    fub_person_id=fub_person_id,
+                    organization_id=organization_id,
+                    scheduled_at=scheduled_at,
+                    channel=actual_channel,
+                    message_type=step.message_type.value,
+                    sequence_step=len(scheduled_followups) + step_index,  # Continue step numbering
+                    sequence_id=sequence_id,  # Same sequence ID for tracking
+                )
+                nurture_followups.append(followup)
+
+            if self.supabase and nurture_followups:
+                await self._save_scheduled_followups(nurture_followups)
+                nurture_scheduled = len(nurture_followups)
+                logger.info(
+                    f"Scheduled {nurture_scheduled} nurture follow-ups for person {fub_person_id} "
+                    f"(starting Day 30+)"
+                )
+
         logger.info(
             f"Scheduled {len(scheduled_followups)} follow-ups for person {fub_person_id} "
             f"(sequence: {sequence_id}, trigger: {trigger.value}, skipped: {skipped_count})"
@@ -832,6 +1025,7 @@ class FollowUpManager:
             "total_scheduled": len(scheduled_followups),
             "total_skipped": skipped_count,
             "qualification_skipped": qualification_skipped_count,  # Already-answered questions
+            "nurture_scheduled": nurture_scheduled,  # Monthly nurture after Day 7
         }
 
     async def cancel_followups(
@@ -948,18 +1142,29 @@ class FollowUpManager:
         self,
         followup_id: str,
         agent_service=None,
+        person_data: Dict[str, Any] = None,
+        agent_name: str = "Your Agent",
+        agent_phone: str = "",
+        brokerage_name: str = "",
+        previous_messages: List[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Execute a scheduled follow-up.
 
         This is called by the Celery task when a follow-up is due.
+        Now supports AI-powered message generation with full lead context.
 
         Args:
             followup_id: ID of the follow-up to process
             agent_service: AIAgentService instance for generating messages
+            person_data: FUB person data for AI generation (optional, will fetch if needed)
+            agent_name: Agent's name for signing messages
+            agent_phone: Agent's phone number
+            brokerage_name: Brokerage name for email signature
+            previous_messages: List of previous messages sent (for AI context)
 
         Returns:
-            Dict with execution result
+            Dict with execution result including generated message
         """
         if not self.supabase:
             return {"success": False, "error": "No database connection"}
@@ -982,33 +1187,109 @@ class FollowUpManager:
                     "error": f"Follow-up status is {followup_data['status']}, not pending",
                 }
 
-            # Get lead profile and check stage eligibility
-            # (In real implementation, would fetch from FUB/database)
-            # For now, we'll assume the caller handles this
-
-            # Generate and send the message
+            # Get message details
             message_type = MessageType(followup_data["message_type"])
             channel = followup_data["channel"]
+            sequence_step = followup_data.get("sequence_step", 0)
+            fub_person_id = followup_data["fub_person_id"]
 
-            # Get a random template for this message type
-            import random
-            templates = self.MESSAGE_TEMPLATES.get(message_type, [])
-            template = random.choice(templates) if templates else "Following up - any questions?"
+            # Calculate which day of the sequence this is
+            # Based on sequence step, approximate the day
+            day_mapping = {
+                0: 0, 1: 0, 2: 0, 3: 0, 4: 0,  # Day 0 steps
+                5: 1, 6: 1, 7: 1,  # Day 1 steps
+                8: 2,  # Day 2
+                9: 3,  # Day 3
+                10: 4,  # Day 4
+                11: 5, 12: 5,  # Day 5 steps
+                13: 6,  # Day 6
+                14: 7, 15: 7,  # Day 7 steps
+            }
+            sequence_day = day_mapping.get(sequence_step, sequence_step // 2)
 
-            # Mark as sent (actual sending would be done by caller)
+            # ================================================================
+            # AI GENERATION: Check if this message type should use AI
+            # ================================================================
+            if self.should_use_ai_for_step(message_type):
+                logger.info(f"Using AI generation for {message_type.value}")
+
+                # If person_data not provided, try to fetch from FUB
+                if not person_data:
+                    try:
+                        # Try to get from database cache first
+                        person_result = self.supabase.table("lead_profiles").select("*").eq(
+                            "fub_person_id", fub_person_id
+                        ).single().execute()
+
+                        if person_result.data:
+                            # Convert to FUB-like format
+                            profile = person_result.data
+                            person_data = {
+                                "firstName": profile.get("first_name", "there"),
+                                "lastName": profile.get("last_name", ""),
+                                "source": profile.get("source", ""),
+                                "tags": profile.get("tags", []),
+                                "cities": profile.get("preferred_cities", ""),
+                            }
+                        else:
+                            # Minimal fallback
+                            person_data = {"firstName": "there"}
+                    except Exception as e:
+                        logger.warning(f"Could not fetch person data: {e}")
+                        person_data = {"firstName": "there"}
+
+                # Generate AI message
+                ai_result = await generate_followup_message(
+                    person_data=person_data,
+                    message_type=message_type,
+                    channel=channel,
+                    agent_name=agent_name,
+                    agent_phone=agent_phone,
+                    brokerage_name=brokerage_name,
+                    previous_messages=previous_messages,
+                    sequence_day=sequence_day,
+                )
+
+                message_content = ai_result.get("content", "")
+                message_subject = ai_result.get("subject", "Following up")
+                ai_used = ai_result.get("ai_used", False)
+
+                # If AI failed, fall back to template
+                if not ai_used or "[AI" in message_content:
+                    logger.warning(f"AI generation failed, falling back to template")
+                    import random
+                    templates = self.MESSAGE_TEMPLATES.get(message_type, [])
+                    message_content = random.choice(templates) if templates else "Following up - any questions?"
+                    ai_used = False
+
+            else:
+                # ================================================================
+                # TEMPLATE: Use random template for this message type
+                # ================================================================
+                import random
+                templates = self.MESSAGE_TEMPLATES.get(message_type, [])
+                message_content = random.choice(templates) if templates else "Following up - any questions?"
+                message_subject = "Following up"
+                ai_used = False
+
+            # Mark as sent
             self.supabase.table("ai_scheduled_followups").update({
                 "status": FollowUpStatus.SENT.value,
                 "executed_at": datetime.utcnow().isoformat(),
             }).eq("id", followup_id).execute()
 
-            logger.info(f"Processed follow-up {followup_id}: {message_type.value} via {channel}")
+            logger.info(f"Processed follow-up {followup_id}: {message_type.value} via {channel} (AI: {ai_used})")
 
             return {
                 "success": True,
                 "followup_id": followup_id,
                 "channel": channel,
                 "message_type": message_type.value,
-                "template": template,
+                "message": message_content,
+                "subject": message_subject if channel == "email" else None,
+                "ai_used": ai_used,
+                "fub_person_id": fub_person_id,
+                "sequence_day": sequence_day,
             }
 
         except Exception as e:
@@ -1084,6 +1365,284 @@ class FollowUpManager:
         except Exception as e:
             logger.error(f"Error saving scheduled follow-ups: {e}")
             return False
+
+
+# ==============================================================================
+# AI-POWERED MESSAGE GENERATION
+# Uses the same quality and context-awareness as initial_outreach_generator.py
+# ==============================================================================
+
+def get_friendly_source_name(source: str) -> str:
+    """Get friendly source name for display."""
+    if not source:
+        return "your recent inquiry"
+    for key, value in SOURCE_NAME_MAP.items():
+        if key.lower() == source.lower():
+            return value
+    return source
+
+
+def detect_lead_type(tags: List[str]) -> str:
+    """Detect lead type from FUB tags."""
+    if not tags:
+        return "unknown"
+    tag_lower = [t.lower() for t in tags]
+    is_buyer = any('buyer' in t for t in tag_lower)
+    is_seller = any('seller' in t for t in tag_lower)
+    if is_buyer and is_seller:
+        return "both"
+    elif is_seller:
+        return "seller"
+    elif is_buyer:
+        return "buyer"
+    return "unknown"
+
+
+async def generate_followup_message(
+    person_data: Dict[str, Any],
+    message_type: MessageType,
+    channel: str,
+    agent_name: str,
+    agent_phone: str,
+    brokerage_name: str,
+    previous_messages: List[Dict[str, Any]] = None,
+    sequence_day: int = 0,
+    conversation_summary: Dict[str, Any] = None,
+) -> Dict[str, Any]:
+    """
+    Generate an AI-powered follow-up message with full lead context.
+
+    This function provides the same quality and context-awareness as
+    initial_outreach_generator.py, ensuring consistent messaging throughout
+    the follow-up sequence.
+
+    Args:
+        person_data: FUB person data with lead details
+        message_type: The type of follow-up message to generate
+        channel: "sms" or "email"
+        agent_name: Agent's name for signing
+        agent_phone: Agent's phone number
+        brokerage_name: Brokerage name for email signature
+        previous_messages: List of previous messages sent (for context)
+        sequence_day: Which day of the sequence (0-7)
+        conversation_summary: Optional dict with conversation context for smart re-engagement:
+            - last_topic: What we were discussing
+            - answered_questions: Questions the lead already answered
+            - open_questions: Questions we still need answers to
+            - objections: Any objections the lead raised
+            - score: Lead qualification score
+            - state: Conversation state (qualifying, scheduling, etc.)
+
+    Returns:
+        Dict with 'content' (SMS text or email body) and optionally 'subject' (for email)
+    """
+    # Extract lead details
+    first_name = person_data.get('firstName', 'there')
+    last_name = person_data.get('lastName', '')
+    source = person_data.get('source', '')
+    tags = person_data.get('tags', [])
+    cities = person_data.get('cities', '') or 'your area'
+
+    # Get friendly source name and lead type
+    friendly_source = get_friendly_source_name(source)
+    lead_type = detect_lead_type(tags)
+
+    # Build lead type context for AI
+    if lead_type == "both":
+        lead_type_str = "BUYER AND SELLER (coordinated move)"
+        lead_action = "buy and sell"
+    elif lead_type == "seller":
+        lead_type_str = "SELLER"
+        lead_action = "sell"
+    elif lead_type == "buyer":
+        lead_type_str = "BUYER"
+        lead_action = "buy"
+    else:
+        lead_type_str = "Unknown (treat as buyer)"
+        lead_action = "find a home"
+
+    # Build previous message context
+    prev_context = ""
+    if previous_messages:
+        prev_context = "\n\nPREVIOUS MESSAGES SENT (no response yet):\n"
+        for msg in previous_messages[-5:]:  # Last 5 messages
+            content_preview = msg.get('content', '')[:100]
+            prev_context += f"- Day {msg.get('day', '?')}, {msg.get('channel', '?').upper()}: {content_preview}...\n"
+
+    # Message type guidance
+    type_guidance = {
+        MessageType.FIRST_CONTACT: "First contact. Introduce yourself, explain connection, offer value.",
+        MessageType.EMAIL_WELCOME: "Welcome email. Full introduction, value proposition, establish professionalism.",
+        MessageType.VALUE_WITH_CTA: "Value + appointment. Offer specific value and suggest meeting times.",
+        MessageType.QUALIFY_MOTIVATION: "Qualify motivation. Ask easy question about their situation.",
+        MessageType.EMAIL_VALUE: "Value email. Share market insights, provide multiple appointment slots.",
+        MessageType.VALUE_ADD_LISTING: "Property value add. Reference a listing or market tip.",
+        MessageType.EMAIL_MARKET_REPORT: "Market report email. Share data, offer multiple meeting times.",
+        MessageType.SOCIAL_PROOF: "Social proof. Share recent success story.",
+        MessageType.EMAIL_SOCIAL_PROOF: "Social proof email. Detailed success story, build credibility.",
+        MessageType.HELPFUL_CHECKIN: "Helpful check-in. Soft touch, offer specific assistance.",
+        MessageType.EMAIL_FINAL: "Final email. Warm close, leave door open, no pressure.",
+        MessageType.STRATEGIC_BREAKUP: "Strategic break-up. 'Closing file' message - often gets highest response!",
+        # Smart re-engagement types - context-aware
+        MessageType.RESUME_QUALIFICATION: "Resume qualification. Reference what they told you and ask the next qualifying question.",
+        MessageType.RESUME_SCHEDULING: "Resume scheduling. Re-offer appointment times, acknowledge they were busy.",
+        MessageType.RESUME_OBJECTION: "Resume after objection. Acknowledge their concern and offer new perspective or information.",
+        MessageType.RESUME_GENERAL: "General check-in with context. Reference your previous conversation, don't start from scratch.",
+    }.get(message_type, "Follow up naturally.")
+
+    # Build conversation context section for smart re-engagement
+    conversation_context_section = ""
+    if conversation_summary:
+        conversation_context_section = f"""
+
+=== CONVERSATION CONTEXT (PICK UP WHERE YOU LEFT OFF) ===
+Last topic discussed: {conversation_summary.get('last_topic', 'General introduction')}
+Questions they already answered: {conversation_summary.get('answered_questions', 'None yet')}
+Open questions we need answered: {conversation_summary.get('open_questions', 'Timeline, budget, location')}
+Objections or concerns raised: {conversation_summary.get('objections', 'None')}
+Lead qualification score: {conversation_summary.get('score', 'Unknown')}/100
+Conversation state: {conversation_summary.get('state', 'qualifying')}
+
+CRITICAL: Do NOT repeat questions they already answered. Reference what they told you.
+If they mentioned a specific timeline, location, or concern - ACKNOWLEDGE it.
+This makes you feel like a helpful human, not a robotic automation.
+=== END CONTEXT ===
+"""
+
+    # Build the system prompt
+    system_prompt = f"""You are {agent_name}, a friendly real estate agent with {brokerage_name}.
+
+You're following up with {first_name} who hasn't responded yet. This is Day {sequence_day} of your outreach.
+
+CRITICAL RULES:
+1. If Day > 0, DO NOT repeat your introduction - they already know who you are
+2. DO NOT ask "are you buying or selling?" - we ALREADY KNOW: {lead_type_str}
+3. Reference their situation specifically: looking to {lead_action} in {cities}
+4. Source: They came from {friendly_source}
+5. Keep SMS under 160 characters ideal, max 250
+6. For email, keep it SHORT (2-3 paragraphs max)
+7. Be human, not robotic. Vary your approach each day.
+8. Never guilt trip about no response
+9. Always leave the door open
+
+MESSAGE TYPE: {message_type.value}
+GUIDANCE: {type_guidance}
+CHANNEL: {channel.upper()}
+DAY: {sequence_day}
+LEAD TYPE: {lead_type_str}
+LOCATION: {cities}
+SOURCE: {friendly_source}
+{conversation_context_section}"""
+
+    # Build the user prompt based on channel
+    if channel == "sms":
+        user_prompt = f"""Generate a follow-up SMS for Day {sequence_day}.
+
+Type: {message_type.value}
+{type_guidance}
+{prev_context}
+
+Respond with ONLY the SMS text. No JSON, no explanation. Just the message.
+Keep it under 200 characters. Be natural and human."""
+    else:
+        user_prompt = f"""Generate a follow-up EMAIL for Day {sequence_day}.
+
+Type: {message_type.value}
+{type_guidance}
+{prev_context}
+
+Respond in this JSON format:
+{{
+    "subject": "Short, personal subject line",
+    "body": "Short email body in plain text. 2-3 paragraphs max. Sign with {agent_name} and phone {agent_phone}."
+}}
+
+Keep it SHORT - they've already received multiple messages."""
+
+    # Get API key
+    openrouter_key = os.environ.get('OPENROUTER_API_KEY')
+    anthropic_key = os.environ.get('ANTHROPIC_API_KEY')
+
+    if not openrouter_key and not anthropic_key:
+        logger.warning("No AI API key available, using template fallback")
+        return {"content": f"[AI generation unavailable]", "subject": "Following up", "ai_used": False}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Use OpenRouter if available, else Anthropic
+            if openrouter_key:
+                api_url = "https://openrouter.ai/api/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": "anthropic/claude-sonnet-4",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": 500,
+                    "temperature": 0.7,
+                }
+            else:
+                api_url = "https://api.anthropic.com/v1/messages"
+                headers = {
+                    "x-api-key": anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 500,
+                    "system": system_prompt,
+                    "messages": [
+                        {"role": "user", "content": user_prompt},
+                    ],
+                }
+
+            async with session.post(
+                api_url,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"AI API error: {response.status} - {error_text}")
+                    return {"content": f"[API error: {response.status}]", "subject": "Following up", "ai_used": False}
+
+                data = await response.json()
+
+                # Extract text based on API
+                if openrouter_key:
+                    text = data['choices'][0]['message']['content'].strip()
+                else:
+                    text = data['content'][0]['text'].strip()
+
+                # Parse response based on channel
+                if channel == "email":
+                    try:
+                        # Try to extract JSON
+                        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+                        if json_match:
+                            result = json.loads(json_match.group())
+                            return {
+                                "subject": result.get('subject', 'Following up'),
+                                "content": result.get('body', text),
+                                "ai_used": True,
+                            }
+                    except json.JSONDecodeError:
+                        pass
+                    # Fallback: use raw text
+                    return {"subject": "Following up", "content": text, "ai_used": True}
+                else:
+                    # SMS: just return the text
+                    return {"content": text, "ai_used": True}
+
+    except Exception as e:
+        logger.error(f"AI generation failed: {e}")
+        return {"content": f"[AI error: {str(e)}]", "subject": "Following up", "ai_used": False}
 
 
 # Convenience function for getting a manager instance

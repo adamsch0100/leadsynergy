@@ -30,6 +30,161 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
+# Import source name mapping for consistent display across all communications
+try:
+    from app.ai_agent.initial_outreach_generator import SOURCE_NAME_MAP
+except ImportError:
+    # Fallback if initial_outreach_generator not available
+    SOURCE_NAME_MAP = {
+        "ReferralExchange": "Top Agents Ranked",
+        "referralexchange": "Top Agents Ranked",
+        "Referral Exchange": "Top Agents Ranked",
+        "MyAgentFinder.com": "MyAgentFinder",
+    }
+
+
+def get_friendly_source_name(source: str) -> str:
+    """Get the friendly display name for a lead source."""
+    if not source:
+        return ""
+    for key, value in SOURCE_NAME_MAP.items():
+        if key.lower() == source.lower():
+            return value
+    return source
+
+
+# =============================================================================
+# HANDOFF TRIGGER DETECTION
+# =============================================================================
+# These patterns detect when a lead needs to be connected with a human agent
+# immediately, rather than continuing with AI automation.
+
+HANDOFF_TRIGGERS = {
+    # Scheduling intent - lead wants to see a property
+    "schedule_showing": [
+        r"schedule.*showing",
+        r"want to see",
+        r"want to tour",
+        r"can i see",
+        r"can we see",
+        r"let'?s look at",
+        r"tour the",
+        r"can we visit",
+        r"view the",
+        r"when can (i|we) see",
+        r"set up a showing",
+        r"book a showing",
+        r"schedule a tour",
+        r"available to show",
+    ],
+    # Call request - lead wants to talk on the phone
+    "wants_call": [
+        r"call me",
+        r"give me a call",
+        r"phone call",
+        r"talk on the phone",
+        r"call my cell",
+        r"can you call",
+        r"please call",
+        r"rather talk",
+        r"prefer to talk",
+        r"can we talk",
+        r"speak (with|to) (you|someone)",
+        r"speak on the phone",
+    ],
+    # Urgency - lead has time-sensitive needs
+    "urgent_timeline": [
+        r"need.*(by|before) (next|this) week",
+        r"moving (next|this) week",
+        r"closing (soon|shortly|this week)",
+        r"urgent",
+        r"asap",
+        r"immediately",
+        r"right away",
+        r"as soon as possible",
+        r"need to move fast",
+        r"in a rush",
+        r"time sensitive",
+        r"closing in \d+ days?",
+        r"lease (ends|ending|expires) (soon|this month|next month)",
+    ],
+    # Complex questions - needs expert knowledge
+    "complex_question": [
+        r"can you explain",
+        r"how does.*(financing|mortgage|loan|closing|escrow|title) work",
+        r"what about (taxes|financing|closing|inspections|appraisal)",
+        r"legal question",
+        r"tax (question|implications|consequences)",
+        r"what are the fees",
+        r"closing costs",
+        r"hoa (rules|fees|restrictions)",
+        r"zoning",
+        r"permit(s|ting)?",
+    ],
+    # Price negotiation - needs agent expertise
+    "price_negotiation": [
+        r"make an offer",
+        r"submit an offer",
+        r"ready to offer",
+        r"want to bid",
+        r"negotiate.*(price|terms)",
+        r"is.*(price|asking) negotiable",
+        r"counter.?offer",
+        r"best (and final|offer)",
+    ],
+}
+
+# Acknowledgment messages for each handoff type
+HANDOFF_ACKNOWLEDGMENTS = {
+    "schedule_showing": "I'd love to get you in to see that property! Let me connect you with {agent_name} to find a time that works for you. They'll reach out shortly!",
+    "wants_call": "Absolutely, a call is a great idea! I'll have {agent_name} give you a call. What's the best time to reach you?",
+    "urgent_timeline": "I understand time is of the essence! Let me get {agent_name} on this right away - they'll reach out within the hour.",
+    "complex_question": "Great question! That's something {agent_name} can explain better than I can. Let me connect you with them.",
+    "price_negotiation": "This is exciting! Making an offer is a big step. Let me get {agent_name} involved - they're the expert on negotiations.",
+}
+
+
+def detect_handoff_triggers(message: str) -> Optional[str]:
+    """
+    Detect if a message contains a handoff trigger that requires human agent.
+
+    Args:
+        message: The lead's message text
+
+    Returns:
+        Trigger type (str) if detected, None otherwise
+    """
+    if not message:
+        return None
+
+    message_lower = message.lower()
+
+    for trigger_type, patterns in HANDOFF_TRIGGERS.items():
+        for pattern in patterns:
+            if re.search(pattern, message_lower):
+                logger.info(f"Handoff trigger detected: {trigger_type} (pattern: {pattern})")
+                return trigger_type
+
+    return None
+
+
+def get_handoff_acknowledgment(trigger_type: str, agent_name: str = "your agent") -> str:
+    """
+    Get an appropriate acknowledgment message for a handoff trigger.
+
+    Args:
+        trigger_type: Type of handoff trigger detected
+        agent_name: Name of the agent to connect with
+
+    Returns:
+        Acknowledgment message string
+    """
+    template = HANDOFF_ACKNOWLEDGMENTS.get(
+        trigger_type,
+        "Let me connect you with {agent_name} who can help you with that!"
+    )
+    return template.format(agent_name=agent_name)
+
 
 class ResponseQuality(Enum):
     """Quality assessment of generated response."""
@@ -291,7 +446,9 @@ class LeadProfile:
         if self.source or self.source_url:
             source_parts = []
             if self.source:
-                source_parts.append(f"Source: {self.source}")
+                # Use friendly display name for source
+                friendly_source = get_friendly_source_name(self.source)
+                source_parts.append(f"Source: {friendly_source}")
             if self.source_url:
                 # Extract key info from URL
                 source_parts.append(f"Came from: {self.source_url[:100]}")
@@ -1421,6 +1578,32 @@ SELLER APPOINTMENT STRATEGY:
 - Once you understand their situation, propose the listing appointment
 - Use assumptive close: "I'd love to come see your home and give you an idea of what it could sell for"
 """
+        elif lead_type == "both":
+            # BUYER AND SELLER - They're making a coordinated move!
+            return """
+YOUR PRIMARY GOAL: Book a CONSULTATION to discuss BOTH their sale AND purchase
+
+CRITICAL: This lead is BOTH buying AND selling - they're making a move!
+- DO NOT ask "are you looking to buy or sell?" - we ALREADY KNOW they're doing BOTH
+- Focus on coordinating both transactions
+- Understand their timeline for BOTH selling current home AND buying new one
+
+DUAL TRANSACTION STRATEGY:
+- Acknowledge BOTH needs upfront: "I see you're looking to sell and buy - exciting move!"
+- Ask about coordination preference: sell first vs buy first vs simultaneous
+- Understand what's driving the move (upsizing, downsizing, relocating?)
+- If they have a timeline, it likely applies to both transactions
+
+APPOINTMENT OPTIONS:
+1. Combined consultation: "Let's meet to discuss your sale AND start looking at homes"
+2. Start with valuation: "I can come see your current home and we'll also talk about what you're looking for"
+3. Coordinate timing: "Whether you sell first or buy first, I'll help coordinate both sides"
+
+IDEAL OUTCOME:
+- "Let's schedule a time to visit your home for a valuation AND discuss what you're looking for in your next place"
+- Make it clear you handle BOTH sides of the transaction
+"""
+
         elif lead_type == "buyer":
             # Build dynamic strategy based on what we already know
             strategy_items = []
@@ -1475,16 +1658,36 @@ DISCOVERY STRATEGY:
         This prevents the AI from asking redundant questions - if we have
         their address, don't ask "what area are you in?"
 
-        Differentiates between SELLER and BUYER qualification needs:
+        Differentiates between SELLER, BUYER, and BOTH qualification needs:
         - Sellers: address, timeline to sell, motivation, price expectation
         - Buyers: areas, timeline, budget, pre-approval status
+        - Both: combines seller AND buyer needs (they're selling AND buying)
         """
         known = []
         unknown = []
         lead_type = (profile.lead_type or "").lower()
 
+        # Handle "both" - buyer AND seller
+        if lead_type == "both":
+            known.append("Lead Type: BUYER AND SELLER (coordinated move - DO NOT ask if buying or selling!)")
+
+            # For BOTH, we need info for selling their current home
+            if profile.current_address:
+                known.append(f"Property to Sell: {profile.current_address}")
+            else:
+                unknown.append("current property address (to sell)")
+
+            # AND info for buying their next home
+            if profile.interested_property_address:
+                known.append(f"Property of Interest: {profile.interested_property_address}")
+            elif profile.preferred_cities or profile.preferred_neighborhoods:
+                areas = profile.preferred_neighborhoods or profile.preferred_cities
+                known.append(f"Target Areas (to buy): {', '.join(areas[:3])}")
+            else:
+                unknown.append("target areas/neighborhoods (to buy)")
+
         # Address / Location - different meaning for sellers vs buyers
-        if lead_type == "seller":
+        elif lead_type == "seller":
             # Sellers: we need THEIR property address
             if profile.current_address:
                 known.append(f"Property to Sell: {profile.current_address}")
@@ -1503,7 +1706,7 @@ DISCOVERY STRATEGY:
             else:
                 unknown.append("preferred areas/neighborhoods")
 
-        # Timeline - applies to both but phrased differently
+        # Timeline - applies to all but phrased differently
         if profile.timeline:
             timeline_labels = {
                 "immediate": "Ready NOW",
@@ -1512,18 +1715,32 @@ DISCOVERY STRATEGY:
                 "long": "6+ months"
             }
             timeline_label = timeline_labels.get(profile.timeline, profile.timeline)
-            if lead_type == "seller":
+            if lead_type == "both":
+                known.append(f"Timeline for Move: {timeline_label}")
+            elif lead_type == "seller":
                 known.append(f"Timeline to Sell: {timeline_label}")
             else:
                 known.append(f"Timeline to Buy: {timeline_label}")
         else:
-            if lead_type == "seller":
+            if lead_type == "both":
+                unknown.append("timeline for move (when do they need to sell AND buy?)")
+            elif lead_type == "seller":
                 unknown.append("timeline to sell (when do they need to move?)")
             else:
                 unknown.append("timeline to buy (when do they need to move?)")
 
-        # Price - DIFFERENT for sellers vs buyers
-        if lead_type == "seller":
+        # Price - DIFFERENT for sellers vs buyers vs both
+        if lead_type == "both":
+            # Both: they need budget for purchase AND maybe have expectations for sale
+            if profile.price_min or profile.price_max:
+                if profile.price_min and profile.price_max:
+                    known.append(f"Budget for Purchase: ${profile.price_min:,} - ${profile.price_max:,}")
+                elif profile.price_max:
+                    known.append(f"Budget for Purchase: Up to ${profile.price_max:,}")
+            else:
+                unknown.append("budget range for purchase")
+            # Sale price will come from CMA - don't ask
+        elif lead_type == "seller":
             # Sellers: we ask about price EXPECTATION, not budget
             if profile.price_min or profile.price_max:
                 if profile.price_max:
@@ -1539,8 +1756,8 @@ DISCOVERY STRATEGY:
             else:
                 unknown.append("budget range")
 
-        # Pre-approval - ONLY for buyers
-        if lead_type == "buyer" or not lead_type:
+        # Pre-approval - for buyers and "both" (since they're also buying)
+        if lead_type in ("buyer", "both") or not lead_type:
             if profile.is_pre_approved is not None:
                 if profile.is_pre_approved:
                     amt = f" for ${profile.pre_approval_amount:,}" if profile.pre_approval_amount else ""
@@ -2026,12 +2243,14 @@ Warm, personal tone. Ask for referrals when appropriate. Celebrate their homeown
         if lead_profile:
             known_info_section = self._build_known_info_section(lead_profile)
 
-        # Get source-specific strategy
+        # Get source-specific strategy with friendly display name
         source_strategy_section = ""
         if lead_profile and lead_profile.source:
+            friendly_source = get_friendly_source_name(lead_profile.source)
             strategy = self._get_source_strategy(lead_profile.source)
             source_strategy_section = f"""
-SOURCE STRATEGY ({lead_profile.source}):
+SOURCE STRATEGY ({friendly_source}):
+- Display this source as: "{friendly_source}" (not "{lead_profile.source}")
 - Approach: {strategy['approach']}
 - Urgency: {strategy['urgency']}
 - Context: {strategy['context']}
@@ -2397,7 +2616,9 @@ LEAD INFORMATION:
             hints.append("FOLLOW-UP - Gentle check-in, provide value, keep appointment option open.")
 
         # PRIORITY 2: Lead type hints - CRITICAL for conversation approach
-        if profile.lead_type == "seller":
+        if profile.lead_type == "both":
+            hints.append("BUYER AND SELLER - Goal: Book COMBINED consultation. They're making a coordinated move! Focus on: timeline for BOTH transactions, sell first vs buy first, coordinate both sides. DO NOT ask if buying or selling - we know they're doing BOTH!")
+        elif profile.lead_type == "seller":
             hints.append("SELLER LEAD - Goal: Book LISTING appointment. Focus on: their timeline to sell, property condition, pricing expectations.")
         elif profile.lead_type == "buyer":
             hints.append("BUYER LEAD - Goal: Book SHOWING appointment. Focus on: pre-approval, timeline, must-haves, preferred areas.")
