@@ -447,25 +447,33 @@ class FUBBrowserSession:
         # 3. "Send Text" button (coral/orange color)
 
         messages_tab_selectors = [
+            # FUB specific - div containing Messages text with bubble icon
+            'div:has(.BaseIcon-bubble):has-text("Messages")',
+            '.BaseIcon-bubble',
+            '[class*="BoxTabPadding"]:has-text("Messages")',
             'button:has-text("Messages")',
             'a:has-text("Messages")',
             '[role="tab"]:has-text("Messages")',
-            # The tab with bubble icon
-            '.BaseIcon-bubble',
             '[class*="bubble"]',
         ]
 
         compose_selectors = [
+            # FUB specific class from actual HTML (Jan 2025)
+            '[class*="person-text-input__TextArea"]',
+            '.person-text-input__TextArea-sc-221b3u-0',
             # FUB specific - "Write your text..." placeholder
+            'textarea[placeholder="Write your text..."]',
             'textarea[placeholder*="Write your text"]',
             'textarea[placeholder*="Write"]',
-            'textarea[placeholder*="text" i]',
-            'textarea[placeholder*="message" i]',
+            'textarea.fs-exclude',
             # Generic textarea fallback
             'textarea',
         ]
 
         send_selectors = [
+            # FUB specific class from actual HTML (Jan 2025)
+            '.sendTextButton-FSSelector',
+            '[class*="sendTextButton"]',
             # FUB specific - "Send Text" button
             'button:has-text("Send Text")',
             'button:has-text("Send")',
