@@ -29,6 +29,11 @@ celery.conf.beat_schedule = {
         'task': 'app.scheduler.tasks.process_scheduled_lead_sync',
         'schedule': crontab(minute=0),
     },
+    # Process off-hours queued messages every 5 min during 8-10 AM Mountain Time
+    'process_off_hours_queue': {
+        'task': 'app.scheduler.ai_tasks.process_off_hours_queue',
+        'schedule': crontab(minute='*/5', hour='15-17'),  # 8-10 AM MT = 15-17 UTC
+    },
 }
 
 celery.conf.timezone = 'Asia/Manila'
