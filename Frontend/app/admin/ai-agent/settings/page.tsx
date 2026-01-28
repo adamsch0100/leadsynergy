@@ -91,19 +91,19 @@ const DEFAULT_SETTINGS: AISettings = {
   custom_scripts: {},
   // LLM Model Configuration
   llm_provider: "openrouter",
-  llm_model: "xiaomi/mimo-v2-flash:free",
-  llm_model_fallback: "deepseek/deepseek-r1-0528:free",
+  llm_model: "x-ai/grok-4.1-fast",
+  llm_model_fallback: "google/gemini-2.5-flash-lite",
   // Agent Notification
   notification_fub_person_id: null,
 }
 
-// Available LLM Models (OpenRouter free tier)
+// Available LLM Models (OpenRouter)
 const LLM_MODEL_OPTIONS = [
-  { value: "xiaomi/mimo-v2-flash:free", label: "Xiaomi MiMo v2 Flash", description: "Fast, good for conversations (Recommended)" },
-  { value: "deepseek/deepseek-r1-0528:free", label: "DeepSeek R1", description: "Reasoning model, high quality" },
-  { value: "meta-llama/llama-3.3-70b-instruct:free", label: "Meta Llama 3.3 70B", description: "High quality, function calling" },
-  { value: "google/gemini-2.0-flash-exp:free", label: "Google Gemini 2.0 Flash", description: "1M context, requires data sharing" },
-  { value: "qwen/qwen3-coder:free", label: "Qwen3 Coder", description: "Best for tool use" },
+  { value: "x-ai/grok-4.1-fast", label: "Grok 4.1 Fast", description: "Very cheap (~$0.0003/msg), fast, reliable (Recommended)" },
+  { value: "google/gemini-2.5-flash-lite", label: "Google Gemini 2.5 Flash Lite", description: "Cheap, fast, good quality" },
+  { value: "meta-llama/llama-3.3-70b-instruct:free", label: "Meta Llama 3.3 70B", description: "Free, high quality" },
+  { value: "deepseek/deepseek-r1-0528:free", label: "DeepSeek R1", description: "Free, reasoning model" },
+  { value: "google/gemini-2.0-flash-exp:free", label: "Google Gemini 2.0 Flash", description: "Free, 1M context" },
 ]
 
 const PERSONALITY_OPTIONS = [
