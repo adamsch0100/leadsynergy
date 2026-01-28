@@ -68,7 +68,7 @@ class ComplianceChecker:
 
     Handles:
     - Time window verification (8 AM - 8 PM local time)
-    - Rate limiting (max 3 messages per 24 hours)
+    - Rate limiting (max 30 messages per 24 hours)
     - Consent verification
     - Opt-out status
     - DNC registry status
@@ -78,8 +78,9 @@ class ComplianceChecker:
     ALLOWED_START_HOUR = 8   # 8 AM
     ALLOWED_END_HOUR = 20    # 8 PM
 
-    # Rate limits
-    MAX_MESSAGES_PER_DAY = 3
+    # Rate limits - counts ALL AI messages per lead per day
+    # 30 allows for extended conversations where lead is actively replying
+    MAX_MESSAGES_PER_DAY = 30
 
     # Default timezone if unknown (Mountain Time for Colorado-based operations)
     DEFAULT_TIMEZONE = "America/Denver"
