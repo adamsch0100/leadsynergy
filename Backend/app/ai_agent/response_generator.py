@@ -1693,7 +1693,8 @@ FOR BUYERS: "I've got a few homes that fit what you're looking for - want to che
         self._last_request_time = 0.0  # For rate limit avoidance
 
         if self.use_openrouter:
-            logger.info(f"Using OpenRouter API with model: {self.primary_model}")
+            key_preview = f"{self.openrouter_api_key[:8]}..." if self.openrouter_api_key else "NOT SET"
+            logger.info(f"Using OpenRouter API with model: {self.primary_model}, key: {key_preview}")
         elif self.api_key:
             logger.info(f"Using Anthropic API with model: {self.primary_model}")
         else:
@@ -3145,6 +3146,9 @@ LEAD INFORMATION:
                 except Exception as e:
                     last_error = e
                     error_str = str(e).lower()
+
+                    # Log full error for debugging
+                    logger.error(f"[AI ERROR] Model {model}, attempt {attempt + 1}: {e}")
 
                     # Check if it's a rate limit or overload error
                     if "rate" in error_str or "overload" in error_str or "529" in error_str:
