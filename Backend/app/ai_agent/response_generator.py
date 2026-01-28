@@ -1242,7 +1242,7 @@ class AIResponseGenerator:
     # Model configuration - OpenRouter
     # Primary: Grok 4.1 Fast - very cheap ($0.20/$0.50 per million tokens), fast, reliable
     # Fallback: Gemini for cost efficiency
-    DEFAULT_OPENROUTER_MODEL = "x-ai/grok-4-1-fast"
+    DEFAULT_OPENROUTER_MODEL = "x-ai/grok-4.1-fast"
     DEFAULT_OPENROUTER_FALLBACK = "google/gemini-2.5-flash-lite"
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
