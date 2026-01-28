@@ -219,12 +219,30 @@ app.add_url_rule("/api/checkout", "checkout", create_checkout_session, methods=[
 register_supabase_api(app)
 app.register_blueprint(sse_bp, url_prefix='/api/supabase')  # Register SSE endpoints
 
+# Version tracking for deployment verification
+DEPLOY_VERSION = "2026-01-28-v2-session-stability"
+
 # Add a basic health check endpoint
 @app.route("/")
 def root():
     return jsonify({
         "status": "healthy",
         "message": "LeadSynergy API Server",
+        "version": DEPLOY_VERSION,
+        "timestamp": datetime.now().isoformat(),
+    })
+
+@app.route("/version")
+def version():
+    """Version endpoint for deployment verification."""
+    return jsonify({
+        "version": DEPLOY_VERSION,
+        "features": [
+            "warm_session_validation",
+            "step_level_timeouts",
+            "consecutive_failure_recovery",
+            "page_state_reset",
+        ],
         "timestamp": datetime.now().isoformat(),
     })
 
