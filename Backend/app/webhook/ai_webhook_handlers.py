@@ -201,6 +201,12 @@ def handle_text_message_webhook():
     - A text is logged in FUB
 
     The AI agent will analyze the message and generate an appropriate response.
+
+    MULTI-TENANT: Each organization registers webhooks with their org_id:
+    https://api.leadsynergy.com/webhooks/ai/text-received?org_id=abc123
+
+    This ensures each organization's webhooks are routed to the correct
+    FUB credentials and AI settings.
     """
     try:
         webhook_data = request.get_json()
@@ -210,11 +216,17 @@ def handle_text_message_webhook():
         resource_uri = webhook_data.get('uri')
         resource_ids = webhook_data.get('resourceIds', [])
 
+        # MULTI-TENANT: Get organization_id from query parameter
+        # This is set when the organization registers their FUB webhooks
+        org_id_from_url = request.args.get('org_id')
+        if org_id_from_url:
+            logger.info(f"Webhook org_id from URL: {org_id_from_url}")
+
         if event != 'textmessagescreated':
             return Response("Event not applicable", status=200)
 
-        # Process asynchronously
-        run_async_task(process_inbound_text(webhook_data, resource_uri, resource_ids))
+        # Process asynchronously - pass org_id for multi-tenant routing
+        run_async_task(process_inbound_text(webhook_data, resource_uri, resource_ids, org_id_from_url))
 
         return Response("OK", status=200)
 
@@ -223,7 +235,7 @@ def handle_text_message_webhook():
         return Response("Error processing webhook", status=500)
 
 
-async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, resource_ids: list):
+async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, resource_ids: list, org_id_hint: str = None):
     """
     Process an inbound text message using the full AI Agent Service.
 
@@ -234,6 +246,12 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
     4. Check compliance (opt-out keywords, rate limits)
     5. Process through full AI Agent Service (intent detection, qualification, objection handling)
     6. Send response via FUB native texting
+
+    Args:
+        webhook_data: The webhook payload from FUB
+        resource_uri: URI to fetch message details
+        resource_ids: List of resource IDs
+        org_id_hint: Organization ID from webhook URL (for multi-tenant routing)
     """
     global _playwright_sms_service
 
@@ -241,17 +259,26 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         import aiohttp
         import base64
 
-        # Fetch message details
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Basic {base64.b64encode(f"{CREDS.FUB_API_KEY}:".encode()).decode()}',
-        }
-
         if not resource_ids:
             logger.warning("No resource IDs in text webhook")
             return
 
         message_id = resource_ids[0]
+
+        # MULTI-TENANT: Get the correct FUB API key for this organization
+        # If org_id is provided in URL, use that org's API key
+        fub_api_key = CREDS.FUB_API_KEY  # Default fallback
+        if org_id_hint:
+            org_api_key = await get_fub_api_key_for_org(org_id_hint)
+            if org_api_key:
+                fub_api_key = org_api_key
+                logger.info(f"Using org-specific FUB API key for org {org_id_hint}")
+
+        # Fetch message details with the correct API key
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Basic {base64.b64encode(f"{fub_api_key}:".encode()).decode()}',
+        }
 
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(resource_uri) as response:
@@ -285,8 +312,8 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             logger.info(f"Skipping outbound message for person {person_id}")
             return
 
-        # Resolve organization/user first to check AI settings
-        organization_id = await resolve_organization_for_person(person_id)
+        # MULTI-TENANT: Use org_id from URL if provided, otherwise resolve
+        organization_id = org_id_hint or await resolve_organization_for_person(person_id)
         user_id = await resolve_user_for_person(person_id, organization_id)
 
         if not organization_id or not user_id:
@@ -1540,6 +1567,8 @@ async def resolve_organization_for_person(person_id: int) -> Optional[str]:
 
 async def resolve_user_for_person(person_id: int, organization_id: str) -> Optional[str]:
     """Resolve the user ID for handling this person."""
+    if not organization_id:
+        return None
     try:
         # Get assigned user if there is one, otherwise get organization owner
         result = supabase.table("users").select("id").eq("organization_id", organization_id).eq("role", "admin").limit(1).execute()
@@ -1547,6 +1576,37 @@ async def resolve_user_for_person(person_id: int, organization_id: str) -> Optio
             return result.data[0].get("id")
     except Exception as e:
         logger.error(f"Error resolving user: {e}")
+
+    return None
+
+
+async def get_fub_api_key_for_org(organization_id: str) -> Optional[str]:
+    """
+    Get the FUB API key for a specific organization.
+
+    Used for multi-tenant webhook handling - each organization has their own
+    FUB account and API key.
+
+    Args:
+        organization_id: The organization ID
+
+    Returns:
+        FUB API key string or None if not found
+    """
+    if not organization_id:
+        return None
+
+    try:
+        # Get the admin user for this organization who has FUB configured
+        result = supabase.table("users").select("fub_api_key").eq(
+            "organization_id", organization_id
+        ).not_.is_("fub_api_key", "null").limit(1).execute()
+
+        if result.data and result.data[0].get("fub_api_key"):
+            return result.data[0]["fub_api_key"]
+
+    except Exception as e:
+        logger.error(f"Error getting FUB API key for org {organization_id}: {e}")
 
     return None
 
