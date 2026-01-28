@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 class PlaywrightSMSService:
     """Send SMS via FUB web interface using Playwright browser automation.
 
-    IMPORTANT: Uses threading.RLock instead of asyncio.Lock because webhook handlers
-    create separate event loops per request. asyncio.Lock is NOT cross-event-loop safe
-    and causes deadlocks when multiple webhooks try to access the same session.
+    CRITICAL: This service serializes ALL Playwright operations per agent to avoid
+    browser conflicts. Only one operation can use the browser at a time per agent.
+    Uses a simple flag-based approach instead of locks to avoid async/sync deadlocks.
     """
 
     def __init__(self):
@@ -27,20 +27,24 @@ class PlaywrightSMSService:
         self.sessions: Dict[str, FUBBrowserSession] = {}  # agent_id -> session
         self.session_store = SessionStore()
         self._initialized = False
-        self._lock = threading.RLock()  # Thread-safe for cross-event-loop access
-        self._login_locks: Dict[str, threading.RLock] = {}  # Per-agent locks (thread-safe)
-        self._login_in_progress: Dict[str, bool] = {}  # Track login attempts
+        self._init_lock = threading.Lock()  # Only for initialization
+        self._agent_busy: Dict[str, bool] = {}  # Track if agent is mid-operation
+        self._agent_busy_lock = threading.Lock()  # Quick lock for flag check only
 
     async def initialize(self):
-        """Initialize Playwright and browser instance. Thread-safe."""
-        with self._lock:  # Use 'with' for threading.RLock, not 'async with'
-            await self._do_initialize()
-
-    async def _do_initialize(self):
-        """Internal initialization - called when lock is already held."""
+        """Initialize Playwright and browser instance."""
+        # Quick check without lock
         if self._initialized:
             return
 
+        # Use lock only for initialization (fast operation)
+        with self._init_lock:
+            if self._initialized:
+                return
+            await self._do_initialize()
+
+    async def _do_initialize(self):
+        """Internal initialization."""
         logger.info("Initializing Playwright SMS Service")
 
         self.playwright = await async_playwright().start()
@@ -64,69 +68,137 @@ class PlaywrightSMSService:
         self._initialized = True
         logger.info(f"Playwright initialized (headless={headless})")
 
+    def _try_acquire_agent(self, agent_id: str) -> bool:
+        """Try to mark agent as busy. Returns True if acquired, False if already busy."""
+        with self._agent_busy_lock:
+            if self._agent_busy.get(agent_id, False):
+                return False
+            self._agent_busy[agent_id] = True
+            return True
+
+    def _release_agent(self, agent_id: str):
+        """Mark agent as no longer busy."""
+        with self._agent_busy_lock:
+            self._agent_busy[agent_id] = False
+
     async def get_or_create_session(self, agent_id: str, credentials: dict) -> FUBBrowserSession:
         """Get existing session or create new one for agent.
 
-        Uses per-agent locks to prevent multiple concurrent login attempts,
-        which could trigger multiple security emails from FUB.
+        Waits if another operation is in progress for the same agent.
         """
         logger.debug(f"get_or_create_session called for agent {agent_id}")
 
-        # Get or create per-agent lock (thread-safe)
-        with self._lock:
-            if agent_id not in self._login_locks:
-                self._login_locks[agent_id] = threading.RLock()
-            agent_lock = self._login_locks[agent_id]
+        # Wait for agent to become available (with timeout)
+        max_wait = 120  # 2 minutes max wait
+        waited = 0
+        while not self._try_acquire_agent(agent_id):
+            if waited >= max_wait:
+                raise Exception(f"Timeout waiting for agent {agent_id} to become available")
+            logger.info(f"Agent {agent_id} is busy, waiting... ({waited}s)")
+            await asyncio.sleep(2)
+            waited += 2
 
-        # Use per-agent lock to prevent concurrent logins for the same agent
-        with agent_lock:
-            logger.debug(f"Acquired agent lock for {agent_id}")
-
-            # Check if login is already in progress (shouldn't happen with lock, but safety check)
-            if self._login_in_progress.get(agent_id, False):
-                logger.warning(f"Login already in progress for agent {agent_id}, waiting...")
-                # Wait a bit and check for existing session
-                for _ in range(30):  # Wait up to 30 seconds
-                    await asyncio.sleep(1)
-                    if agent_id in self.sessions and await self.sessions[agent_id].is_valid():
-                        return self.sessions[agent_id]
-                    if not self._login_in_progress.get(agent_id, False):
-                        break
+        try:
+            logger.debug(f"Agent {agent_id} acquired, proceeding...")
 
             # Check for existing valid session
             if agent_id in self.sessions:
                 logger.debug(f"Found existing session for agent {agent_id}, checking validity...")
                 session = self.sessions[agent_id]
-                if await session.is_valid():
-                    logger.debug(f"Reusing existing session for agent {agent_id}")
-                    return session
-                else:
-                    # Session expired, close and remove it
-                    logger.debug(f"Session expired for agent {agent_id}, closing...")
+                try:
+                    if await session.is_valid():
+                        logger.debug(f"Reusing existing session for agent {agent_id}")
+                        return session
+                    else:
+                        logger.debug(f"Session expired for agent {agent_id}, closing...")
+                except Exception as e:
+                    logger.warning(f"Session validity check failed: {e}")
+                # Session invalid or error, close and remove it
+                try:
                     await session.close()
-                    del self.sessions[agent_id]
+                except Exception:
+                    pass
+                del self.sessions[agent_id]
 
             # Initialize browser if needed
-            with self._lock:
-                if not self._initialized:
-                    logger.debug("Service not initialized, initializing...")
-                    await self._do_initialize()
-                    logger.debug("Service initialized")
+            if not self._initialized:
+                await self.initialize()
 
-            # Mark login as in progress
-            self._login_in_progress[agent_id] = True
+            # Create new session
+            logger.info(f"Creating new session for agent {agent_id}")
+            session = FUBBrowserSession(self.browser, agent_id, self.session_store)
+            logger.debug(f"FUBBrowserSession created, calling login...")
+            await session.login(credentials)
+            logger.debug(f"Login complete for agent {agent_id}")
+            self.sessions[agent_id] = session
+            return session
 
+        except Exception as e:
+            logger.error(f"Error in get_or_create_session for {agent_id}: {e}")
+            raise
+        finally:
+            # Always release the agent when done with session management
+            # Note: We release here but the session is still usable
+            # The caller will use the session for their operation
+            pass  # Don't release here - release after the operation completes
+
+    async def _run_with_session(self, agent_id: str, credentials: dict, operation_name: str, operation_func):
+        """Run an operation with proper agent locking.
+
+        This ensures only one Playwright operation runs at a time per agent.
+        """
+        # Wait for agent to become available
+        max_wait = 120
+        waited = 0
+        while not self._try_acquire_agent(agent_id):
+            if waited >= max_wait:
+                raise Exception(f"Timeout waiting for agent {agent_id} to become available for {operation_name}")
+            logger.info(f"Agent {agent_id} busy, waiting for {operation_name}... ({waited}s)")
+            await asyncio.sleep(2)
+            waited += 2
+
+        try:
+            logger.debug(f"Agent {agent_id} acquired for {operation_name}")
+
+            # Get or create session
+            session = await self._get_session_internal(agent_id, credentials)
+
+            # Run the operation
+            return await operation_func(session)
+
+        finally:
+            self._release_agent(agent_id)
+            logger.debug(f"Agent {agent_id} released after {operation_name}")
+
+    async def _get_session_internal(self, agent_id: str, credentials: dict) -> FUBBrowserSession:
+        """Internal session getter - assumes agent is already acquired."""
+        # Check for existing valid session
+        if agent_id in self.sessions:
+            logger.debug(f"Found existing session for agent {agent_id}")
+            session = self.sessions[agent_id]
             try:
-                logger.info(f"Creating new session for agent {agent_id}")
-                session = FUBBrowserSession(self.browser, agent_id, self.session_store)
-                logger.debug(f"FUBBrowserSession created, calling login...")
-                await session.login(credentials)
-                logger.debug(f"Login complete for agent {agent_id}")
-                self.sessions[agent_id] = session
-                return session
-            finally:
-                # Clear login in progress flag
-                self._login_in_progress[agent_id] = False
+                if await session.is_valid():
+                    logger.debug(f"Session valid for agent {agent_id}")
+                    return session
+            except Exception as e:
+                logger.warning(f"Session validity check failed: {e}")
+            # Session invalid, close it
+            try:
+                await session.close()
+            except Exception:
+                pass
+            del self.sessions[agent_id]
+
+        # Initialize browser if needed
+        if not self._initialized:
+            await self.initialize()
+
+        # Create new session
+        logger.info(f"Creating new session for agent {agent_id}")
+        session = FUBBrowserSession(self.browser, agent_id, self.session_store)
+        await session.login(credentials)
+        self.sessions[agent_id] = session
+        return session
 
     async def send_sms(
         self,
@@ -146,27 +218,29 @@ class PlaywrightSMSService:
         Returns:
             Dict with 'success', 'message_id' or 'error'
         """
+        async def do_send(session):
+            await session.send_text_message(person_id, message)
+            return {
+                "success": True,
+                "message_id": f"playwright_{person_id}_{asyncio.get_event_loop().time()}",
+                "person_id": person_id,
+                "agent_id": agent_id
+            }
+
         max_retries = 2
         last_error = None
 
         for attempt in range(max_retries):
             try:
-                session = await self.get_or_create_session(agent_id, credentials)
-                result = await session.send_text_message(person_id, message)
-                return {
-                    "success": True,
-                    "message_id": f"playwright_{person_id}_{asyncio.get_event_loop().time()}",
-                    "person_id": person_id,
-                    "agent_id": agent_id
-                }
+                return await self._run_with_session(agent_id, credentials, f"send_sms_{person_id}", do_send)
             except Exception as e:
                 last_error = e
                 logger.warning(f"Send SMS attempt {attempt + 1} failed for person {person_id}: {e}")
 
-                # If this looks like a session issue, invalidate and retry
+                # Invalidate session for retry
                 if attempt < max_retries - 1:
                     logger.info(f"Invalidating session for {agent_id} and retrying...")
-                    await self.close_session(agent_id)
+                    await self._invalidate_session(agent_id)
                     await asyncio.sleep(2)
 
         logger.error(f"Failed to send SMS to person {person_id} after {max_retries} attempts: {last_error}")
@@ -193,22 +267,23 @@ class PlaywrightSMSService:
         Returns:
             Dict with 'success', 'message' (the text content) or 'error'
         """
+        async def do_read(session):
+            return await session.read_latest_message(person_id)
+
         max_retries = 2
         last_error = None
 
         for attempt in range(max_retries):
             try:
-                session = await self.get_or_create_session(agent_id, credentials)
-                result = await session.read_latest_message(person_id)
-                return result
+                return await self._run_with_session(agent_id, credentials, f"read_message_{person_id}", do_read)
             except Exception as e:
                 last_error = e
                 logger.warning(f"Read message attempt {attempt + 1} failed for person {person_id}: {e}")
 
-                # If this looks like a session issue, invalidate and retry
+                # Invalidate session for retry
                 if attempt < max_retries - 1:
                     logger.info(f"Invalidating session for {agent_id} and retrying...")
-                    await self.close_session(agent_id)
+                    await self._invalidate_session(agent_id)
                     await asyncio.sleep(2)
 
         logger.error(f"Failed to read message from person {person_id} after {max_retries} attempts: {last_error}")
@@ -271,10 +346,21 @@ class PlaywrightSMSService:
             logger.error(f"Failed to read messages from person {person_id}: {e}")
             return {"success": False, "error": str(e), "messages": []}
 
+    async def _invalidate_session(self, agent_id: str):
+        """Invalidate a session without closing (for retry scenarios)."""
+        with self._agent_busy_lock:
+            if agent_id in self.sessions:
+                try:
+                    await self.sessions[agent_id].close()
+                except Exception:
+                    pass
+                del self.sessions[agent_id]
+                logger.info(f"Session invalidated for agent {agent_id}")
+
     async def close_session(self, agent_id: str):
         """Close a specific agent's session."""
         session = None
-        with self._lock:
+        with self._agent_busy_lock:
             if agent_id in self.sessions:
                 session = self.sessions.pop(agent_id)
         # Close outside lock to avoid holding lock during async operation
@@ -286,7 +372,7 @@ class PlaywrightSMSService:
         """Close all sessions."""
         # Collect sessions under lock, then close outside lock
         sessions_to_close = []
-        with self._lock:
+        with self._agent_busy_lock:
             sessions_to_close = list(self.sessions.items())
             self.sessions.clear()
         # Close all sessions outside the lock
@@ -320,22 +406,45 @@ class PlaywrightSMSService:
 class PlaywrightSMSServiceSingleton:
     """Singleton accessor for PlaywrightSMSService.
 
-    Uses threading.RLock for cross-event-loop safety since webhook handlers
-    create separate event loops per request.
+    Uses a simple flag-based approach to avoid async/sync lock deadlocks.
     """
 
     _instance: Optional[PlaywrightSMSService] = None
-    _lock = threading.RLock()
+    _creating = False
+    _lock = threading.Lock()  # Only for quick flag checks
 
     @classmethod
     async def get_instance(cls) -> PlaywrightSMSService:
         """Get or create the singleton instance."""
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = PlaywrightSMSService()
-                # Initialize outside lock since it's async and may take time
-                await cls._instance.initialize()
+        # Fast path - instance exists
+        if cls._instance is not None:
             return cls._instance
+
+        # Check if creation is in progress
+        max_wait = 60
+        waited = 0
+        while True:
+            with cls._lock:
+                if cls._instance is not None:
+                    return cls._instance
+                if not cls._creating:
+                    cls._creating = True
+                    break
+            # Another task is creating, wait
+            if waited >= max_wait:
+                raise Exception("Timeout waiting for Playwright service initialization")
+            await asyncio.sleep(1)
+            waited += 1
+
+        # We're the creator
+        try:
+            instance = PlaywrightSMSService()
+            await instance.initialize()
+            cls._instance = instance
+            return instance
+        finally:
+            with cls._lock:
+                cls._creating = False
 
     @classmethod
     async def shutdown(cls):
