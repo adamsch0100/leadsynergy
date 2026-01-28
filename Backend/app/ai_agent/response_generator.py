@@ -1240,9 +1240,9 @@ class AIResponseGenerator:
     DEFAULT_ANTHROPIC_FALLBACK = "claude-3-5-haiku-20241022"
 
     # Model configuration - OpenRouter
-    # Primary: Free tier (best for Marketing per OpenRouter stats)
-    # Fallback: Cheap paid tier for reliability when rate limited
-    DEFAULT_OPENROUTER_MODEL = "xiaomi/mimo-v2-flash:free"
+    # Primary: Grok 4.1 Fast - very cheap ($0.20/$0.50 per million tokens), fast, reliable
+    # Fallback: Gemini for cost efficiency
+    DEFAULT_OPENROUTER_MODEL = "x-ai/grok-4-1-fast"
     DEFAULT_OPENROUTER_FALLBACK = "google/gemini-2.5-flash-lite"
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -1668,9 +1668,8 @@ FOR BUYERS: "I've got a few homes that fit what you're looking for - want to che
         if llm_provider:
             self.use_openrouter = llm_provider.lower() == "openrouter"
         else:
-            # Default: prefer Anthropic if available (more reliable), fallback to OpenRouter
-            # OpenRouter free tier has rate limits that cause fallback responses
-            self.use_openrouter = not self.anthropic_api_key and bool(self.openrouter_api_key)
+            # Default: prefer OpenRouter (Grok 4.1 Fast - cheap & reliable)
+            self.use_openrouter = bool(self.openrouter_api_key)
 
         self.api_key = self.openrouter_api_key if self.use_openrouter else self.anthropic_api_key
 
