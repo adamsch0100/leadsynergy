@@ -1668,8 +1668,9 @@ FOR BUYERS: "I've got a few homes that fit what you're looking for - want to che
         if llm_provider:
             self.use_openrouter = llm_provider.lower() == "openrouter"
         else:
-            # Default: prefer OpenRouter if key is available
-            self.use_openrouter = bool(self.openrouter_api_key)
+            # Default: prefer Anthropic if available (more reliable), fallback to OpenRouter
+            # OpenRouter free tier has rate limits that cause fallback responses
+            self.use_openrouter = not self.anthropic_api_key and bool(self.openrouter_api_key)
 
         self.api_key = self.openrouter_api_key if self.use_openrouter else self.anthropic_api_key
 
