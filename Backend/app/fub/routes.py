@@ -1931,19 +1931,24 @@ def test_fub_login():
                 # Use the same agent_id format as production webhook handler
                 # so that the session persists and can be reused
                 agent_id = test_user_id or test_org_id or "default_agent"
-                session = await service.get_or_create_session(agent_id, creds)
+                try:
+                    session = await service.get_or_create_session(agent_id, creds)
 
-                # Verify session is valid
-                is_valid = await session.is_valid()
+                    # Verify session is valid
+                    is_valid = await session.is_valid()
 
-                # DO NOT close the session - keep it for production use
-                # The whole point of this test is to create/verify a persistent session
+                    # DO NOT close the session - keep it for production use
+                    # The whole point of this test is to create/verify a persistent session
 
-                return {
-                    "success": True,
-                    "session_valid": is_valid,
-                    "message": "Login successful! FUB browser session is working."
-                }
+                    return {
+                        "success": True,
+                        "session_valid": is_valid,
+                        "message": "Login successful! FUB browser session is working."
+                    }
+                finally:
+                    # CRITICAL: Release the agent lock so other operations can use it
+                    # This keeps the session alive but releases the concurrency lock
+                    service._release_agent(agent_id)
             except Exception as e:
                 logger.error(f"FUB login test failed: {e}", exc_info=True)
                 return {

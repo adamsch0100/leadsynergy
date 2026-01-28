@@ -310,13 +310,27 @@ class PlaywrightSMSService:
         Returns:
             Dict with 'success', 'summaries' (list of summary dicts) or 'error'
         """
-        try:
-            session = await self.get_or_create_session(agent_id, credentials)
-            result = await session.read_call_summaries(person_id, limit)
-            return result
-        except Exception as e:
-            logger.error(f"Failed to read call summaries from person {person_id}: {e}")
-            return {"success": False, "error": str(e), "summaries": []}
+        async def do_read(session):
+            return await session.read_call_summaries(person_id, limit)
+
+        max_retries = 2
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                return await self._run_with_session(agent_id, credentials, f"read_call_summaries_{person_id}", do_read)
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Read call summaries attempt {attempt + 1} failed for person {person_id}: {e}")
+
+                # Invalidate session for retry
+                if attempt < max_retries - 1:
+                    logger.info(f"Invalidating session for {agent_id} and retrying...")
+                    await self._invalidate_session(agent_id)
+                    await asyncio.sleep(2)
+
+        logger.error(f"Failed to read call summaries from person {person_id} after {max_retries} attempts: {last_error}")
+        return {"success": False, "error": str(last_error), "summaries": []}
 
     async def read_recent_messages(
         self,
@@ -338,13 +352,27 @@ class PlaywrightSMSService:
         Returns:
             Dict with 'success', 'messages' (list of message dicts) or 'error'
         """
-        try:
-            session = await self.get_or_create_session(agent_id, credentials)
-            result = await session.read_recent_messages(person_id, limit)
-            return result
-        except Exception as e:
-            logger.error(f"Failed to read messages from person {person_id}: {e}")
-            return {"success": False, "error": str(e), "messages": []}
+        async def do_read(session):
+            return await session.read_recent_messages(person_id, limit)
+
+        max_retries = 2
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                return await self._run_with_session(agent_id, credentials, f"read_recent_messages_{person_id}", do_read)
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Read recent messages attempt {attempt + 1} failed for person {person_id}: {e}")
+
+                # Invalidate session for retry
+                if attempt < max_retries - 1:
+                    logger.info(f"Invalidating session for {agent_id} and retrying...")
+                    await self._invalidate_session(agent_id)
+                    await asyncio.sleep(2)
+
+        logger.error(f"Failed to read messages from person {person_id} after {max_retries} attempts: {last_error}")
+        return {"success": False, "error": str(last_error), "messages": []}
 
     async def _invalidate_session(self, agent_id: str):
         """Invalidate a session without closing (for retry scenarios)."""
