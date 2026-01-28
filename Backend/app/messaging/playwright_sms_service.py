@@ -142,10 +142,18 @@ class PlaywrightSMSService:
             # The caller will use the session for their operation
             pass  # Don't release here - release after the operation completes
 
-    async def _run_with_session(self, agent_id: str, credentials: dict, operation_name: str, operation_func):
-        """Run an operation with proper agent locking.
+    async def _run_with_session(self, agent_id: str, credentials: dict, operation_name: str, operation_func, timeout: int = 120):
+        """Run an operation with proper agent locking and operation timeout.
 
         This ensures only one Playwright operation runs at a time per agent.
+        The operation itself has a timeout to prevent indefinite hangs.
+
+        Args:
+            agent_id: Agent identifier
+            credentials: FUB login credentials
+            operation_name: Name for logging
+            operation_func: Async function taking session as argument
+            timeout: Max seconds for the operation (default 120s)
         """
         # Wait for agent to become available
         max_wait = 120
@@ -160,11 +168,19 @@ class PlaywrightSMSService:
         try:
             logger.debug(f"Agent {agent_id} acquired for {operation_name}")
 
-            # Get or create session
-            session = await self._get_session_internal(agent_id, credentials)
+            # Get or create session (with timeout)
+            session = await asyncio.wait_for(
+                self._get_session_internal(agent_id, credentials),
+                timeout=timeout
+            )
 
-            # Run the operation
-            return await operation_func(session)
+            # Run the operation (with timeout to prevent indefinite hangs)
+            logger.debug(f"Running {operation_name} with {timeout}s timeout")
+            return await asyncio.wait_for(operation_func(session), timeout=timeout)
+
+        except asyncio.TimeoutError:
+            logger.error(f"Operation {operation_name} timed out after {timeout}s for agent {agent_id}")
+            raise Exception(f"Operation {operation_name} timed out after {timeout}s")
 
         finally:
             self._release_agent(agent_id)
