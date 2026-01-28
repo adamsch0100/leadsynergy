@@ -161,6 +161,10 @@ class SessionStore:
             except Exception as e:
                 logger.error(f"Failed to clear session from file for agent {agent_id}: {e}")
 
+    async def delete_cookies(self, agent_id: str):
+        """Alias for clear_session - deletes stored cookies for agent."""
+        await self.clear_session(agent_id)
+
     def list_sessions(self) -> list:
         """List all saved agent sessions."""
         sessions = []

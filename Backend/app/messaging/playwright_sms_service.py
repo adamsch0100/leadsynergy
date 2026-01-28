@@ -146,18 +146,31 @@ class PlaywrightSMSService:
         Returns:
             Dict with 'success', 'message_id' or 'error'
         """
-        try:
-            session = await self.get_or_create_session(agent_id, credentials)
-            result = await session.send_text_message(person_id, message)
-            return {
-                "success": True,
-                "message_id": f"playwright_{person_id}_{asyncio.get_event_loop().time()}",
-                "person_id": person_id,
-                "agent_id": agent_id
-            }
-        except Exception as e:
-            logger.error(f"Failed to send SMS to person {person_id}: {e}")
-            return {"success": False, "error": str(e)}
+        max_retries = 2
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                session = await self.get_or_create_session(agent_id, credentials)
+                result = await session.send_text_message(person_id, message)
+                return {
+                    "success": True,
+                    "message_id": f"playwright_{person_id}_{asyncio.get_event_loop().time()}",
+                    "person_id": person_id,
+                    "agent_id": agent_id
+                }
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Send SMS attempt {attempt + 1} failed for person {person_id}: {e}")
+
+                # If this looks like a session issue, invalidate and retry
+                if attempt < max_retries - 1:
+                    logger.info(f"Invalidating session for {agent_id} and retrying...")
+                    await self.close_session(agent_id)
+                    await asyncio.sleep(2)
+
+        logger.error(f"Failed to send SMS to person {person_id} after {max_retries} attempts: {last_error}")
+        return {"success": False, "error": str(last_error)}
 
     async def read_latest_message(
         self,
@@ -170,6 +183,8 @@ class PlaywrightSMSService:
         This is used when FUB's API returns "Body is hidden for privacy reasons"
         but we need the actual message content for AI processing.
 
+        Includes automatic retry with session recovery if the first attempt fails.
+
         Args:
             agent_id: The agent's unique identifier (for session management)
             person_id: The FUB person ID to read messages from
@@ -178,13 +193,26 @@ class PlaywrightSMSService:
         Returns:
             Dict with 'success', 'message' (the text content) or 'error'
         """
-        try:
-            session = await self.get_or_create_session(agent_id, credentials)
-            result = await session.read_latest_message(person_id)
-            return result
-        except Exception as e:
-            logger.error(f"Failed to read message from person {person_id}: {e}")
-            return {"success": False, "error": str(e)}
+        max_retries = 2
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                session = await self.get_or_create_session(agent_id, credentials)
+                result = await session.read_latest_message(person_id)
+                return result
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Read message attempt {attempt + 1} failed for person {person_id}: {e}")
+
+                # If this looks like a session issue, invalidate and retry
+                if attempt < max_retries - 1:
+                    logger.info(f"Invalidating session for {agent_id} and retrying...")
+                    await self.close_session(agent_id)
+                    await asyncio.sleep(2)
+
+        logger.error(f"Failed to read message from person {person_id} after {max_retries} attempts: {last_error}")
+        return {"success": False, "error": str(last_error)}
 
     async def read_call_summaries(
         self,

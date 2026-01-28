@@ -26,8 +26,16 @@ class FUBBrowserSession:
         self._logged_in = False
         self._actual_base_url: Optional[str] = None  # Team subdomain URL after login
 
+    # Navigation retry settings
+    MAX_NAVIGATION_RETRIES = 3
+    NAVIGATION_TIMEOUT_MS = 60000  # 60 seconds - Railway can be slow
+
     async def login(self, credentials: dict):
-        """Login to FUB with credentials or SSO."""
+        """Login to FUB with credentials or SSO.
+
+        Implements automatic retry with cookie clearing for robust session recovery.
+        If navigation times out, cookies are cleared and login is retried.
+        """
         logger.info(f"Starting login for agent {self.agent_id}")
 
         # Try to restore session from cookies
@@ -35,45 +43,99 @@ class FUBBrowserSession:
         cookies = await self.session_store.get_cookies(self.agent_id)
         logger.debug(f"Cookies found: {cookies is not None}")
 
-        logger.debug("Creating browser context...")
-        self.context = await self.browser.new_context(
-            storage_state=cookies if cookies else None,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080}
-        )
-        self.page = await self.context.new_page()
-        logger.debug("Browser context created")
+        # Track if we should try with cookies or fresh
+        use_cookies = cookies is not None
+        last_error = None
 
-        # Check if already logged in by navigating to a protected page
-        try:
-            logger.debug(f"Navigating to {self.FUB_BASE_URL}/people to check login status...")
-            await self.page.goto(f"{self.FUB_BASE_URL}/people", wait_until="domcontentloaded")
-            logger.debug("Navigation complete, checking URL...")
-            await self._human_delay(1, 2)
+        for attempt in range(self.MAX_NAVIGATION_RETRIES):
+            try:
+                # Close previous context if exists (for retry)
+                if self.context:
+                    try:
+                        await self.context.close()
+                    except Exception:
+                        pass
+                    self.context = None
+                    self.page = None
 
-            # Check if we're on login page or dashboard
-            current_url = self.page.url
-            if "login" in current_url or "signin" in current_url:
-                logger.info(f"Session expired for agent {self.agent_id}, performing fresh login")
-                await self._perform_login(credentials)
-                # Save cookies after successful login
-                await self.session_store.save_cookies(
-                    self.agent_id,
-                    await self.context.storage_state()
+                logger.info(f"Login attempt {attempt + 1}/{self.MAX_NAVIGATION_RETRIES} for agent {self.agent_id} (cookies={'yes' if use_cookies else 'no'})")
+
+                logger.debug("Creating browser context...")
+                self.context = await self.browser.new_context(
+                    storage_state=cookies if use_cookies else None,
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080}
                 )
-            else:
-                logger.info(f"Session restored successfully for agent {self.agent_id}")
-                self._logged_in = True
+                self.page = await self.context.new_page()
+                logger.debug("Browser context created")
 
-            # Capture the actual base URL (team subdomain) after login
-            self._capture_base_url()
+                # Check if already logged in by navigating to a protected page
+                logger.debug(f"Navigating to {self.FUB_BASE_URL}/people to check login status (timeout={self.NAVIGATION_TIMEOUT_MS}ms)...")
+                await self.page.goto(
+                    f"{self.FUB_BASE_URL}/people",
+                    wait_until="domcontentloaded",
+                    timeout=self.NAVIGATION_TIMEOUT_MS
+                )
+                logger.debug("Navigation complete, checking URL...")
+                await self._human_delay(1, 2)
 
-        except PlaywrightTimeout as e:
-            logger.error(f"Timeout during login check for agent {self.agent_id}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error during login for agent {self.agent_id}: {e}")
-            raise
+                # Check if we're on login page or dashboard
+                current_url = self.page.url
+                if "login" in current_url or "signin" in current_url:
+                    logger.info(f"Session expired for agent {self.agent_id}, performing fresh login")
+                    await self._perform_login(credentials)
+                    # Save cookies after successful login
+                    await self.session_store.save_cookies(
+                        self.agent_id,
+                        await self.context.storage_state()
+                    )
+                else:
+                    logger.info(f"Session restored successfully for agent {self.agent_id}")
+                    self._logged_in = True
+
+                # Capture the actual base URL (team subdomain) after login
+                self._capture_base_url()
+
+                # Success - return
+                return
+
+            except PlaywrightTimeout as e:
+                last_error = e
+                logger.warning(f"Timeout on attempt {attempt + 1} for agent {self.agent_id}: {e}")
+
+                # On timeout, clear cookies for next attempt (they may be corrupted)
+                if use_cookies:
+                    logger.info(f"Clearing potentially corrupted cookies for agent {self.agent_id}")
+                    await self.session_store.delete_cookies(self.agent_id)
+                    use_cookies = False
+                    cookies = None
+
+                # Wait before retry
+                if attempt < self.MAX_NAVIGATION_RETRIES - 1:
+                    wait_time = (attempt + 1) * 5  # 5s, 10s, 15s
+                    logger.info(f"Waiting {wait_time}s before retry...")
+                    await asyncio.sleep(wait_time)
+
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Error on attempt {attempt + 1} for agent {self.agent_id}: {e}")
+
+                # On error, try without cookies next time
+                if use_cookies:
+                    logger.info(f"Clearing cookies and retrying for agent {self.agent_id}")
+                    await self.session_store.delete_cookies(self.agent_id)
+                    use_cookies = False
+                    cookies = None
+
+                # Wait before retry
+                if attempt < self.MAX_NAVIGATION_RETRIES - 1:
+                    wait_time = (attempt + 1) * 5
+                    logger.info(f"Waiting {wait_time}s before retry...")
+                    await asyncio.sleep(wait_time)
+
+        # All retries failed
+        logger.error(f"All {self.MAX_NAVIGATION_RETRIES} login attempts failed for agent {self.agent_id}")
+        raise Exception(f"Failed to login after {self.MAX_NAVIGATION_RETRIES} attempts. Last error: {last_error}")
 
     async def _perform_login(self, credentials: dict):
         """Perform actual login with human-like delays."""
@@ -1380,16 +1442,31 @@ class FUBBrowserSession:
             }
 
     async def is_valid(self) -> bool:
-        """Check if session is still valid."""
+        """Check if session is still valid.
+
+        Uses a longer timeout and logs detailed info for debugging.
+        Returns False on any error, allowing the caller to create a new session.
+        """
         if not self.page or not self._logged_in:
+            logger.debug(f"Session invalid for {self.agent_id}: page={self.page is not None}, logged_in={self._logged_in}")
             return False
         try:
-            # Use the captured base URL to check session validity
-            await self.page.goto(f"{self._get_base_url()}/people", wait_until="domcontentloaded")
+            # Use the captured base URL with longer timeout
+            logger.debug(f"Validating session for {self.agent_id}, navigating to {self._get_base_url()}/people")
+            await self.page.goto(
+                f"{self._get_base_url()}/people",
+                wait_until="domcontentloaded",
+                timeout=self.NAVIGATION_TIMEOUT_MS
+            )
             current_url = self.page.url
-            return "login" not in current_url and "signin" not in current_url
+            is_valid = "login" not in current_url and "signin" not in current_url
+            logger.debug(f"Session validation for {self.agent_id}: url={current_url}, valid={is_valid}")
+            return is_valid
+        except PlaywrightTimeout as e:
+            logger.warning(f"Session validation timeout for {self.agent_id}: {e}")
+            return False
         except Exception as e:
-            logger.warning(f"Session validation failed: {e}")
+            logger.warning(f"Session validation failed for {self.agent_id}: {e}")
             return False
 
     async def close(self):
