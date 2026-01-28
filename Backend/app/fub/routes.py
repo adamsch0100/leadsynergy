@@ -101,18 +101,18 @@ def get_user_from_fub_context(context: dict) -> dict:
         if not user_email:
             return None
 
-        # Find user by email
-        result = supabase.table('users').select('*').eq('email', user_email).single().execute()
+        # Find user by email - use maybeSingle() to avoid exception when not found
+        result = supabase.table('users').select('*').eq('email', user_email).maybe_single().execute()
 
         if result.data:
             return result.data
 
-        # User not found - could create one here for FUB users
-        logger.warning(f"FUB user not found: {user_email}")
+        # User not found - expected for users who haven't registered yet
+        logger.debug(f"FUB user not found in LeadSynergy: {user_email}")
         return None
 
     except Exception as e:
-        logger.error(f"Error getting user from FUB context: {e}")
+        logger.warning(f"Error getting user from FUB context: {e}")
         return None
 
 
@@ -123,12 +123,12 @@ def check_fub_terms_accepted(user_id: str) -> bool:
 
         result = supabase.table('users').select(
             'fub_terms_accepted'
-        ).eq('id', user_id).single().execute()
+        ).eq('id', user_id).maybe_single().execute()
 
         return result.data.get('fub_terms_accepted', False) if result.data else False
 
     except Exception as e:
-        logger.error(f"Error checking FUB terms: {e}")
+        logger.warning(f"Error checking FUB terms: {e}")
         return False
 
 
