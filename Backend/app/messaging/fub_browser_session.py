@@ -16,6 +16,7 @@ class FUBBrowserSession:
     """Manages a single agent's FUB browser session."""
 
     FUB_BASE_URL = "https://app.followupboss.com"
+    WARM_SESSION_THRESHOLD_SECONDS = 30  # Skip validation if used within this time
 
     def __init__(self, browser: Browser, agent_id: str, session_store: 'SessionStore'):
         self.browser = browser
@@ -25,10 +26,17 @@ class FUBBrowserSession:
         self.page: Optional[Page] = None
         self._logged_in = False
         self._actual_base_url: Optional[str] = None  # Team subdomain URL after login
+        self._last_successful_operation: Optional[float] = None  # Timestamp of last success
 
     # Navigation retry settings
     MAX_NAVIGATION_RETRIES = 3
-    NAVIGATION_TIMEOUT_MS = 60000  # 60 seconds - Railway can be slow
+    NAVIGATION_TIMEOUT_MS = 30000  # 30 seconds (reduced from 60s for faster failure)
+
+    # Step-level timeouts (in milliseconds) for faster failure detection
+    CLICK_TIMEOUT_MS = 10000  # 10 seconds for element clicks
+    INPUT_TIMEOUT_MS = 10000  # 10 seconds for text input
+    JS_EVAL_TIMEOUT_MS = 15000  # 15 seconds for JavaScript evaluation
+    ELEMENT_WAIT_TIMEOUT_MS = 10000  # 10 seconds for element waits
 
     async def login(self, credentials: dict):
         """Login to FUB with credentials or SSO.
@@ -95,6 +103,9 @@ class FUBBrowserSession:
 
                 # Capture the actual base URL (team subdomain) after login
                 self._capture_base_url()
+
+                # Mark session as warm after successful login
+                self.mark_operation_success()
 
                 # Success - return
                 return
@@ -489,6 +500,9 @@ class FUBBrowserSession:
         if not self._logged_in:
             raise Exception("Not logged in. Call login() first.")
 
+        # Reset page state before operation to avoid stale DOM/JS
+        await self._reset_page_state(light=True)
+
         # Navigate to lead profile - FUB uses /2/people/view/{id} format
         # Use the captured team subdomain URL to avoid session loss
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
@@ -669,6 +683,9 @@ class FUBBrowserSession:
         # Verify message was sent (check for success indicator or message appearing in thread)
         # This is optional validation - in practice the UI usually shows the sent message
 
+        # Mark operation success for warm session tracking
+        self.mark_operation_success()
+
         logger.info(f"SMS sent successfully to person {person_id}")
         return {"success": True, "person_id": person_id, "message_length": len(message)}
 
@@ -690,6 +707,9 @@ class FUBBrowserSession:
 
         if not self._logged_in:
             raise Exception("Not logged in. Call login() first.")
+
+        # Reset page state before operation to avoid stale DOM/JS
+        await self._reset_page_state(light=True)
 
         # Navigate to lead profile - use the captured team subdomain URL
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
@@ -990,6 +1010,9 @@ class FUBBrowserSession:
                 "debug_screenshot": debug_path,
             }
 
+        # Mark operation success for warm session tracking
+        self.mark_operation_success()
+
         return {
             "success": True,
             "message": latest_message,
@@ -1016,6 +1039,9 @@ class FUBBrowserSession:
 
         if not self._logged_in:
             raise Exception("Not logged in. Call login() first.")
+
+        # Reset page state before operation to avoid stale DOM/JS
+        await self._reset_page_state(light=True)
 
         # Navigate to lead profile
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
@@ -1131,6 +1157,8 @@ class FUBBrowserSession:
                 summaries = await self._extract_call_summaries_expanded(limit)
 
             if summaries:
+                # Mark operation success for warm session tracking
+                self.mark_operation_success()
                 return {
                     "success": True,
                     "summaries": summaries,
@@ -1265,6 +1293,9 @@ class FUBBrowserSession:
 
         if not self._logged_in:
             raise Exception("Not logged in. Call login() first.")
+
+        # Reset page state before operation to avoid stale DOM/JS
+        await self._reset_page_state(light=True)
 
         # Navigate to lead profile
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
@@ -1437,6 +1468,8 @@ class FUBBrowserSession:
             logger.info(f"Found {len(messages)} messages")
 
             if messages:
+                # Mark operation success for warm session tracking
+                self.mark_operation_success()
                 return {
                     "success": True,
                     "messages": messages,
@@ -1461,15 +1494,45 @@ class FUBBrowserSession:
                 "messages": []
             }
 
-    async def is_valid(self) -> bool:
+    def is_warm(self) -> bool:
+        """Check if session was used recently and can skip full validation.
+
+        A "warm" session was used successfully within the threshold time,
+        so we can skip the expensive navigation-based validation.
+        """
+        if not self._last_successful_operation:
+            return False
+        import time
+        elapsed = time.time() - self._last_successful_operation
+        is_warm = elapsed < self.WARM_SESSION_THRESHOLD_SECONDS
+        if is_warm:
+            logger.debug(f"Session for {self.agent_id} is warm ({elapsed:.1f}s since last op)")
+        return is_warm
+
+    def mark_operation_success(self):
+        """Mark that an operation completed successfully, updating the warm timer."""
+        import time
+        self._last_successful_operation = time.time()
+        logger.debug(f"Marked operation success for {self.agent_id}")
+
+    async def is_valid(self, skip_if_warm: bool = True) -> bool:
         """Check if session is still valid.
 
-        Uses a longer timeout and logs detailed info for debugging.
+        Args:
+            skip_if_warm: If True, skip navigation check for recently-used sessions.
+                          This avoids the expensive 60s timeout risk on every operation.
+
         Returns False on any error, allowing the caller to create a new session.
         """
         if not self.page or not self._logged_in:
             logger.debug(f"Session invalid for {self.agent_id}: page={self.page is not None}, logged_in={self._logged_in}")
             return False
+
+        # Fast path: if session was used recently, skip the expensive navigation check
+        if skip_if_warm and self.is_warm():
+            logger.info(f"Skipping validation for warm session {self.agent_id}")
+            return True
+
         try:
             # Use the captured base URL with longer timeout
             logger.debug(f"Validating session for {self.agent_id}, navigating to {self._get_base_url()}/people")
@@ -1481,6 +1544,11 @@ class FUBBrowserSession:
             current_url = self.page.url
             is_valid = "login" not in current_url and "signin" not in current_url
             logger.debug(f"Session validation for {self.agent_id}: url={current_url}, valid={is_valid}")
+
+            # If valid, mark as warm
+            if is_valid:
+                self.mark_operation_success()
+
             return is_valid
         except PlaywrightTimeout as e:
             logger.warning(f"Session validation timeout for {self.agent_id}: {e}")
@@ -1488,6 +1556,57 @@ class FUBBrowserSession:
         except Exception as e:
             logger.warning(f"Session validation failed for {self.agent_id}: {e}")
             return False
+
+    async def _reset_page_state(self, light: bool = True):
+        """Reset page state to avoid state pollution between operations.
+
+        Args:
+            light: If True, only clears JS state. If False, also navigates to neutral page.
+        """
+        if not self.page:
+            return
+
+        try:
+            # Clear any pending JavaScript timers and event listeners
+            await self.page.evaluate("""
+                () => {
+                    // Clear all timeouts and intervals
+                    const highestId = setTimeout(() => {}, 0);
+                    for (let i = 0; i < highestId; i++) {
+                        clearTimeout(i);
+                        clearInterval(i);
+                    }
+
+                    // Clear any pending XHR/fetch requests by aborting them
+                    // (This is a best-effort approach)
+                    if (window._pendingRequests) {
+                        window._pendingRequests.forEach(req => {
+                            try { req.abort(); } catch(e) {}
+                        });
+                        window._pendingRequests = [];
+                    }
+
+                    // Clear any custom event listeners on document
+                    // (Can't easily remove all, but this signals intent)
+
+                    return true;
+                }
+            """)
+            logger.debug(f"Light page state reset completed for {self.agent_id}")
+
+            if not light:
+                # Full reset: navigate to a neutral page
+                await self.page.goto(
+                    f"{self._get_base_url()}/people",
+                    wait_until="domcontentloaded",
+                    timeout=self.NAVIGATION_TIMEOUT_MS
+                )
+                await self._human_delay(0.5, 1.0)
+                logger.debug(f"Full page state reset completed for {self.agent_id}")
+
+        except Exception as e:
+            logger.warning(f"Page state reset failed for {self.agent_id}: {e}")
+            # Don't raise - this is a best-effort cleanup
 
     async def close(self):
         """Close the browser context."""
@@ -1523,8 +1642,17 @@ class FUBBrowserSession:
         """
         return self._actual_base_url or self.FUB_BASE_URL
 
-    async def _find_element_by_selectors(self, selectors: list, timeout: int = 1500):
-        """Try multiple selectors and return the first match."""
+    async def _find_element_by_selectors(self, selectors: list, timeout: int = None):
+        """Try multiple selectors and return the first match.
+
+        Args:
+            selectors: List of CSS selectors to try
+            timeout: Timeout per selector in ms (default: ELEMENT_WAIT_TIMEOUT_MS / len(selectors))
+        """
+        if timeout is None:
+            # Distribute timeout across selectors, minimum 1500ms each
+            timeout = max(1500, self.ELEMENT_WAIT_TIMEOUT_MS // max(1, len(selectors)))
+
         for selector in selectors:
             try:
                 element = await self.page.wait_for_selector(selector, timeout=timeout)
@@ -1548,3 +1676,197 @@ class FUBBrowserSession:
             # Occasionally add longer pauses (like thinking)
             if random.random() < 0.05:
                 await asyncio.sleep(random.uniform(0.2, 0.5))
+
+    async def get_phone_numbers(self) -> dict:
+        """
+        Fetch all phone numbers configured in the FUB account.
+
+        Navigates to the FUB phone numbers settings page and scrapes all
+        phone numbers, their assigned users, and their purposes.
+
+        This is used to build a list of phone numbers for filtering which
+        ones the AI agent should respond to.
+
+        Returns:
+            Dict with 'success', 'phone_numbers' (list of dicts with
+            number, assigned_to, purpose/label, is_active)
+        """
+        logger.info("Fetching phone numbers from FUB settings")
+
+        if not self._logged_in:
+            raise Exception("Not logged in. Call login() first.")
+
+        # Navigate to phone numbers settings page
+        # FUB URL pattern: {subdomain}.followupboss.com/2/phone-numbers
+        phone_url = f"{self._get_base_url()}/2/phone-numbers"
+        logger.info(f"Navigating to phone numbers page: {phone_url}")
+
+        await self.page.goto(
+            phone_url,
+            wait_until="domcontentloaded",
+            timeout=self.NAVIGATION_TIMEOUT_MS
+        )
+        await self._human_delay(1.5, 2.5)
+
+        # Check if we're on the right page or got redirected
+        current_url = self.page.url
+        if "login" in current_url or "signin" in current_url:
+            logger.error("Session expired - redirected to login page")
+            return {
+                "success": False,
+                "error": "Session expired",
+                "phone_numbers": []
+            }
+
+        # Extract phone numbers using JavaScript
+        # FUB phone numbers page structure (2024):
+        # - List of phone numbers with assigned user names
+        # - Each row shows: phone number, assigned agent, type/purpose
+        js_script = """
+        () => {
+            const phoneNumbers = [];
+
+            // FUB phone numbers are typically in a table or list structure
+            // Look for table rows containing phone number data
+            const rows = document.querySelectorAll('tr, [class*="phone-row"], [class*="PhoneNumber"]');
+
+            for (const row of rows) {
+                const rowText = row.textContent || '';
+
+                // Look for phone number pattern (various formats)
+                const phoneMatch = rowText.match(/\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/);
+                if (!phoneMatch) continue;
+
+                const phoneNumber = `(${phoneMatch[1]}) ${phoneMatch[2]}-${phoneMatch[3]}`;
+                const normalizedNumber = `+1${phoneMatch[1]}${phoneMatch[2]}${phoneMatch[3]}`;
+
+                // Try to find the assigned user - usually in a cell or label
+                let assignedTo = null;
+                const userCells = row.querySelectorAll('td, span, div');
+                for (const cell of userCells) {
+                    const cellText = cell.textContent?.trim() || '';
+                    // Skip if it's the phone number itself
+                    if (cellText.match(/\d{3}.*\d{3}.*\d{4}/)) continue;
+                    // Skip very short text
+                    if (cellText.length < 2) continue;
+                    // Likely a name or label
+                    if (cellText.length > 0 && cellText.length < 50) {
+                        assignedTo = cellText;
+                        break;
+                    }
+                }
+
+                // Try to determine the purpose/type from labels
+                let purpose = 'general';
+                const textLower = rowText.toLowerCase();
+                if (textLower.includes('inbox') || textLower.includes('personal')) {
+                    purpose = 'inbox';
+                } else if (textLower.includes('google')) {
+                    purpose = 'google';
+                } else if (textLower.includes('office')) {
+                    purpose = 'office';
+                } else if (textLower.includes('website')) {
+                    purpose = 'website';
+                } else if (textLower.includes('lead')) {
+                    purpose = 'leads';
+                } else if (textLower.includes('sign') || textLower.includes('call')) {
+                    purpose = 'sign_calls';
+                }
+
+                // Check if active (look for enabled/disabled indicators)
+                const isActive = !textLower.includes('disabled') && !textLower.includes('inactive');
+
+                phoneNumbers.push({
+                    number: phoneNumber,
+                    normalized: normalizedNumber,
+                    assigned_to: assignedTo,
+                    purpose: purpose,
+                    is_active: isActive,
+                    raw_text: rowText.substring(0, 200)
+                });
+            }
+
+            // Also check for a different page structure (card-based layout)
+            if (phoneNumbers.length === 0) {
+                const cards = document.querySelectorAll('[class*="card"], [class*="Card"], [class*="item"], [class*="Item"]');
+                for (const card of cards) {
+                    const cardText = card.textContent || '';
+                    const phoneMatch = cardText.match(/\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/);
+                    if (!phoneMatch) continue;
+
+                    const phoneNumber = `(${phoneMatch[1]}) ${phoneMatch[2]}-${phoneMatch[3]}`;
+                    const normalizedNumber = `+1${phoneMatch[1]}${phoneMatch[2]}${phoneMatch[3]}`;
+
+                    // Look for name/label
+                    let assignedTo = null;
+                    const heading = card.querySelector('h2, h3, h4, [class*="name"], [class*="title"]');
+                    if (heading) {
+                        assignedTo = heading.textContent?.trim();
+                    }
+
+                    phoneNumbers.push({
+                        number: phoneNumber,
+                        normalized: normalizedNumber,
+                        assigned_to: assignedTo,
+                        purpose: 'general',
+                        is_active: true,
+                        raw_text: cardText.substring(0, 200)
+                    });
+                }
+            }
+
+            // Deduplicate by normalized number
+            const seen = new Set();
+            const unique = [];
+            for (const pn of phoneNumbers) {
+                if (!seen.has(pn.normalized)) {
+                    seen.add(pn.normalized);
+                    unique.push(pn);
+                }
+            }
+
+            return unique;
+        }
+        """
+
+        try:
+            phone_numbers = await self.page.evaluate(js_script)
+            logger.info(f"Found {len(phone_numbers)} phone numbers")
+
+            if phone_numbers:
+                # Mark operation success for warm session tracking
+                self.mark_operation_success()
+                return {
+                    "success": True,
+                    "phone_numbers": phone_numbers,
+                    "count": len(phone_numbers)
+                }
+            else:
+                # Take debug screenshot if no phone numbers found
+                import os
+                debug_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                debug_path = os.path.join(debug_dir, f"debug_phone_numbers_page.png")
+                await self.page.screenshot(path=debug_path, full_page=True)
+
+                # Also save HTML for debugging
+                html_path = os.path.join(debug_dir, "debug_phone_numbers_page.html")
+                html_content = await self.page.content()
+                with open(html_path, 'w', encoding='utf-8') as f:
+                    f.write(html_content)
+
+                logger.warning(f"No phone numbers found. Debug screenshot: {debug_path}")
+
+                return {
+                    "success": False,
+                    "error": "No phone numbers found on page",
+                    "phone_numbers": [],
+                    "debug_screenshot": debug_path
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to extract phone numbers: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "phone_numbers": []
+            }

@@ -21,6 +21,9 @@ class PlaywrightSMSService:
     Uses a simple flag-based approach instead of locks to avoid async/sync deadlocks.
     """
 
+    # Self-healing settings
+    MAX_CONSECUTIVE_FAILURES = 2  # Destroy session after this many failures
+
     def __init__(self):
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
@@ -30,6 +33,7 @@ class PlaywrightSMSService:
         self._init_lock = threading.Lock()  # Only for initialization
         self._agent_busy: Dict[str, bool] = {}  # Track if agent is mid-operation
         self._agent_busy_lock = threading.Lock()  # Quick lock for flag check only
+        self._consecutive_failures: Dict[str, int] = {}  # Track failures per agent
 
     async def initialize(self):
         """Initialize Playwright and browser instance."""
@@ -80,6 +84,36 @@ class PlaywrightSMSService:
         """Mark agent as no longer busy."""
         with self._agent_busy_lock:
             self._agent_busy[agent_id] = False
+
+    def _record_success(self, agent_id: str):
+        """Record successful operation, resetting failure count."""
+        self._consecutive_failures[agent_id] = 0
+        logger.debug(f"Recorded success for {agent_id}, failure count reset")
+
+    def _record_failure(self, agent_id: str) -> int:
+        """Record failed operation, returning new failure count."""
+        current = self._consecutive_failures.get(agent_id, 0)
+        self._consecutive_failures[agent_id] = current + 1
+        logger.warning(f"Recorded failure for {agent_id}, consecutive failures: {current + 1}")
+        return current + 1
+
+    async def _force_fresh_session(self, agent_id: str):
+        """Force destroy session to create fresh one on next operation."""
+        logger.warning(f"Forcing fresh session for {agent_id} due to consecutive failures")
+        if agent_id in self.sessions:
+            try:
+                await self.sessions[agent_id].close()
+            except Exception as e:
+                logger.warning(f"Error closing session for fresh start: {e}")
+            del self.sessions[agent_id]
+        # Also clear any saved cookies that might be corrupted
+        try:
+            await self.session_store.delete_cookies(agent_id)
+            logger.info(f"Cleared saved cookies for {agent_id}")
+        except Exception as e:
+            logger.warning(f"Error clearing cookies: {e}")
+        # Reset failure counter since we're starting fresh
+        self._consecutive_failures[agent_id] = 0
 
     async def get_or_create_session(self, agent_id: str, credentials: dict) -> FUBBrowserSession:
         """Get existing session or create new one for agent.
@@ -142,7 +176,7 @@ class PlaywrightSMSService:
             # The caller will use the session for their operation
             pass  # Don't release here - release after the operation completes
 
-    async def _run_with_session(self, agent_id: str, credentials: dict, operation_name: str, operation_func, timeout: int = 120):
+    async def _run_with_session(self, agent_id: str, credentials: dict, operation_name: str, operation_func, timeout: int = 90):
         """Run an operation with proper agent locking and operation timeout.
 
         This ensures only one Playwright operation runs at a time per agent.
@@ -153,7 +187,7 @@ class PlaywrightSMSService:
             credentials: FUB login credentials
             operation_name: Name for logging
             operation_func: Async function taking session as argument
-            timeout: Max seconds for the operation (default 120s)
+            timeout: Max seconds for the operation (default 90s, reduced from 120s for faster failure)
         """
         # Wait for agent to become available
         max_wait = 120
@@ -168,6 +202,11 @@ class PlaywrightSMSService:
         try:
             logger.debug(f"Agent {agent_id} acquired for {operation_name}")
 
+            # Check if we've had too many consecutive failures - force fresh session
+            if self._consecutive_failures.get(agent_id, 0) >= self.MAX_CONSECUTIVE_FAILURES:
+                logger.warning(f"Agent {agent_id} has {self._consecutive_failures[agent_id]} consecutive failures, forcing fresh session")
+                await self._force_fresh_session(agent_id)
+
             # Get or create session (with timeout)
             session = await asyncio.wait_for(
                 self._get_session_internal(agent_id, credentials),
@@ -176,11 +215,21 @@ class PlaywrightSMSService:
 
             # Run the operation (with timeout to prevent indefinite hangs)
             logger.debug(f"Running {operation_name} with {timeout}s timeout")
-            return await asyncio.wait_for(operation_func(session), timeout=timeout)
+            result = await asyncio.wait_for(operation_func(session), timeout=timeout)
+
+            # Operation succeeded - reset failure counter
+            self._record_success(agent_id)
+            return result
 
         except asyncio.TimeoutError:
             logger.error(f"Operation {operation_name} timed out after {timeout}s for agent {agent_id}")
+            self._record_failure(agent_id)
             raise Exception(f"Operation {operation_name} timed out after {timeout}s")
+
+        except Exception as e:
+            # Record the failure for tracking
+            self._record_failure(agent_id)
+            raise
 
         finally:
             self._release_agent(agent_id)
@@ -705,3 +754,70 @@ async def read_message_with_auto_credentials(
 
     service = await PlaywrightSMSServiceSingleton.get_instance()
     return await service.read_latest_message(agent_id, person_id, credentials)
+
+
+async def get_fub_phone_numbers_with_auto_credentials(
+    user_id: str = None,
+    organization_id: str = None,
+    supabase_client=None,
+) -> dict:
+    """
+    Fetch all phone numbers from FUB account via browser with automatic credential lookup.
+
+    Navigates to the FUB phone numbers settings page and scrapes all
+    phone numbers, their assigned users, and their purposes.
+
+    Args:
+        user_id: Optional user ID for credential lookup
+        organization_id: Optional org ID for credential lookup
+        supabase_client: Optional Supabase client for DB lookup
+
+    Returns:
+        Dict with 'success', 'phone_numbers' (list of dicts with
+        number, normalized, assigned_to, purpose, is_active)
+    """
+    from app.ai_agent.settings_service import get_fub_browser_credentials
+
+    # Get credentials from settings or environment
+    credentials = await get_fub_browser_credentials(
+        supabase_client=supabase_client,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+
+    if not credentials:
+        return {
+            "success": False,
+            "error": "No FUB browser credentials configured. Set FUB_LOGIN_EMAIL and FUB_LOGIN_PASSWORD in environment or database settings.",
+            "phone_numbers": []
+        }
+
+    # Get agent_id from credentials or generate one
+    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+
+    service = await PlaywrightSMSServiceSingleton.get_instance()
+
+    # Use the _run_with_session pattern for proper locking
+    async def do_get_phones(session):
+        return await session.get_phone_numbers()
+
+    max_retries = 2
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            return await service._run_with_session(
+                agent_id, credentials, "get_phone_numbers", do_get_phones
+            )
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Get phone numbers attempt {attempt + 1} failed: {e}")
+
+            # Invalidate session for retry
+            if attempt < max_retries - 1:
+                logger.info(f"Invalidating session for {agent_id} and retrying...")
+                await service._invalidate_session(agent_id)
+                await asyncio.sleep(2)
+
+    logger.error(f"Failed to get phone numbers after {max_retries} attempts: {last_error}")
+    return {"success": False, "error": str(last_error), "phone_numbers": []}
