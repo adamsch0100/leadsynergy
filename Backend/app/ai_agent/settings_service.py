@@ -125,11 +125,9 @@ class AIAgentSettings:
     # Free models with tool calling support on OpenRouter:
     # - xiaomi/mimo-v2-flash:free (fast, good for conversations)
     # - meta-llama/llama-3.3-70b-instruct:free (high quality)
-    # - google/gemini-2.0-flash-exp:free (1M context)
-    # - qwen/qwen3-coder:free (best for tool use)
-    # - openai/gpt-oss-120b:free (GPT quality)
-    llm_model: str = "xiaomi/mimo-v2-flash:free"
-    llm_model_fallback: str = "deepseek/deepseek-r1-0528:free"
+    # Grok 4.1 Fast - very cheap ($0.20/$0.50 per million tokens), fast, reliable
+    llm_model: str = "x-ai/grok-4.1-fast"
+    llm_model_fallback: str = "google/gemini-2.5-flash-lite"
 
     # Database metadata
     settings_id: Optional[str] = None
@@ -206,8 +204,8 @@ class AIAgentSettings:
             # NOTE: Gmail credentials now in system_settings (global)
             # LLM Model Configuration
             llm_provider=row.get('llm_provider') or "openrouter",
-            llm_model=row.get('llm_model') or "xiaomi/mimo-v2-flash:free",
-            llm_model_fallback=row.get('llm_model_fallback') or "deepseek/deepseek-r1-0528:free",
+            llm_model=row.get('llm_model') or "x-ai/grok-4.1-fast",
+            llm_model_fallback=row.get('llm_model_fallback') or "google/gemini-2.5-flash-lite",
             # Sequence settings
             sequence_sms_enabled=row.get('sequence_sms_enabled', True),
             sequence_email_enabled=row.get('sequence_email_enabled', True),
