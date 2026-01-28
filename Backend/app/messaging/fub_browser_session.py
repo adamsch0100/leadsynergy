@@ -493,7 +493,12 @@ class FUBBrowserSession:
         # Use the captured team subdomain URL to avoid session loss
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
         logger.info(f"Navigating to person page: {person_url}")
-        await self.page.goto(person_url, wait_until="domcontentloaded")
+        await self.page.goto(
+            person_url,
+            wait_until="domcontentloaded",
+            timeout=self.NAVIGATION_TIMEOUT_MS
+        )
+        logger.debug(f"Navigation complete for person {person_id}")
         await self._human_delay(1.5, 2.5)
 
         # Take screenshot for debugging
@@ -689,7 +694,12 @@ class FUBBrowserSession:
         # Navigate to lead profile - use the captured team subdomain URL
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
         logger.info(f"Navigating to person page: {person_url}")
-        await self.page.goto(person_url, wait_until="domcontentloaded")
+        await self.page.goto(
+            person_url,
+            wait_until="domcontentloaded",
+            timeout=self.NAVIGATION_TIMEOUT_MS
+        )
+        logger.debug(f"Navigation complete for person {person_id}")
         await self._human_delay(1.5, 2.5)
 
         # Click Messages tab to see conversation - use the same robust approach as send_sms
@@ -1010,7 +1020,12 @@ class FUBBrowserSession:
         # Navigate to lead profile
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
         logger.info(f"Navigating to person page: {person_url}")
-        await self.page.goto(person_url, wait_until="domcontentloaded")
+        await self.page.goto(
+            person_url,
+            wait_until="domcontentloaded",
+            timeout=self.NAVIGATION_TIMEOUT_MS
+        )
+        logger.debug(f"Navigation complete for person {person_id}")
         await self._human_delay(1.5, 2.5)
 
         # FUB call structure (from screenshot Jan 2026):
@@ -1254,7 +1269,12 @@ class FUBBrowserSession:
         # Navigate to lead profile
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
         logger.info(f"Navigating to person page: {person_url}")
-        await self.page.goto(person_url, wait_until="domcontentloaded")
+        await self.page.goto(
+            person_url,
+            wait_until="domcontentloaded",
+            timeout=self.NAVIGATION_TIMEOUT_MS
+        )
+        logger.debug(f"Navigation complete for person {person_id}")
         await self._human_delay(1.5, 2.5)
 
         # Click Messages tab

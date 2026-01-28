@@ -104,7 +104,7 @@ def get_user_from_fub_context(context: dict) -> dict:
         # Find user by email - use maybeSingle() to avoid exception when not found
         result = supabase.table('users').select('*').eq('email', user_email).maybe_single().execute()
 
-        if result.data:
+        if result and result.data:
             return result.data
 
         # User not found - expected for users who haven't registered yet
@@ -112,7 +112,8 @@ def get_user_from_fub_context(context: dict) -> dict:
         return None
 
     except Exception as e:
-        logger.warning(f"Error getting user from FUB context: {e}")
+        # Only log as debug since this is expected for unregistered users
+        logger.debug(f"Error getting user from FUB context: {e}")
         return None
 
 
