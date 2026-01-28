@@ -16,6 +16,7 @@ import hashlib
 import base64
 from datetime import datetime
 import os
+from urllib.parse import quote
 
 from app.fub import fub_bp
 from app.enrichment.endato_client import EndatoClientSingleton
@@ -129,6 +130,57 @@ def check_fub_terms_accepted(user_id: str) -> bool:
     except Exception as e:
         logger.error(f"Error checking FUB terms: {e}")
         return False
+
+
+def check_if_organization_registered(user_email: str) -> dict:
+    """
+    Check if the user's organization has a registered broker.
+
+    Looks for users with the same email domain who have role='broker'.
+
+    Args:
+        user_email: The unregistered user's email
+
+    Returns:
+        {
+            'broker_registered': bool,
+            'broker_email': str or None,
+            'broker_name': str or None
+        }
+    """
+    try:
+        if not user_email or '@' not in user_email:
+            return {'broker_registered': False, 'broker_email': None, 'broker_name': None}
+
+        supabase = SupabaseClientSingleton.get_instance()
+
+        # Extract email domain
+        email_domain = user_email.split('@')[-1].lower()
+
+        # Skip common email domains (gmail, yahoo, etc.)
+        common_domains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
+                          'icloud.com', 'aol.com', 'live.com', 'msn.com']
+        if email_domain in common_domains:
+            return {'broker_registered': False, 'broker_email': None, 'broker_name': None}
+
+        # Look for a broker with the same email domain
+        result = supabase.table('users').select(
+            'id, email, full_name, role'
+        ).ilike('email', f'%@{email_domain}').in_('role', ['broker', 'admin', 'owner']).limit(1).execute()
+
+        if result.data:
+            broker = result.data[0]
+            return {
+                'broker_registered': True,
+                'broker_email': broker.get('email'),
+                'broker_name': broker.get('full_name') or broker.get('email', '').split('@')[0]
+            }
+
+        return {'broker_registered': False, 'broker_email': None, 'broker_name': None}
+
+    except Exception as e:
+        logger.error(f"Error checking organization registration: {e}")
+        return {'broker_registered': False, 'broker_email': None, 'broker_name': None}
 
 
 # =============================================================================
@@ -247,13 +299,34 @@ def embedded_app():
         # Get user from context
         user_data = get_user_from_fub_context(context)
 
-        if not user_data:
-            # Create a minimal user object for rendering
-            user_data = {
-                'id': None,
-                'email': context.get('user', {}).get('email', ''),
-                'name': context.get('user', {}).get('name', 'Guest')
-            }
+        if not user_data or not user_data.get('id'):
+            # User not registered - show signup prompt
+            user_email = context.get('user', {}).get('email', '')
+            user_name = context.get('user', {}).get('name', '')
+
+            # Check if broker from same org is registered
+            org_check = check_if_organization_registered(user_email)
+
+            if org_check.get('broker_registered'):
+                # Broker exists but this agent isn't provisioned
+                return render_template(
+                    'fub_embedded_app_unregistered.html',
+                    message_type='contact_broker',
+                    broker_email=org_check.get('broker_email'),
+                    broker_name=org_check.get('broker_name'),
+                    user_email=user_email,
+                    user_name=user_name
+                )
+            else:
+                # No one from this organization is registered - show signup CTA
+                signup_url = f"https://app.leadsynergy.ai/signup?email={quote(user_email)}&source=fub_embedded"
+                return render_template(
+                    'fub_embedded_app_unregistered.html',
+                    message_type='signup_required',
+                    signup_url=signup_url,
+                    user_email=user_email,
+                    user_name=user_name
+                )
 
         # Check if terms accepted
         has_accepted_terms = False

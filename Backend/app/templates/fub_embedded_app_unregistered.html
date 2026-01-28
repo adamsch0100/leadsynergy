@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LeadSynergy - Get Started</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --primary-dark: #2563eb;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-500: #6b7280;
+            --gray-700: #374151;
+            --gray-900: #111827;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--gray-50);
+            margin: 0;
+            padding: 0;
+            font-size: 13px;
+            color: var(--gray-700);
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            min-height: 100vh;
+        }
+
+        .app-container {
+            width: 100%;
+            height: 100vh;
+            max-height: 100%;
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .app-header {
+            background: linear-gradient(135deg, var(--primary) 0%, #6366f1 100%);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .app-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #fff;
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .app-logo-icon {
+            width: 32px;
+            height: 32px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            text-align: center;
+        }
+
+        .message-icon {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+            font-size: 32px;
+        }
+
+        .message-icon.signup {
+            background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+            color: #1e40af;
+        }
+
+        .message-icon.contact {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            color: #92400e;
+        }
+
+        .message-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin-bottom: 12px;
+        }
+
+        .message-text {
+            font-size: 14px;
+            color: var(--gray-500);
+            line-height: 1.6;
+            margin-bottom: 24px;
+            max-width: 300px;
+        }
+
+        .user-info {
+            background: var(--gray-100);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 24px;
+            font-size: 12px;
+            color: var(--gray-700);
+        }
+
+        .user-info i {
+            color: var(--primary);
+            margin-right: 8px;
+        }
+
+        /* CTA Button */
+        .cta-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 14px 32px;
+            background: linear-gradient(135deg, var(--primary) 0%, #6366f1 100%);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px rgba(59,130,246,0.3);
+        }
+
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(59,130,246,0.4);
+            color: #fff;
+            text-decoration: none;
+        }
+
+        .cta-button i {
+            font-size: 16px;
+        }
+
+        /* Secondary Button */
+        .secondary-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: var(--gray-100);
+            color: var(--gray-700);
+            border: 1px solid var(--gray-200);
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s;
+            margin-top: 12px;
+        }
+
+        .secondary-button:hover {
+            background: var(--gray-200);
+            color: var(--gray-900);
+            text-decoration: none;
+        }
+
+        /* Feature List */
+        .feature-list {
+            text-align: left;
+            margin: 20px 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .feature-list li {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 0;
+            font-size: 13px;
+            color: var(--gray-700);
+        }
+
+        .feature-list li i {
+            color: var(--success);
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        /* Trial Badge */
+        .trial-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+            color: #065f46;
+            padding: 8px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+
+        .trial-badge i {
+            font-size: 14px;
+        }
+
+        /* Contact Broker Info */
+        .broker-info {
+            background: var(--gray-50);
+            border: 1px solid var(--gray-200);
+            border-radius: 10px;
+            padding: 16px;
+            margin-top: 16px;
+            max-width: 300px;
+        }
+
+        .broker-info-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--gray-500);
+            margin-bottom: 8px;
+            letter-spacing: 0.5px;
+        }
+
+        .broker-info-value {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--gray-900);
+        }
+
+        .broker-info-value a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        .broker-info-value a:hover {
+            text-decoration: underline;
+        }
+
+        /* Footer */
+        .app-footer {
+            padding: 12px;
+            text-align: center;
+            font-size: 11px;
+            color: var(--gray-500);
+            border-top: 1px solid var(--gray-200);
+        }
+
+        .app-footer a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <div class="app-header">
+            <div class="app-logo">
+                <div class="app-logo-icon">
+                    <i class="fas fa-bolt"></i>
+                </div>
+                <span>LeadSynergy</span>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            {% if message_type == 'signup_required' %}
+                <!-- Signup Required -->
+                <div class="trial-badge">
+                    <i class="fas fa-gift"></i>
+                    <span>3-Day Free Trial</span>
+                </div>
+
+                <div class="message-icon signup">
+                    <i class="fas fa-rocket"></i>
+                </div>
+
+                <h1 class="message-title">Supercharge Your Leads</h1>
+
+                <p class="message-text">
+                    Get instant access to AI-powered lead enrichment, automated nurturing, and referral platform integration.
+                </p>
+
+                {% if user_email %}
+                <div class="user-info">
+                    <i class="fas fa-user"></i>
+                    <span>{{ user_name or user_email }}</span>
+                </div>
+                {% endif %}
+
+                <ul class="feature-list">
+                    <li><i class="fas fa-check-circle"></i> 30 Lead Enhancement Credits</li>
+                    <li><i class="fas fa-check-circle"></i> 2 Background Check Credits</li>
+                    <li><i class="fas fa-check-circle"></i> 30 DNC Compliance Checks</li>
+                    <li><i class="fas fa-check-circle"></i> AI-Powered Lead Nurturing</li>
+                    <li><i class="fas fa-check-circle"></i> Referral Platform Sync</li>
+                </ul>
+
+                <a href="{{ signup_url }}" class="cta-button" target="_blank">
+                    <i class="fas fa-rocket"></i>
+                    Start Free Trial
+                </a>
+
+                <p style="margin-top: 16px; font-size: 12px; color: var(--gray-500);">
+                    3-day free trial, then $49/month
+                </p>
+
+            {% elif message_type == 'contact_broker' %}
+                <!-- Contact Broker -->
+                <div class="message-icon contact">
+                    <i class="fas fa-building"></i>
+                </div>
+
+                <h1 class="message-title">Your Broker Has LeadSynergy</h1>
+
+                <p class="message-text">
+                    Your brokerage is already using LeadSynergy! Contact your broker to get access to the platform.
+                </p>
+
+                {% if user_email %}
+                <div class="user-info">
+                    <i class="fas fa-user"></i>
+                    <span>{{ user_name or user_email }}</span>
+                </div>
+                {% endif %}
+
+                {% if broker_email %}
+                <div class="broker-info">
+                    <div class="broker-info-label">Contact Your Broker</div>
+                    <div class="broker-info-value">
+                        <a href="mailto:{{ broker_email }}?subject=LeadSynergy%20Access%20Request&body=Hi%2C%0A%0AI%20would%20like%20to%20get%20access%20to%20LeadSynergy.%0A%0AMy%20email%3A%20{{ user_email }}%0A%0AThank%20you!">
+                            <i class="fas fa-envelope"></i> {{ broker_email }}
+                        </a>
+                    </div>
+                </div>
+                {% endif %}
+
+                <a href="mailto:{{ broker_email or 'support@leadsynergy.ai' }}?subject=LeadSynergy%20Access%20Request" class="cta-button">
+                    <i class="fas fa-envelope"></i>
+                    Request Access
+                </a>
+
+                <a href="{{ signup_url or 'https://app.leadsynergy.ai/signup' }}" class="secondary-button" target="_blank">
+                    <i class="fas fa-user-plus"></i>
+                    Or Sign Up Separately
+                </a>
+
+            {% else %}
+                <!-- Generic Welcome -->
+                <div class="message-icon signup">
+                    <i class="fas fa-bolt"></i>
+                </div>
+
+                <h1 class="message-title">Welcome to LeadSynergy</h1>
+
+                <p class="message-text">
+                    Sign up to get started with AI-powered lead enrichment and automated nurturing.
+                </p>
+
+                <a href="{{ signup_url or 'https://app.leadsynergy.ai/signup' }}" class="cta-button" target="_blank">
+                    <i class="fas fa-rocket"></i>
+                    Get Started
+                </a>
+            {% endif %}
+        </div>
+
+        <!-- Footer -->
+        <div class="app-footer">
+            <a href="https://leadsynergy.ai" target="_blank">LeadSynergy</a> &bull; AI-Powered Lead Intelligence
+        </div>
+    </div>
+</body>
+</html>

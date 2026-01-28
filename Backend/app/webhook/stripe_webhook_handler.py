@@ -154,9 +154,64 @@ def handle_subscription_created(supabase, data):
 
 
 def handle_subscription_updated(supabase, data):
+    new_status = data["status"]
+    subscription_id = data["id"]
+
+    # Get previous subscription status to detect transitions
+    previous_sub = (
+        supabase.table("subscriptions")
+        .select("status, organization_id")
+        .eq("stripe_subscription_id", subscription_id)
+        .limit(1)
+        .execute()
+    )
+
+    previous_status = None
+    org_id = None
+    if previous_sub.data:
+        previous_status = previous_sub.data[0].get("status")
+        org_id = previous_sub.data[0].get("organization_id")
+
+    logger.info(f"📊 Subscription update: {subscription_id}")
+    logger.info(f"   Previous status: {previous_status} -> New status: {new_status}")
+
+    # Handle trial -> active transition (successful conversion)
+    if previous_status == "trialing" and new_status == "active":
+        logger.info(f"🎉 Trial converted to paid subscription for org {org_id}")
+        # Credits continue to work - user is now a paying customer
+
+    # Handle trial -> failed states (payment failed at trial end)
+    elif previous_status == "trialing" and new_status in ["past_due", "canceled", "incomplete", "unpaid"]:
+        logger.warning(f"⚠️ Trial payment failed for org {org_id} - expiring credits")
+
+        if org_id:
+            # Get the primary user for this organization
+            try:
+                user_result = supabase.table('organization_users').select(
+                    'user_id'
+                ).eq('organization_id', org_id).limit(1).execute()
+
+                if user_result.data:
+                    user_id = user_result.data[0]['user_id']
+                    logger.info(f"👤 Expiring trial credits for user {user_id}")
+
+                    # Expire trial credits
+                    from app.service.trial_service import TrialServiceSingleton
+                    trial_service = TrialServiceSingleton.get_instance()
+                    expire_result = trial_service.expire_trial_credits(user_id)
+
+                    if expire_result.get('success'):
+                        logger.info(f"✅ Trial credits expired for user {user_id}")
+                    else:
+                        logger.error(f"❌ Failed to expire trial credits: {expire_result.get('error')}")
+                else:
+                    logger.warning(f"⚠️ No users found for organization {org_id}")
+            except Exception as expire_error:
+                logger.error(f"❌ Error expiring trial credits: {expire_error}")
+
     # Update existing subscription
     subscription_data = {
-        "status": data["status"],
+        "status": new_status,
         "current_period_start": datetime.fromtimestamp(
             data["current_period_start"]
         ).isoformat(),

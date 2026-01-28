@@ -63,15 +63,24 @@ def create_checkout_session():
                 "⚠️ No customer email provided - payment method may not be saved properly"
             )
 
+        # Trial configuration
+        TRIAL_PERIOD_DAYS = 3
+
         session_params = {
             "payment_method_types": ["card"],
             "line_items": [{"price": price_id, "quantity": 1}],
             "mode": "subscription",
+            "subscription_data": {
+                "trial_period_days": TRIAL_PERIOD_DAYS,
+                "metadata": {"organization_id": organization_id}
+            },
             "success_url": f"{os.environ.get('FRONTEND_URL')}/signup/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
             "cancel_url": f"{os.environ.get('FRONTEND_URL')}/signup/billing/cancel",
             "metadata": {"organization_id": organization_id},
             "saved_payment_method_options": {"payment_method_save": "enabled"},
         }
+
+        logger.info(f"🎁 Trial period: {TRIAL_PERIOD_DAYS} days")
 
         # Add customer to session if created
         if customer:
@@ -216,9 +225,42 @@ def _handle_checkout_completed(event):
         end_date = datetime.fromtimestamp(subscription.current_period_end)
         logger.info(f"📅 Subscription end date: {end_date}")
 
+        # Check if this is a trial subscription and grant credits
+        if subscription.status == "trialing" and subscription.trial_end:
+            logger.info(f"🎁 Subscription is in trial status, granting trial credits")
+            trial_end = datetime.fromtimestamp(subscription.trial_end)
+            logger.info(f"📅 Trial ends at: {trial_end}")
+
+            # Get primary user for this organization to grant credits
+            try:
+                user_result = supabase.table('organization_users').select(
+                    'user_id'
+                ).eq('organization_id', organization_id).limit(1).execute()
+
+                if user_result.data:
+                    user_id = user_result.data[0]['user_id']
+                    logger.info(f"👤 Found primary user {user_id} for org {organization_id}")
+
+                    # Grant trial credits
+                    from app.service.trial_service import TrialServiceSingleton
+                    trial_service = TrialServiceSingleton.get_instance()
+                    grant_result = trial_service.grant_trial_credits(user_id, trial_end)
+
+                    if grant_result.get('success'):
+                        logger.info(f"✅ Trial credits granted to user {user_id}")
+                    else:
+                        logger.error(f"❌ Failed to grant trial credits: {grant_result.get('error')}")
+                else:
+                    logger.warning(f"⚠️ No users found for organization {organization_id}")
+            except Exception as trial_error:
+                logger.error(f"❌ Error granting trial credits: {trial_error}")
+
         # Update organization subscription status in the database
+        # Use 'trialing' status if subscription is in trial, otherwise 'active'
+        subscription_status = "trialing" if subscription.status == "trialing" else "active"
+
         update_data = {
-            "subscription_status": "active",
+            "subscription_status": subscription_status,
             "subscription_plan": plan,
             "stripe_customer_id": customer_id,
             "subscription_end_date": end_date.isoformat(),

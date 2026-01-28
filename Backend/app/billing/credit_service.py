@@ -44,6 +44,8 @@ class CreditService:
                 'bundle_enhancement_credits, bundle_criminal_credits, bundle_dnc_credits, '
                 'allocated_enhancement_credits, allocated_criminal_credits, allocated_dnc_credits, '
                 'personal_enhancement_credits, personal_criminal_credits, '
+                'trial_enhancement_credits, trial_criminal_credits, trial_dnc_credits, '
+                'trial_started_at, trial_ends_at, '
                 'credit_allocation_type'
             ).eq('id', user_id).single().execute()
 
@@ -53,33 +55,44 @@ class CreditService:
             user = result.data
             user_type = user.get('user_type', 'agent')
 
+            # Get trial credits (available to all users)
+            trial_enhancement = user.get('trial_enhancement_credits') or 0
+            trial_criminal = user.get('trial_criminal_credits') or 0
+            trial_dnc = user.get('trial_dnc_credits') or 0
+
             # Calculate totals based on user type
             if user_type == 'broker':
                 total_enhancement = (
+                    trial_enhancement +
                     (user.get('plan_enhancement_credits') or 0) +
                     (user.get('bundle_enhancement_credits') or 0) +
                     (user.get('personal_enhancement_credits') or 0)
                 )
                 total_criminal = (
+                    trial_criminal +
                     (user.get('plan_criminal_credits') or 0) +
                     (user.get('bundle_criminal_credits') or 0) +
                     (user.get('personal_criminal_credits') or 0)
                 )
                 total_dnc = (
+                    trial_dnc +
                     (user.get('plan_dnc_credits') or 0) +
                     (user.get('bundle_dnc_credits') or 0)
                 )
             else:
                 # Agent - includes allocated credits
                 total_enhancement = (
+                    trial_enhancement +
                     (user.get('bundle_enhancement_credits') or 0) +
                     (user.get('allocated_enhancement_credits') or 0)
                 )
                 total_criminal = (
+                    trial_criminal +
                     (user.get('bundle_criminal_credits') or 0) +
                     (user.get('allocated_criminal_credits') or 0)
                 )
                 total_dnc = (
+                    trial_dnc +
                     (user.get('bundle_dnc_credits') or 0) +
                     (user.get('allocated_dnc_credits') or 0)
                 )
@@ -89,6 +102,13 @@ class CreditService:
                 'user_type': user_type,
                 'broker_id': user.get('broker_id'),  # Will be None if column doesn't exist
                 'credit_allocation_type': user.get('credit_allocation_type', 'shared'),
+
+                # Trial credits (used first)
+                'trial_enhancement_credits': trial_enhancement,
+                'trial_criminal_credits': trial_criminal,
+                'trial_dnc_credits': trial_dnc,
+                'trial_started_at': user.get('trial_started_at'),
+                'trial_ends_at': user.get('trial_ends_at'),
 
                 # Individual pools
                 'plan_enhancement_credits': user.get('plan_enhancement_credits') or 0,
@@ -103,7 +123,7 @@ class CreditService:
                 'personal_enhancement_credits': user.get('personal_enhancement_credits') or 0,
                 'personal_criminal_credits': user.get('personal_criminal_credits') or 0,
 
-                # Totals
+                # Totals (including trial)
                 'total_enhancement_credits': total_enhancement,
                 'total_criminal_credits': total_criminal,
                 'total_dnc_credits': total_dnc,
@@ -267,24 +287,27 @@ class CreditService:
     def _deduct_broker_credits(self, user_id: str, credit_type: str,
                                amount: int, user_credits: Dict) -> Optional[str]:
         """
-        Deduct credits from broker's pools in order: plan -> bundle -> personal.
+        Deduct credits from broker's pools in order: trial -> plan -> bundle -> personal.
         Returns the credit source that was used.
         """
         pools_order = []
 
         if credit_type == self.TYPE_CRIMINAL:
             pools_order = [
+                ('trial_criminal_credits', 'trial'),  # Trial first
                 ('plan_criminal_credits', CreditTransaction.SOURCE_BROKER_PLAN),
                 ('bundle_criminal_credits', CreditTransaction.SOURCE_BROKER_BUNDLE),
                 ('personal_criminal_credits', CreditTransaction.SOURCE_BROKER_PERSONAL),
             ]
         elif credit_type == self.TYPE_DNC:
             pools_order = [
+                ('trial_dnc_credits', 'trial'),  # Trial first
                 ('plan_dnc_credits', CreditTransaction.SOURCE_BROKER_PLAN),
                 ('bundle_dnc_credits', CreditTransaction.SOURCE_BROKER_BUNDLE),
             ]
         else:  # enhancement
             pools_order = [
+                ('trial_enhancement_credits', 'trial'),  # Trial first
                 ('plan_enhancement_credits', CreditTransaction.SOURCE_BROKER_PLAN),
                 ('bundle_enhancement_credits', CreditTransaction.SOURCE_BROKER_BUNDLE),
                 ('personal_enhancement_credits', CreditTransaction.SOURCE_BROKER_PERSONAL),
@@ -304,24 +327,27 @@ class CreditService:
     def _deduct_agent_credits(self, user_id: str, credit_type: str,
                               amount: int, user_credits: Dict) -> Tuple[Optional[str], Optional[str]]:
         """
-        Deduct credits from agent's pools in order: bundle -> allocated -> broker's shared.
+        Deduct credits from agent's pools in order: trial -> bundle -> allocated -> broker's shared.
         Returns tuple of (credit_source, broker_id if shared pool used).
         """
         broker_id = user_credits.get('broker_id')
 
-        # Agent pools
+        # Agent pools (trial first, then bundle, then allocated)
         if credit_type == self.TYPE_CRIMINAL:
             agent_pools = [
+                ('trial_criminal_credits', 'trial'),  # Trial first
                 ('bundle_criminal_credits', CreditTransaction.SOURCE_AGENT_BUNDLE),
                 ('allocated_criminal_credits', CreditTransaction.SOURCE_AGENT_ALLOCATED),
             ]
         elif credit_type == self.TYPE_DNC:
             agent_pools = [
+                ('trial_dnc_credits', 'trial'),  # Trial first
                 ('bundle_dnc_credits', CreditTransaction.SOURCE_AGENT_BUNDLE),
                 ('allocated_dnc_credits', CreditTransaction.SOURCE_AGENT_ALLOCATED),
             ]
         else:  # enhancement
             agent_pools = [
+                ('trial_enhancement_credits', 'trial'),  # Trial first
                 ('bundle_enhancement_credits', CreditTransaction.SOURCE_AGENT_BUNDLE),
                 ('allocated_enhancement_credits', CreditTransaction.SOURCE_AGENT_ALLOCATED),
             ]
