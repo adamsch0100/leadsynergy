@@ -3,6 +3,7 @@
 from playwright.async_api import async_playwright, Browser, Playwright
 from typing import Dict, Optional
 import asyncio
+import threading
 import logging
 import os
 
@@ -13,7 +14,12 @@ logger = logging.getLogger(__name__)
 
 
 class PlaywrightSMSService:
-    """Send SMS via FUB web interface using Playwright browser automation."""
+    """Send SMS via FUB web interface using Playwright browser automation.
+
+    IMPORTANT: Uses threading.RLock instead of asyncio.Lock because webhook handlers
+    create separate event loops per request. asyncio.Lock is NOT cross-event-loop safe
+    and causes deadlocks when multiple webhooks try to access the same session.
+    """
 
     def __init__(self):
         self.playwright: Optional[Playwright] = None
@@ -21,13 +27,13 @@ class PlaywrightSMSService:
         self.sessions: Dict[str, FUBBrowserSession] = {}  # agent_id -> session
         self.session_store = SessionStore()
         self._initialized = False
-        self._lock = asyncio.Lock()
-        self._login_locks: Dict[str, asyncio.Lock] = {}  # Per-agent login locks
+        self._lock = threading.RLock()  # Thread-safe for cross-event-loop access
+        self._login_locks: Dict[str, threading.RLock] = {}  # Per-agent locks (thread-safe)
         self._login_in_progress: Dict[str, bool] = {}  # Track login attempts
 
     async def initialize(self):
         """Initialize Playwright and browser instance. Thread-safe."""
-        async with self._lock:
+        with self._lock:  # Use 'with' for threading.RLock, not 'async with'
             await self._do_initialize()
 
     async def _do_initialize(self):
@@ -66,14 +72,14 @@ class PlaywrightSMSService:
         """
         logger.debug(f"get_or_create_session called for agent {agent_id}")
 
-        # Get or create per-agent lock
-        async with self._lock:
+        # Get or create per-agent lock (thread-safe)
+        with self._lock:
             if agent_id not in self._login_locks:
-                self._login_locks[agent_id] = asyncio.Lock()
+                self._login_locks[agent_id] = threading.RLock()
             agent_lock = self._login_locks[agent_id]
 
         # Use per-agent lock to prevent concurrent logins for the same agent
-        async with agent_lock:
+        with agent_lock:
             logger.debug(f"Acquired agent lock for {agent_id}")
 
             # Check if login is already in progress (shouldn't happen with lock, but safety check)
@@ -101,7 +107,7 @@ class PlaywrightSMSService:
                     del self.sessions[agent_id]
 
             # Initialize browser if needed
-            async with self._lock:
+            with self._lock:
                 if not self._initialized:
                     logger.debug("Service not initialized, initializing...")
                     await self._do_initialize()
@@ -239,22 +245,29 @@ class PlaywrightSMSService:
 
     async def close_session(self, agent_id: str):
         """Close a specific agent's session."""
-        async with self._lock:
+        session = None
+        with self._lock:
             if agent_id in self.sessions:
-                await self.sessions[agent_id].close()
-                del self.sessions[agent_id]
-                logger.info(f"Session closed for agent {agent_id}")
+                session = self.sessions.pop(agent_id)
+        # Close outside lock to avoid holding lock during async operation
+        if session:
+            await session.close()
+            logger.info(f"Session closed for agent {agent_id}")
 
     async def close_all_sessions(self):
         """Close all sessions."""
-        async with self._lock:
-            for agent_id, session in self.sessions.items():
-                try:
-                    await session.close()
-                except Exception as e:
-                    logger.warning(f"Error closing session for {agent_id}: {e}")
+        # Collect sessions under lock, then close outside lock
+        sessions_to_close = []
+        with self._lock:
+            sessions_to_close = list(self.sessions.items())
             self.sessions.clear()
-            logger.info("All sessions closed")
+        # Close all sessions outside the lock
+        for agent_id, session in sessions_to_close:
+            try:
+                await session.close()
+            except Exception as e:
+                logger.warning(f"Error closing session for {agent_id}: {e}")
+        logger.info("All sessions closed")
 
     async def shutdown(self):
         """Shutdown the service and cleanup resources."""
@@ -277,27 +290,36 @@ class PlaywrightSMSService:
 
 
 class PlaywrightSMSServiceSingleton:
-    """Singleton accessor for PlaywrightSMSService."""
+    """Singleton accessor for PlaywrightSMSService.
+
+    Uses threading.RLock for cross-event-loop safety since webhook handlers
+    create separate event loops per request.
+    """
 
     _instance: Optional[PlaywrightSMSService] = None
-    _lock = asyncio.Lock()
+    _lock = threading.RLock()
 
     @classmethod
     async def get_instance(cls) -> PlaywrightSMSService:
         """Get or create the singleton instance."""
-        async with cls._lock:
+        with cls._lock:
             if cls._instance is None:
                 cls._instance = PlaywrightSMSService()
+                # Initialize outside lock since it's async and may take time
                 await cls._instance.initialize()
             return cls._instance
 
     @classmethod
     async def shutdown(cls):
         """Shutdown the singleton instance."""
-        async with cls._lock:
+        instance = None
+        with cls._lock:
             if cls._instance:
-                await cls._instance.shutdown()
+                instance = cls._instance
                 cls._instance = None
+        # Shutdown outside lock since it's async
+        if instance:
+            await instance.shutdown()
 
 
 # Convenience function for one-off sends
