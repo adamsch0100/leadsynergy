@@ -1793,9 +1793,27 @@ def save_fub_login_settings():
             }), 400
 
         # Auto-register webhooks for AI agent after saving FUB settings
+        # For multi-tenant: Use user's FUB API key and include org_id in webhook URLs
         webhook_result = None
         try:
-            fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+            # Try to get user's FUB API key from database first
+            fub_api_key = None
+            effective_org_id = organization_id  # Use org_id for webhook routing
+
+            if user_id:
+                user_data = supabase.table('users').select('fub_api_key, organization_id').eq(
+                    'id', user_id
+                ).limit(1).execute()
+                if user_data.data:
+                    fub_api_key = user_data.data[0].get('fub_api_key')
+                    # Use user's org_id if we didn't have one
+                    if not effective_org_id:
+                        effective_org_id = user_data.data[0].get('organization_id')
+
+            # Fallback to environment variable
+            if not fub_api_key:
+                fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+
             if fub_api_key:
                 from app.database.fub_api_client import FUBApiClient
                 client = FUBApiClient(api_key=fub_api_key)
@@ -1803,8 +1821,11 @@ def save_fub_login_settings():
                     'WEBHOOK_BASE_URL',
                     'https://referral-link-backend-production.up.railway.app'
                 )
-                webhook_result = client.ensure_ai_webhooks(base_url)
-                logger.info(f"Auto-registered AI webhooks: {webhook_result}")
+                # Pass org_id for multi-tenant webhook routing
+                webhook_result = client.ensure_ai_webhooks(base_url, org_id=effective_org_id)
+                logger.info(f"Auto-registered AI webhooks for org {effective_org_id}: {webhook_result}")
+            else:
+                logger.warning("No FUB API key available - webhooks not registered. User should save their API key.")
         except Exception as e:
             logger.warning(f"Could not auto-register webhooks: {e}")
 
@@ -2004,17 +2025,36 @@ def register_ai_webhooks():
         )
         base_url = data.get('base_url', default_base_url)
 
-        # Get FUB API key
-        fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+        # Get user context for multi-tenant support
+        user_id, organization_id = _get_user_context_from_request()
+
+        # Get FUB API key - try user's key first, then env var
+        fub_api_key = None
+        effective_org_id = organization_id
+
+        if user_id:
+            supabase = SupabaseClientSingleton.get_instance()
+            user_data = supabase.table('users').select('fub_api_key, organization_id').eq(
+                'id', user_id
+            ).limit(1).execute()
+            if user_data.data:
+                fub_api_key = user_data.data[0].get('fub_api_key')
+                if not effective_org_id:
+                    effective_org_id = user_data.data[0].get('organization_id')
+
+        # Fallback to environment variable
+        if not fub_api_key:
+            fub_api_key = os.getenv('FUB_API_KEY') or os.getenv('FOLLOWUPBOSS_API_KEY')
+
         if not fub_api_key:
             return jsonify({
                 "success": False,
-                "message": "FUB API key not configured"
+                "message": "FUB API key not configured. Please save your FUB API key first."
             }), 400
 
-        # Register webhooks
+        # Register webhooks with org_id for multi-tenant routing
         client = FUBApiClient(api_key=fub_api_key)
-        result = client.ensure_ai_webhooks(base_url)
+        result = client.ensure_ai_webhooks(base_url, org_id=effective_org_id)
 
         if result.get('error'):
             return jsonify({
@@ -2026,6 +2066,7 @@ def register_ai_webhooks():
         return jsonify({
             "success": True,
             "message": f"Webhooks configured successfully",
+            "org_id": effective_org_id,
             "registered": result.get('registered', []),
             "existing": result.get('existing', []),
             "failed": result.get('failed', []),

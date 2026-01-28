@@ -302,6 +302,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         person_id = text_msg.get('personId')
         is_incoming = text_msg.get('isIncoming', False)
         message_content = text_msg.get('message', '')
+        from_number = text_msg.get('fromNumber')  # Lead's phone for incoming messages
 
         if not person_id:
             logger.warning(f"No person ID associated with text message. Full msg: {text_msg}")
@@ -763,7 +764,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 await conversation_manager.save_context(context)
 
                 # Update compliance counter
-                await compliance_checker.increment_message_count(person_id, organization_id)
+                await compliance_checker.increment_message_count(person_id, organization_id, from_number)
 
                 # Log the AI interaction
                 await log_ai_message(

@@ -465,8 +465,15 @@ class ComplianceChecker:
         self,
         fub_person_id: int,
         organization_id: str,
+        phone_number: str = None,
     ) -> bool:
-        """Increment daily message count after sending."""
+        """Increment daily message count after sending.
+
+        Args:
+            fub_person_id: FUB person ID
+            organization_id: Organization ID
+            phone_number: Lead's phone number (required if no existing consent record)
+        """
         if not self.supabase:
             return False
 
@@ -493,10 +500,15 @@ class ComplianceChecker:
 
                 return bool(result.data)
             else:
-                # Create new record with count
+                # Create new record with count - phone_number is required
+                if not phone_number:
+                    logger.warning(f"Cannot create consent record without phone_number for person {fub_person_id}")
+                    return False
+
                 result = self.supabase.table("sms_consent").insert({
                     "fub_person_id": fub_person_id,
                     "organization_id": organization_id,
+                    "phone_number": self._normalize_phone(phone_number),
                     "messages_sent_today": 1,
                     "last_message_date": str(today),
                     "consent_given": True,  # Implied from sending

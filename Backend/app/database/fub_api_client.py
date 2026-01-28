@@ -701,7 +701,7 @@ class FUBApiClient:
         )
         return response.status_code in (200, 204)
 
-    def ensure_ai_webhooks(self, base_url: str) -> Dict[str, Any]:
+    def ensure_ai_webhooks(self, base_url: str, org_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Ensure all required AI agent webhooks are registered.
 
@@ -712,20 +712,24 @@ class FUBApiClient:
 
         Args:
             base_url: The base URL for the API (e.g., 'https://api.leadsynergy.ai')
+            org_id: Optional organization ID to append to webhook URLs for multi-tenant routing
 
         Returns:
             Dict with 'registered', 'existing', and 'failed' webhook lists
         """
+        # Build query string for multi-tenant routing
+        query_string = f"?org_id={org_id}" if org_id else ""
+
         # Define required webhooks
         required_webhooks = [
             {
                 'event': 'textMessagesCreated',
-                'endpoint': '/webhooks/ai/text-received',
+                'endpoint': f'/webhooks/ai/text-received{query_string}',
                 'system': 'LeadSynergy-AI-SMS'
             },
             {
                 'event': 'peopleCreated',
-                'endpoint': '/webhooks/ai/lead-created',
+                'endpoint': f'/webhooks/ai/lead-created{query_string}',
                 'system': 'LeadSynergy-AI-NewLead'
             },
         ]
