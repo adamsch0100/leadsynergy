@@ -176,6 +176,102 @@ def send_scheduled_message(
 
 
 @shared_task(bind=True, max_retries=3)
+def process_off_hours_queue(self):
+    """
+    Process the off-hours message queue and send due messages via Playwright.
+    Run this task every 5 minutes during 8-10 AM to send queued messages.
+    """
+    from app.database.supabase_client import get_supabase_client
+
+    logger.info("Processing off-hours message queue...")
+
+    try:
+        supabase = get_supabase_client()
+        now = datetime.utcnow().isoformat()
+
+        # Get pending messages where scheduled_for has passed
+        result = supabase.table("scheduled_messages").select("*").eq(
+            "status", "pending"
+        ).eq(
+            "sequence_type", "off_hours_queue"
+        ).lte(
+            "scheduled_for", now
+        ).limit(10).execute()
+
+        if not result.data:
+            logger.info("No off-hours messages due for delivery")
+            return {"success": True, "processed": 0}
+
+        processed = 0
+        for msg in result.data:
+            message_id = msg.get("id")
+            fub_person_id = msg.get("fub_person_id")
+            message_content = msg.get("message_content")
+            organization_id = msg.get("organization_id")
+            user_id = msg.get("user_id")
+
+            logger.info(f"Sending off-hours message {message_id} to person {fub_person_id}")
+
+            try:
+                send_result = asyncio.run(_send_sms_via_playwright(
+                    fub_person_id=fub_person_id,
+                    message=message_content,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                ))
+
+                if send_result.get("success"):
+                    supabase.table("scheduled_messages").update({
+                        "status": "sent",
+                        "sent_at": datetime.utcnow().isoformat(),
+                    }).eq("id", message_id).execute()
+                    processed += 1
+                    logger.info(f"Off-hours message {message_id} sent successfully")
+                else:
+                    supabase.table("scheduled_messages").update({
+                        "status": "failed",
+                        "error_message": send_result.get("error", "Unknown error"),
+                    }).eq("id", message_id).execute()
+                    logger.error(f"Off-hours message {message_id} failed: {send_result.get('error')}")
+
+            except Exception as send_error:
+                logger.error(f"Error sending off-hours message {message_id}: {send_error}")
+                supabase.table("scheduled_messages").update({
+                    "status": "failed",
+                    "error_message": str(send_error),
+                }).eq("id", message_id).execute()
+
+        logger.info(f"Processed {processed} off-hours messages")
+        return {"success": True, "processed": processed}
+
+    except Exception as e:
+        logger.error(f"Error processing off-hours queue: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+async def _send_sms_via_playwright(fub_person_id: int, message: str, organization_id: str = None, user_id: str = None) -> dict:
+    """Helper to send SMS via Playwright (async)."""
+    from app.messaging.playwright_sms_service import PlaywrightSMSService
+    from app.ai_agent.settings_service import get_fub_browser_credentials
+    from app.database.supabase_client import get_supabase_client
+
+    supabase = get_supabase_client()
+    credentials = await get_fub_browser_credentials(supabase_client=supabase, user_id=user_id, organization_id=organization_id)
+
+    if not credentials:
+        return {"success": False, "error": "No FUB browser credentials found"}
+
+    agent_id = credentials.get("agent_id", user_id or "default")
+
+    try:
+        service = PlaywrightSMSService()
+        result = await service.send_sms(agent_id=agent_id, person_id=fub_person_id, message=message, credentials=credentials)
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@shared_task(bind=True, max_retries=3)
 def process_ai_response(
     self,
     fub_person_id: int,

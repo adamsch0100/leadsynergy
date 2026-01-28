@@ -18,7 +18,9 @@ Uses the full AIAgentService for:
 import logging
 import asyncio
 import threading
-from datetime import datetime
+import random
+import pytz
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from flask import Blueprint, request, Response
 import uuid
@@ -72,6 +74,91 @@ def get_agent_service():
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),  # Falls back to env var
         )
     return _agent_service
+
+
+def calculate_queued_delivery_time(timezone_str: str = "America/Denver") -> datetime:
+    """Calculate a random delivery time between 8-10 AM the next business day.
+
+    Args:
+        timezone_str: Timezone for the recipient
+
+    Returns:
+        datetime in UTC for when to send the message
+    """
+    try:
+        tz = pytz.timezone(timezone_str)
+    except pytz.exceptions.UnknownTimeZoneError:
+        tz = pytz.timezone("America/Denver")
+
+    now = datetime.now(tz)
+
+    # Determine the next morning
+    if now.hour < 8:
+        # Before 8 AM today - schedule for today
+        next_morning = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    else:
+        # After 8 AM - schedule for tomorrow
+        tomorrow = now.date() + timedelta(days=1)
+        next_morning = datetime.combine(tomorrow, datetime.min.time().replace(hour=8))
+        next_morning = tz.localize(next_morning)
+
+    # Add random minutes between 0 and 120 (8:00 AM to 10:00 AM)
+    random_minutes = random.randint(0, 120)
+    scheduled_time = next_morning + timedelta(minutes=random_minutes)
+
+    # Convert to UTC for storage
+    scheduled_time_utc = scheduled_time.astimezone(pytz.UTC)
+
+    return scheduled_time_utc
+
+
+async def queue_message_for_delivery(
+    fub_person_id: int,
+    message_content: str,
+    scheduled_for: datetime,
+    organization_id: str = None,
+    user_id: str = None,
+    channel: str = "sms",
+) -> dict:
+    """Queue a message for later delivery.
+
+    Args:
+        fub_person_id: FUB person ID
+        message_content: The message to send
+        scheduled_for: When to send (UTC datetime)
+        organization_id: Organization ID
+        user_id: User ID
+        channel: Message channel (sms/email)
+
+    Returns:
+        Dict with success status and message ID
+    """
+    try:
+        message_data = {
+            "fub_person_id": fub_person_id,
+            "channel": channel,
+            "message_content": message_content,
+            "scheduled_for": scheduled_for.isoformat(),
+            "status": "pending",
+            "sequence_type": "off_hours_queue",
+            "organization_id": organization_id,
+            "user_id": user_id,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+
+        result = supabase.table("scheduled_messages").insert(message_data).execute()
+
+        if result.data:
+            message_id = result.data[0]["id"]
+            logger.info(f"Queued message {message_id} for person {fub_person_id} at {scheduled_for}")
+            return {"success": True, "message_id": message_id, "scheduled_for": scheduled_for.isoformat()}
+        else:
+            logger.error(f"Failed to queue message for person {fub_person_id}")
+            return {"success": False, "error": "Insert failed"}
+
+    except Exception as e:
+        logger.error(f"Error queuing message for person {fub_person_id}: {e}")
+        return {"success": False, "error": str(e)}
 
 
 def run_async_task(coroutine):
@@ -418,17 +505,30 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             recipient_timezone=configured_timezone,
         )
 
+        # Track if we need to queue the response for later (outside hours)
+        queue_for_later = False
+        queued_delivery_time = None
+
         if not compliance_result.can_send:
-            logger.warning(f"Compliance check failed for person {person_id}: {compliance_result.reason}")
-            await log_ai_message(
-                conversation_id=None,
-                fub_person_id=person_id,
-                direction="inbound",
-                channel="sms",
-                message_content=message_content,
-                extracted_data={"compliance_blocked": True, "reason": compliance_result.reason},
-            )
-            return
+            # Check if this is just an outside-hours block - we still want to process and queue
+            from app.ai_agent.compliance_checker import ComplianceStatus
+            if compliance_result.status == ComplianceStatus.BLOCKED_OUTSIDE_HOURS:
+                # Outside hours - still process but queue the response for morning
+                queue_for_later = True
+                queued_delivery_time = calculate_queued_delivery_time(configured_timezone)
+                logger.info(f"Outside hours for person {person_id} - will queue response for {queued_delivery_time}")
+            else:
+                # Other compliance failures (opted out, DNC, etc) - truly block
+                logger.warning(f"Compliance check failed for person {person_id}: {compliance_result.reason}")
+                await log_ai_message(
+                    conversation_id=None,
+                    fub_person_id=person_id,
+                    direction="inbound",
+                    channel="sms",
+                    message_content=message_content,
+                    extracted_data={"compliance_blocked": True, "reason": compliance_result.reason},
+                )
+                return
 
         # Build rich lead profile from FUB data
         logger.info(f"Building lead profile for person {person_id}...")
@@ -516,6 +616,45 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         if agent_response and agent_response.response_text:
             print(f"[DEBUG] Response exists! Preparing to send SMS...", flush=True)
             logger.info(f"AI generated response for person {person_id}: {agent_response.response_text[:100]}...")
+
+            # Check if we need to queue for later (outside hours)
+            if queue_for_later and queued_delivery_time:
+                print(f"[DEBUG] Queueing message for later delivery at {queued_delivery_time}...", flush=True)
+                logger.info(f"Queueing response for person {person_id} - scheduled for {queued_delivery_time}")
+
+                queue_result = await queue_message_for_delivery(
+                    fub_person_id=person_id,
+                    message_content=agent_response.response_text,
+                    scheduled_for=queued_delivery_time,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    channel="sms",
+                )
+
+                if queue_result.get('success'):
+                    logger.info(f"Message queued successfully for person {person_id}: ID={queue_result.get('message_id')}")
+                    # Log the queued message
+                    await log_ai_message(
+                        conversation_id=context.conversation_id if context else None,
+                        fub_person_id=person_id,
+                        direction="outbound",
+                        channel="sms",
+                        message_content=agent_response.response_text,
+                        ai_model=agent_response.model_used,
+                        tokens_used=agent_response.tokens_used,
+                        response_time_ms=agent_response.response_time_ms,
+                        extracted_data={
+                            "queued": True,
+                            "scheduled_for": queue_result.get('scheduled_for'),
+                            "queue_id": queue_result.get('message_id'),
+                        },
+                    )
+                    # Update context
+                    context.add_message("outbound", agent_response.response_text, "sms")
+                    await conversation_manager.save_context(context)
+                else:
+                    logger.error(f"Failed to queue message for person {person_id}: {queue_result.get('error')}")
+                return  # Exit after queueing
 
             # Send response via Playwright browser automation
             # FUB API doesn't have texting access - must use browser
