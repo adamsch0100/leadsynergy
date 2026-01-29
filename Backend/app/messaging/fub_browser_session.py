@@ -1631,20 +1631,42 @@ class FUBBrowserSession:
                 logger.warning(f"[page-reset] Full reset done for {self.agent_id}")
 
         except Exception as e:
-            logger.warning(f"[page-reset] Failed for {self.agent_id}: {e}")
-            # If about:blank fails, the page is truly stuck.
-            # Try to create a fresh page in the same context.
-            try:
-                logger.warning(f"[page-reset] Creating fresh page for {self.agent_id}...")
-                old_page = self.page
-                self.page = await self.context.new_page()
+            logger.warning(f"[page-reset] about:blank failed for {self.agent_id}: {type(e).__name__}: {e}")
+            # The page is truly stuck (can't even navigate to about:blank).
+            # Create a fresh page and abandon the stuck one.
+            await self._create_fresh_page()
+
+    async def _create_fresh_page(self):
+        """Create a fresh page when the current one is stuck.
+
+        IMPORTANT: Do NOT try to close the stuck page synchronously - it will hang.
+        Just create a new page and abandon the old one. The old page will be cleaned
+        up when the context is eventually closed.
+        """
+        try:
+            logger.warning(f"[page-reset] Creating fresh page for {self.agent_id}...")
+            old_page = self.page
+            self.page = await asyncio.wait_for(
+                self.context.new_page(),
+                timeout=10
+            )
+            logger.warning(f"[page-reset] Fresh page created for {self.agent_id}")
+
+            # Close old page in background with timeout - don't block on it
+            async def _close_old():
                 try:
-                    await old_page.close()
+                    await asyncio.wait_for(old_page.close(), timeout=3)
+                    logger.warning(f"[page-reset] Old stuck page closed")
                 except Exception:
-                    pass
-                logger.warning(f"[page-reset] Fresh page created for {self.agent_id}")
-            except Exception as e2:
-                logger.warning(f"[page-reset] Fresh page creation also failed: {e2}")
+                    logger.warning(f"[page-reset] Old page close timed out (abandoned)")
+            asyncio.ensure_future(_close_old())
+
+        except asyncio.TimeoutError:
+            logger.warning(f"[page-reset] new_page() timed out (10s) - context may be stuck")
+            raise Exception("Browser context stuck - cannot create new page")
+        except Exception as e2:
+            logger.warning(f"[page-reset] Fresh page creation failed: {e2}")
+            raise
 
     async def close(self):
         """Close the browser context."""
