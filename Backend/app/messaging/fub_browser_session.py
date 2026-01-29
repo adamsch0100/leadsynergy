@@ -1538,43 +1538,57 @@ class FUBBrowserSession:
     async def is_valid(self, skip_if_warm: bool = True) -> bool:
         """Check if session is still valid.
 
-        Args:
-            skip_if_warm: If True, skip navigation check for recently-used sessions.
-                          This avoids the expensive 60s timeout risk on every operation.
+        Uses a lightweight check (JS eval + cookie check) instead of navigation.
+        Navigation-based validation was hanging for 30s and causing timeouts.
+
+        The actual operations (read_message, send_sms) detect login redirects
+        and will fail fast if the session is truly expired.
 
         Returns False on any error, allowing the caller to create a new session.
         """
         if not self.page or not self._logged_in:
-            logger.debug(f"Session invalid for {self.agent_id}: page={self.page is not None}, logged_in={self._logged_in}")
+            logger.info(f"[session] Invalid for {self.agent_id}: page={self.page is not None}, logged_in={self._logged_in}")
             return False
 
-        # Fast path: if session was used recently, skip the expensive navigation check
+        # Fast path: if session was used recently, skip checks entirely
         if skip_if_warm and self.is_warm():
-            logger.info(f"Skipping validation for warm session {self.agent_id}")
+            logger.info(f"[session] Warm session for {self.agent_id}, skipping validation")
             return True
 
+        # Lightweight validation: check if page is responsive and has FUB cookies
+        # This avoids the 30s navigation timeout that was causing the hang
         try:
-            # Use the captured base URL with longer timeout
-            logger.debug(f"Validating session for {self.agent_id}, navigating to {self._get_base_url()}/people")
-            await self.page.goto(
-                f"{self._get_base_url()}/people",
-                wait_until="domcontentloaded",
-                timeout=self.NAVIGATION_TIMEOUT_MS
+            import asyncio
+            logger.info(f"[session] Lightweight validation for {self.agent_id}...")
+
+            # Check 1: Is the page responsive? (5s timeout)
+            current_url = await asyncio.wait_for(
+                self.page.evaluate("() => window.location.href"),
+                timeout=5
             )
-            current_url = self.page.url
-            is_valid = "login" not in current_url and "signin" not in current_url
-            logger.debug(f"Session validation for {self.agent_id}: url={current_url}, valid={is_valid}")
+            logger.info(f"[session] Page responsive, url={current_url}")
 
-            # If valid, mark as warm
-            if is_valid:
-                self.mark_operation_success()
+            # If already on a login page, session is expired
+            if "login" in current_url or "signin" in current_url:
+                logger.warning(f"[session] On login page - session expired")
+                return False
 
-            return is_valid
-        except PlaywrightTimeout as e:
-            logger.warning(f"Session validation timeout for {self.agent_id}: {e}")
-            return False
+            # Check 2: Do we have FUB cookies?
+            cookies = await asyncio.wait_for(
+                self.context.cookies(),
+                timeout=5
+            )
+            fub_cookies = [c for c in cookies if 'followupboss' in c.get('domain', '')]
+            if not fub_cookies:
+                logger.warning(f"[session] No FUB cookies found - session expired")
+                return False
+
+            logger.info(f"[session] Valid ({len(fub_cookies)} FUB cookies)")
+            self.mark_operation_success()
+            return True
+
         except Exception as e:
-            logger.warning(f"Session validation failed for {self.agent_id}: {e}")
+            logger.warning(f"[session] Validation failed for {self.agent_id}: {e}")
             return False
 
     async def _reset_page_state(self, light: bool = True):
