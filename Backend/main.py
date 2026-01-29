@@ -220,7 +220,7 @@ register_supabase_api(app)
 app.register_blueprint(sse_bp, url_prefix='/api/supabase')  # Register SSE endpoints
 
 # Version tracking for deployment verification
-DEPLOY_VERSION = "2026-01-29-v10-lightweight-validation"
+DEPLOY_VERSION = "2026-01-29-v11-blank-page-reset"
 
 # Add a basic health check endpoint
 @app.route("/")

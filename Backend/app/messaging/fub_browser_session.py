@@ -503,7 +503,7 @@ class FUBBrowserSession:
 
     async def send_text_message(self, person_id: int, message: str) -> dict:
         """Navigate to lead profile and send SMS."""
-        logger.info(f"Sending SMS to person {person_id}")
+        logger.warning(f"[SEND {person_id}] START")
 
         if not self._logged_in:
             raise Exception("Not logged in. Call login() first.")
@@ -694,7 +694,7 @@ class FUBBrowserSession:
         # Mark operation success for warm session tracking
         self.mark_operation_success()
 
-        logger.info(f"SMS sent successfully to person {person_id}")
+        logger.warning(f"[SEND {person_id}] COMPLETE")
         return {"success": True, "person_id": person_id, "message_length": len(message)}
 
     async def read_latest_message(self, person_id: int) -> dict:
@@ -713,24 +713,24 @@ class FUBBrowserSession:
         """
         import time as _time
         _read_start = _time.time()
-        logger.info(f"[READ {person_id}] START")
+        logger.warning(f"[READ {person_id}] START")
 
         if not self._logged_in:
             raise Exception("Not logged in. Call login() first.")
 
         # Reset page state before operation to avoid stale DOM/JS
         await self._reset_page_state(light=True)
-        logger.info(f"[READ {person_id}] Page reset done ({_time.time() - _read_start:.1f}s)")
+        logger.warning(f"[READ {person_id}] Page reset done ({_time.time() - _read_start:.1f}s)")
 
         # Navigate to lead profile - use the captured team subdomain URL
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
-        logger.info(f"[READ {person_id}] Navigating to {person_url}")
+        logger.warning(f"[READ {person_id}] Navigating to {person_url}")
         await self.page.goto(
             person_url,
             wait_until="domcontentloaded",
             timeout=self.NAVIGATION_TIMEOUT_MS
         )
-        logger.info(f"[READ {person_id}] Navigation done ({_time.time() - _read_start:.1f}s)")
+        logger.warning(f"[READ {person_id}] Navigation done ({_time.time() - _read_start:.1f}s)")
 
         # Check if we got redirected to login (session expired)
         current_url = self.page.url
@@ -742,7 +742,7 @@ class FUBBrowserSession:
         await self._human_delay(1.5, 2.5)
 
         # Click Messages tab to see conversation
-        logger.info(f"[READ {person_id}] Clicking Messages tab...")
+        logger.warning(f"[READ {person_id}] Clicking Messages tab...")
         messages_tab_selectors = [
             # Specific FUB selector - BoxTabPadding containing bubble icon
             '.BoxTabPadding:has(.BaseIcon-bubble)',
@@ -824,7 +824,7 @@ class FUBBrowserSession:
             except Exception as e:
                 logger.debug(f"Reading: Messages tab click failed: {e}")
 
-        logger.info(f"[READ {person_id}] Messages tab done, clicked={messages_clicked} ({_time.time() - _read_start:.1f}s)")
+        logger.warning(f"[READ {person_id}] Messages tab done, clicked={messages_clicked} ({_time.time() - _read_start:.1f}s)")
 
         # Selectors for message elements - FUB specific
         # Incoming messages typically have different class/styling
@@ -868,7 +868,7 @@ class FUBBrowserSession:
             except Exception as e:
                 continue
 
-        logger.info(f"[READ {person_id}] CSS selector search done ({_time.time() - _read_start:.1f}s), found={'yes' if latest_message else 'no'}")
+        logger.warning(f"[READ {person_id}] CSS selector search done ({_time.time() - _read_start:.1f}s), found={'yes' if latest_message else 'no'}")
 
         # Second approach: Parse all messages and find the last incoming one
         if not latest_message:
@@ -1547,26 +1547,26 @@ class FUBBrowserSession:
         Returns False on any error, allowing the caller to create a new session.
         """
         if not self.page or not self._logged_in:
-            logger.info(f"[session] Invalid for {self.agent_id}: page={self.page is not None}, logged_in={self._logged_in}")
+            logger.warning(f"[session] Invalid for {self.agent_id}: page={self.page is not None}, logged_in={self._logged_in}")
             return False
 
         # Fast path: if session was used recently, skip checks entirely
         if skip_if_warm and self.is_warm():
-            logger.info(f"[session] Warm session for {self.agent_id}, skipping validation")
+            logger.warning(f"[session] Warm session for {self.agent_id}, skipping validation")
             return True
 
         # Lightweight validation: check if page is responsive and has FUB cookies
         # This avoids the 30s navigation timeout that was causing the hang
         try:
             import asyncio
-            logger.info(f"[session] Lightweight validation for {self.agent_id}...")
+            logger.warning(f"[session] Lightweight validation for {self.agent_id}...")
 
             # Check 1: Is the page responsive? (5s timeout)
             current_url = await asyncio.wait_for(
                 self.page.evaluate("() => window.location.href"),
                 timeout=5
             )
-            logger.info(f"[session] Page responsive, url={current_url}")
+            logger.warning(f"[session] Page responsive, url={current_url}")
 
             # If already on a login page, session is expired
             if "login" in current_url or "signin" in current_url:
@@ -1583,7 +1583,7 @@ class FUBBrowserSession:
                 logger.warning(f"[session] No FUB cookies found - session expired")
                 return False
 
-            logger.info(f"[session] Valid ({len(fub_cookies)} FUB cookies)")
+            logger.warning(f"[session] Valid ({len(fub_cookies)} FUB cookies)")
             self.mark_operation_success()
             return True
 
@@ -1594,53 +1594,57 @@ class FUBBrowserSession:
     async def _reset_page_state(self, light: bool = True):
         """Reset page state to avoid state pollution between operations.
 
+        CRITICAL: After send_text_message, the page has active FUB WebSocket connections,
+        polling intervals, and pending network requests that can cause page.goto() to hang
+        indefinitely on the next operation. Navigating to about:blank first kills all of
+        this and gives us a clean page for the next navigation.
+
         Args:
-            light: If True, only clears JS state. If False, also navigates to neutral page.
+            light: If True, navigates to about:blank. If False, also navigates to FUB neutral page.
         """
         if not self.page:
             return
 
         try:
-            # Clear any pending JavaScript timers and event listeners
-            await self.page.evaluate("""
-                () => {
-                    // Clear all timeouts and intervals
-                    const highestId = setTimeout(() => {}, 0);
-                    for (let i = 0; i < highestId; i++) {
-                        clearTimeout(i);
-                        clearInterval(i);
-                    }
-
-                    // Clear any pending XHR/fetch requests by aborting them
-                    // (This is a best-effort approach)
-                    if (window._pendingRequests) {
-                        window._pendingRequests.forEach(req => {
-                            try { req.abort(); } catch(e) {}
-                        });
-                        window._pendingRequests = [];
-                    }
-
-                    // Clear any custom event listeners on document
-                    // (Can't easily remove all, but this signals intent)
-
-                    return true;
-                }
-            """)
-            logger.debug(f"Light page state reset completed for {self.agent_id}")
+            # Navigate to about:blank to kill ALL page state:
+            # - Active WebSocket connections
+            # - XHR polling / fetch requests
+            # - JavaScript timers and intervals
+            # - Event listeners
+            # - Pending navigations
+            # This is much more reliable than trying to clear JS state manually.
+            logger.warning(f"[page-reset] Navigating to about:blank for {self.agent_id}...")
+            await asyncio.wait_for(
+                self.page.goto("about:blank", wait_until="load"),
+                timeout=5  # This should be near-instant
+            )
+            logger.warning(f"[page-reset] Page cleared for {self.agent_id}")
 
             if not light:
-                # Full reset: navigate to a neutral page
+                # Full reset: navigate to a neutral FUB page
                 await self.page.goto(
                     f"{self._get_base_url()}/people",
                     wait_until="domcontentloaded",
                     timeout=self.NAVIGATION_TIMEOUT_MS
                 )
                 await self._human_delay(0.5, 1.0)
-                logger.debug(f"Full page state reset completed for {self.agent_id}")
+                logger.warning(f"[page-reset] Full reset done for {self.agent_id}")
 
         except Exception as e:
-            logger.warning(f"Page state reset failed for {self.agent_id}: {e}")
-            # Don't raise - this is a best-effort cleanup
+            logger.warning(f"[page-reset] Failed for {self.agent_id}: {e}")
+            # If about:blank fails, the page is truly stuck.
+            # Try to create a fresh page in the same context.
+            try:
+                logger.warning(f"[page-reset] Creating fresh page for {self.agent_id}...")
+                old_page = self.page
+                self.page = await self.context.new_page()
+                try:
+                    await old_page.close()
+                except Exception:
+                    pass
+                logger.warning(f"[page-reset] Fresh page created for {self.agent_id}")
+            except Exception as e2:
+                logger.warning(f"[page-reset] Fresh page creation also failed: {e2}")
 
     async def close(self):
         """Close the browser context."""

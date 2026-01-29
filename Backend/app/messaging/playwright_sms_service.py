@@ -235,7 +235,7 @@ class PlaywrightSMSService:
         try:
             import time as _time
             _op_start = _time.time()
-            logger.info(f"[{operation_name}] Agent {agent_id} acquired")
+            logger.warning(f"[{operation_name}] Agent {agent_id} acquired")
 
             # Check if we've had too many consecutive failures - force fresh session
             if self._consecutive_failures.get(agent_id, 0) >= self.MAX_CONSECUTIVE_FAILURES:
@@ -247,11 +247,11 @@ class PlaywrightSMSService:
                 self._get_session_internal(agent_id, credentials),
                 timeout=timeout
             )
-            logger.info(f"[{operation_name}] Session ready ({_time.time() - _op_start:.1f}s)")
+            logger.warning(f"[{operation_name}] Session ready ({_time.time() - _op_start:.1f}s)")
 
             # Run the operation (with timeout to prevent indefinite hangs)
             result = await asyncio.wait_for(operation_func(session), timeout=timeout)
-            logger.info(f"[{operation_name}] Operation complete ({_time.time() - _op_start:.1f}s)")
+            logger.warning(f"[{operation_name}] Operation complete ({_time.time() - _op_start:.1f}s)")
 
             # Operation succeeded - reset failure counter
             self._record_success(agent_id)
@@ -279,11 +279,11 @@ class PlaywrightSMSService:
 
         # Check for existing valid session
         if agent_id in self.sessions:
-            logger.info(f"[session] Found existing session for {agent_id}, validating...")
+            logger.warning(f"[session] Found existing session for {agent_id}, validating...")
             session = self.sessions[agent_id]
             try:
                 if await session.is_valid():
-                    logger.info(f"[session] Session valid ({_time.time() - _sess_start:.1f}s)")
+                    logger.warning(f"[session] Session valid ({_time.time() - _sess_start:.1f}s)")
                     return session
                 else:
                     logger.warning(f"[session] Session INVALID ({_time.time() - _sess_start:.1f}s)")
@@ -295,7 +295,7 @@ class PlaywrightSMSService:
             except Exception:
                 pass
             del self.sessions[agent_id]
-            logger.info(f"[session] Old session closed, will create new one ({_time.time() - _sess_start:.1f}s)")
+            logger.warning(f"[session] Old session closed, will create new one ({_time.time() - _sess_start:.1f}s)")
 
         # Check if login is on cooldown (prevents spamming FUB with verification emails)
         on_cooldown, remaining = self._is_login_on_cooldown(agent_id)
