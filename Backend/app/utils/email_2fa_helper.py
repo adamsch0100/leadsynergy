@@ -540,83 +540,76 @@ class Email2FAHelper:
 
             since_date = (datetime.now() - timedelta(seconds=max_age_seconds)).strftime("%d-%b-%Y")
 
-            # Try BOTH unread and all emails - don't just stop after unread
-            # because the email might already be marked as read by a previous attempt
-            searches_to_try = [
-                (f'(SINCE "{since_date}" UNSEEN)', "UNREAD"),
-                (f'(SINCE "{since_date}")', "ALL"),
-            ]
+            # IMPORTANT: Gmail's IMAP UNSEEN search is unreliable - it often returns 0
+            # even when there ARE unread emails. So we search ALL recent emails and
+            # rely on the age filter to find fresh ones.
+            search_criteria = f'(SINCE "{since_date}")'
+            logger.info(f"  Searching ALL emails since {since_date}...")
+            status, message_ids = self._connection.search(None, search_criteria)
 
-            for search_criteria, search_type in searches_to_try:
-                logger.info(f"  Searching {search_type} emails since {since_date}...")
-                status, message_ids = self._connection.search(None, search_criteria)
+            if status != "OK" or not message_ids[0]:
+                logger.info("  No emails found")
+                return None
 
-                if status != "OK" or not message_ids[0]:
-                    logger.info(f"  No {search_type} emails found")
-                    continue
+            # Get message IDs (most recent first)
+            ids = message_ids[0].split()
+            ids.reverse()
 
-                # Get message IDs (most recent first)
-                ids = message_ids[0].split()
-                ids.reverse()
+            logger.info(f"  Found {len(ids)} emails to check")
 
-                logger.info(f"  Found {len(ids)} {search_type} emails to check")
+            # Check each email for matching sender
+            for msg_id in ids[:20]:
+                try:
+                    status, msg_data = self._connection.fetch(msg_id, "(RFC822)")
 
-                # Check each email for matching sender
-                for msg_id in ids[:20]:
-                    try:
-                        status, msg_data = self._connection.fetch(msg_id, "(RFC822)")
-
-                        if status != "OK":
-                            continue
-
-                        raw_email = msg_data[0][1]
-                        msg = email.message_from_bytes(raw_email)
-
-                        # Check sender
-                        from_header = msg.get("From", "")
-                        subject = self._decode_header(msg.get("Subject", ""))
-
-                        # Only log if potentially relevant (has sender match or no filter)
-                        if sender_contains and sender_contains.lower() not in from_header.lower():
-                            continue  # Silent skip for non-matching senders
-
-                        logger.info(f"  Found matching email: from='{from_header[:60]}' subject='{subject[:50]}'")
-
-                        # Check subject (only if filter is specified)
-                        if subject_contains and subject_contains.lower() not in subject.lower():
-                            logger.info(f"    -> Skipped: subject doesn't contain '{subject_contains}'")
-                            continue
-
-                        # Check date
-                        date_str = msg.get("Date", "")
-                        msg_date = email.utils.parsedate_to_datetime(date_str)
-                        if msg_date:
-                            now = datetime.now(msg_date.tzinfo) if msg_date.tzinfo else datetime.now()
-                            age = (now - msg_date).total_seconds()
-                            if age > max_age_seconds:
-                                logger.info(f"    -> Skipped: email is {age:.0f}s old (max: {max_age_seconds}s)")
-                                continue
-
-                        logger.info(f"    -> MATCH! Extracting links from this email...")
-
-                        # Extract body (prefer HTML for links)
-                        body = self._get_email_body_html(msg)
-                        logger.info(f"    Email body length: {len(body)} chars")
-
-                        # Find verification links
-                        link = self._extract_verification_link(body, link_contains)
-                        if link:
-                            logger.info(f"    -> FOUND verification link!")
-                            return (link, msg_id)
-                        else:
-                            logger.info(f"    -> No verification link found in this email (link_contains='{link_contains}')")
-
-                    except Exception as e:
-                        logger.debug(f"Error parsing email {msg_id}: {e}")
+                    if status != "OK":
                         continue
 
-                # If we found matching sender emails but no link, log it
-                logger.info(f"  No verification link found in {search_type} emails")
+                    raw_email = msg_data[0][1]
+                    msg = email.message_from_bytes(raw_email)
+
+                    # Check sender
+                    from_header = msg.get("From", "")
+                    subject = self._decode_header(msg.get("Subject", ""))
+
+                    # Only log if potentially relevant (has sender match or no filter)
+                    if sender_contains and sender_contains.lower() not in from_header.lower():
+                        continue  # Silent skip for non-matching senders
+
+                    logger.info(f"  Found matching email: from='{from_header[:60]}' subject='{subject[:50]}'")
+
+                    # Check subject (only if filter is specified)
+                    if subject_contains and subject_contains.lower() not in subject.lower():
+                        logger.info(f"    -> Skipped: subject doesn't contain '{subject_contains}'")
+                        continue
+
+                    # Check date
+                    date_str = msg.get("Date", "")
+                    msg_date = email.utils.parsedate_to_datetime(date_str)
+                    if msg_date:
+                        now = datetime.now(msg_date.tzinfo) if msg_date.tzinfo else datetime.now()
+                        age = (now - msg_date).total_seconds()
+                        if age > max_age_seconds:
+                            logger.info(f"    -> Skipped: email is {age:.0f}s old (max: {max_age_seconds}s)")
+                            continue
+
+                    logger.info(f"    -> MATCH! Extracting links from this email...")
+
+                    # Extract body (prefer HTML for links)
+                    body = self._get_email_body_html(msg)
+                    logger.info(f"    Email body length: {len(body)} chars")
+
+                    # Find verification links
+                    link = self._extract_verification_link(body, link_contains)
+                    if link:
+                        logger.info(f"    -> FOUND verification link!")
+                        return (link, msg_id)
+                    else:
+                        logger.info(f"    -> No verification link found in this email (link_contains='{link_contains}')")
+
+                except Exception as e:
+                    logger.debug(f"Error parsing email {msg_id}: {e}")
+                    continue
 
             logger.info("  No verification link found in any emails")
             return None
