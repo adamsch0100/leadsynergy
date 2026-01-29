@@ -131,18 +131,23 @@ class PlaywrightSMSService:
             logger.info(f"Login cooldown cleared for {agent_id}")
 
     async def _force_fresh_session(self, agent_id: str):
-        """Force destroy session to create fresh one on next operation."""
+        """Force destroy session to create fresh one on next operation.
+
+        Uses timeout on close because stuck contexts hang forever.
+        """
         logger.warning(f"Forcing fresh session for {agent_id} due to consecutive failures")
         if agent_id in self.sessions:
+            session = self.sessions.pop(agent_id)
             try:
-                await self.sessions[agent_id].close()
+                await asyncio.wait_for(session.close(), timeout=5)
+            except asyncio.TimeoutError:
+                logger.warning(f"Session close timed out for {agent_id} (abandoned stuck context)")
             except Exception as e:
                 logger.warning(f"Error closing session for fresh start: {e}")
-            del self.sessions[agent_id]
         # Also clear any saved cookies that might be corrupted
         try:
             await self.session_store.delete_cookies(agent_id)
-            logger.info(f"Cleared saved cookies for {agent_id}")
+            logger.warning(f"Cleared saved cookies for {agent_id}")
         except Exception as e:
             logger.warning(f"Error clearing cookies: {e}")
         # Reset failure counter since we're starting fresh
@@ -502,15 +507,25 @@ class PlaywrightSMSService:
         return {"success": False, "error": str(last_error), "messages": []}
 
     async def _invalidate_session(self, agent_id: str):
-        """Invalidate a session without closing (for retry scenarios)."""
+        """Invalidate a session for retry scenarios.
+
+        Uses a timeout on close() because a stuck browser context will hang forever.
+        If close times out, we just abandon the session (it gets garbage collected).
+        """
+        session = None
         with self._agent_busy_lock:
             if agent_id in self.sessions:
-                try:
-                    await self.sessions[agent_id].close()
-                except Exception:
-                    pass
-                del self.sessions[agent_id]
-                logger.info(f"Session invalidated for agent {agent_id}")
+                session = self.sessions.pop(agent_id)
+
+        if session:
+            try:
+                # Timeout on close - stuck contexts hang forever
+                await asyncio.wait_for(session.close(), timeout=5)
+                logger.warning(f"[session] Invalidated and closed for {agent_id}")
+            except asyncio.TimeoutError:
+                logger.warning(f"[session] Close timed out for {agent_id} (abandoned stuck context)")
+            except Exception as e:
+                logger.warning(f"[session] Close error for {agent_id}: {e}")
 
     async def close_session(self, agent_id: str):
         """Close a specific agent's session."""

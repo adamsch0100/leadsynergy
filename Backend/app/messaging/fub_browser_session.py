@@ -694,6 +694,11 @@ class FUBBrowserSession:
         # Mark operation success for warm session tracking
         self.mark_operation_success()
 
+        # CRITICAL: Navigate to about:blank NOW while the page is still responsive.
+        # If we leave the FUB page loaded, its WebSocket/polling connections will
+        # freeze the page and the entire browser context before the next operation.
+        await self._park_page()
+
         logger.warning(f"[SEND {person_id}] COMPLETE")
         return {"success": True, "person_id": person_id, "message_length": len(message)}
 
@@ -1033,6 +1038,10 @@ class FUBBrowserSession:
         # Mark operation success for warm session tracking
         self.mark_operation_success()
 
+        # CRITICAL: Park the page on about:blank NOW while still responsive.
+        # Leaving FUB loaded freezes the page/context before the next operation.
+        await self._park_page()
+
         return {
             "success": True,
             "message": latest_message,
@@ -1179,6 +1188,7 @@ class FUBBrowserSession:
             if summaries:
                 # Mark operation success for warm session tracking
                 self.mark_operation_success()
+                await self._park_page()
                 return {
                     "success": True,
                     "summaries": summaries,
@@ -1490,6 +1500,7 @@ class FUBBrowserSession:
             if messages:
                 # Mark operation success for warm session tracking
                 self.mark_operation_success()
+                await self._park_page()
                 return {
                     "success": True,
                     "messages": messages,
@@ -1534,6 +1545,27 @@ class FUBBrowserSession:
         import time
         self._last_successful_operation = time.time()
         logger.debug(f"Marked operation success for {self.agent_id}")
+
+    async def _park_page(self):
+        """Navigate to about:blank after an operation completes.
+
+        MUST be called at the END of every operation (send, read, etc.) while
+        the page is still responsive. FUB's web app has WebSocket connections
+        and polling that freeze the page and the entire browser context if left
+        running. By parking on about:blank immediately after success, we ensure
+        the page is clean for the next operation.
+        """
+        try:
+            logger.warning(f"[park] Navigating to about:blank for {self.agent_id}...")
+            await asyncio.wait_for(
+                self.page.goto("about:blank", wait_until="load"),
+                timeout=5
+            )
+            logger.warning(f"[park] Page parked for {self.agent_id}")
+        except Exception as e:
+            # If we can't park now, the page may freeze before the next operation.
+            # Log it but don't fail the operation - the result is already captured.
+            logger.warning(f"[park] Failed to park page for {self.agent_id}: {type(e).__name__}: {e}")
 
     async def is_valid(self, skip_if_warm: bool = True) -> bool:
         """Check if session is still valid.
@@ -1896,6 +1928,7 @@ class FUBBrowserSession:
             if phone_numbers:
                 # Mark operation success for warm session tracking
                 self.mark_operation_success()
+                await self._park_page()
                 return {
                     "success": True,
                     "phone_numbers": phone_numbers,
