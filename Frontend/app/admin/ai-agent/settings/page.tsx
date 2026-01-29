@@ -28,7 +28,9 @@ import {
   EyeOff,
   Bell,
   Mail,
-  Shield
+  Shield,
+  Phone,
+  X
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
@@ -57,6 +59,8 @@ interface AISettings {
   llm_model_fallback: string
   // Agent Notification
   notification_fub_person_id: number | null
+  // Phone Number Filter
+  ai_respond_to_phone_numbers: string[]  // List of FUB phone numbers to respond to (empty = all)
 }
 
 interface FUBLoginSettings {
@@ -95,6 +99,8 @@ const DEFAULT_SETTINGS: AISettings = {
   llm_model_fallback: "google/gemini-2.5-flash-lite",
   // Agent Notification
   notification_fub_person_id: null,
+  // Phone Number Filter
+  ai_respond_to_phone_numbers: [],
 }
 
 // Available LLM Models (OpenRouter)
@@ -131,6 +137,7 @@ export default function AISettingsPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [newQuestion, setNewQuestion] = useState("")
+  const [newPhoneNumber, setNewPhoneNumber] = useState("")
 
   // FUB Login state
   const [fubLogin, setFubLogin] = useState<FUBLoginSettings>(DEFAULT_FUB_LOGIN)
@@ -187,6 +194,7 @@ export default function AISettingsPage() {
           ...data.settings,
           qualification_questions: data.settings.qualification_questions || [],
           custom_scripts: data.settings.custom_scripts || {},
+          ai_respond_to_phone_numbers: data.settings.ai_respond_to_phone_numbers || [],
         })
       }
     } catch (err) {
@@ -241,6 +249,51 @@ export default function AISettingsPage() {
     setSettings({
       ...settings,
       qualification_questions: settings.qualification_questions.filter((_, i) => i !== index)
+    })
+  }
+
+  // Phone number filter management
+  const normalizePhoneNumber = (phone: string): string => {
+    // Extract only digits
+    const digits = phone.replace(/\D/g, '')
+    // Add +1 if needed
+    if (digits.length === 10) {
+      return `+1${digits}`
+    } else if (digits.length === 11 && digits.startsWith('1')) {
+      return `+${digits}`
+    }
+    return `+${digits}`
+  }
+
+  const formatPhoneForDisplay = (phone: string): string => {
+    // Format +1XXXXXXXXXX as (XXX) XXX-XXXX
+    const digits = phone.replace(/\D/g, '')
+    if (digits.length === 11 && digits.startsWith('1')) {
+      return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`
+    } else if (digits.length === 10) {
+      return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+    }
+    return phone
+  }
+
+  const addPhoneNumber = () => {
+    if (newPhoneNumber.trim()) {
+      const normalized = normalizePhoneNumber(newPhoneNumber.trim())
+      // Check for duplicates
+      if (!settings.ai_respond_to_phone_numbers.includes(normalized)) {
+        setSettings({
+          ...settings,
+          ai_respond_to_phone_numbers: [...settings.ai_respond_to_phone_numbers, normalized]
+        })
+      }
+      setNewPhoneNumber("")
+    }
+  }
+
+  const removePhoneNumber = (index: number) => {
+    setSettings({
+      ...settings,
+      ai_respond_to_phone_numbers: settings.ai_respond_to_phone_numbers.filter((_, i) => i !== index)
     })
   }
 
@@ -886,6 +939,75 @@ export default function AISettingsPage() {
                     </ol>
                     <p className="mt-2 text-sm">
                       When a hot lead is detected, you'll receive an SMS instantly through FUB!
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              </CardContent>
+            </Card>
+
+            {/* Phone Number Filter Card */}
+            <Card className="md:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Phone className="h-5 w-5" />
+                  Phone Number Filter
+                </CardTitle>
+                <CardDescription>
+                  Limit which FUB phone numbers the AI responds to. Leave empty to respond to all incoming texts.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Enter phone number (e.g., 916-555-1234)"
+                    value={newPhoneNumber}
+                    onChange={(e) => setNewPhoneNumber(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && addPhoneNumber()}
+                  />
+                  <Button onClick={addPhoneNumber} type="button">
+                    Add Number
+                  </Button>
+                </div>
+
+                {settings.ai_respond_to_phone_numbers.length > 0 ? (
+                  <div className="space-y-2">
+                    <Label className="text-sm text-muted-foreground">
+                      AI will ONLY respond to messages received on these numbers:
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      {settings.ai_respond_to_phone_numbers.map((phone, index) => (
+                        <Badge key={index} variant="secondary" className="flex items-center gap-1 px-3 py-1.5">
+                          <Phone className="h-3 w-3" />
+                          {formatPhoneForDisplay(phone)}
+                          <button
+                            onClick={() => removePhoneNumber(index)}
+                            className="ml-1 hover:text-destructive"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-6 text-muted-foreground border rounded-lg bg-muted/30">
+                    <Phone className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p className="font-medium">No phone filter configured</p>
+                    <p className="text-xs mt-1">AI will respond to messages on ALL your FUB phone numbers</p>
+                  </div>
+                )}
+
+                <Alert>
+                  <Phone className="h-4 w-4" />
+                  <AlertDescription>
+                    <strong>Why use a phone filter?</strong>
+                    <p className="mt-1 text-sm">
+                      If you have multiple FUB phone numbers (inbox, Google, website, sign calls, etc.),
+                      you may only want the AI to respond to your personal inbox number. Add that number here
+                      and the AI will ignore messages coming in on other numbers.
+                    </p>
+                    <p className="mt-2 text-sm">
+                      Find your phone numbers at: <code className="bg-muted px-1 rounded">FUB → Admin → Phone Numbers</code>
                     </p>
                   </AlertDescription>
                 </Alert>

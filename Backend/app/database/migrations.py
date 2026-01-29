@@ -1022,6 +1022,52 @@ MIGRATIONS = [
                 ADD COLUMN IF NOT EXISTS last_sync_results JSONB DEFAULT '{}';
             """,
         ]
+    },
+    {
+        'version': '20250127_signup_onboarding_system',
+        'description': 'Add trial system, FUB user mapping, and onboarding tracking for complete signup flow',
+        'sql_statements': [
+            # Trial credits and tracking on users table
+            """
+            ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS trial_enhancement_credits INTEGER DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS trial_criminal_credits INTEGER DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS trial_dnc_credits INTEGER DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS trial_started_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS fub_user_id BIGINT,
+                ADD COLUMN IF NOT EXISTS provisioned_by_user_id UUID REFERENCES users(id);
+            """,
+            # Onboarding progress on user_profiles table
+            """
+            ALTER TABLE user_profiles
+                ADD COLUMN IF NOT EXISTS onboarding_step VARCHAR(50) DEFAULT 'fub_api_key',
+                ADD COLUMN IF NOT EXISTS selected_lead_sources JSONB DEFAULT '[]';
+            """,
+            # Index for FUB user lookup
+            """
+            CREATE INDEX IF NOT EXISTS idx_users_fub_user_id ON users(fub_user_id) WHERE fub_user_id IS NOT NULL;
+            """,
+        ]
+    },
+    {
+        'version': '20250128_add_ai_phone_number_filter',
+        'description': 'Add phone number filter setting to limit which FUB phone numbers the AI responds to',
+        'sql_statements': [
+            # Add ai_respond_to_phone_numbers column to ai_agent_settings
+            # This is a JSONB array of phone numbers (e.g., ["+19165551234", "+19165555678"])
+            # If empty/null, AI responds to all phone numbers
+            # If populated, AI only responds to messages received on those specific numbers
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS ai_respond_to_phone_numbers JSONB DEFAULT '[]';
+            """,
+            # Add a comment for documentation
+            """
+            COMMENT ON COLUMN ai_agent_settings.ai_respond_to_phone_numbers IS
+                'List of FUB phone numbers (normalized +1XXXXXXXXXX format) the AI should respond to. Empty = respond to all.';
+            """,
+        ]
     }
 ]
 

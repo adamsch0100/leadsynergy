@@ -24,6 +24,9 @@ class PlaywrightSMSService:
     # Self-healing settings
     MAX_CONSECUTIVE_FAILURES = 2  # Destroy session after this many failures
 
+    # Login rate limiting - prevent spamming FUB with verification emails
+    LOGIN_COOLDOWN_SECONDS = 600  # 10 minutes cooldown after failed login
+
     def __init__(self):
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
@@ -34,6 +37,7 @@ class PlaywrightSMSService:
         self._agent_busy: Dict[str, bool] = {}  # Track if agent is mid-operation
         self._agent_busy_lock = threading.Lock()  # Quick lock for flag check only
         self._consecutive_failures: Dict[str, int] = {}  # Track failures per agent
+        self._login_cooldown: Dict[str, float] = {}  # agent_id -> timestamp when cooldown ends
 
     async def initialize(self):
         """Initialize Playwright and browser instance."""
@@ -96,6 +100,35 @@ class PlaywrightSMSService:
         self._consecutive_failures[agent_id] = current + 1
         logger.warning(f"Recorded failure for {agent_id}, consecutive failures: {current + 1}")
         return current + 1
+
+    def _is_login_on_cooldown(self, agent_id: str) -> tuple[bool, int]:
+        """Check if login is on cooldown for this agent.
+
+        Returns (is_on_cooldown, seconds_remaining)
+        """
+        import time
+        cooldown_until = self._login_cooldown.get(agent_id, 0)
+        now = time.time()
+        if now < cooldown_until:
+            remaining = int(cooldown_until - now)
+            return True, remaining
+        return False, 0
+
+    def _set_login_cooldown(self, agent_id: str, reason: str = "login failure"):
+        """Set a login cooldown for this agent to prevent spamming FUB."""
+        import time
+        cooldown_until = time.time() + self.LOGIN_COOLDOWN_SECONDS
+        self._login_cooldown[agent_id] = cooldown_until
+        logger.warning(
+            f"LOGIN COOLDOWN SET for {agent_id}: No login attempts for {self.LOGIN_COOLDOWN_SECONDS}s "
+            f"(reason: {reason})"
+        )
+
+    def _clear_login_cooldown(self, agent_id: str):
+        """Clear login cooldown after successful login."""
+        if agent_id in self._login_cooldown:
+            del self._login_cooldown[agent_id]
+            logger.info(f"Login cooldown cleared for {agent_id}")
 
     async def _force_fresh_session(self, agent_id: str):
         """Force destroy session to create fresh one on next operation."""
@@ -254,6 +287,15 @@ class PlaywrightSMSService:
                 pass
             del self.sessions[agent_id]
 
+        # Check if login is on cooldown (prevents spamming FUB with verification emails)
+        on_cooldown, remaining = self._is_login_on_cooldown(agent_id)
+        if on_cooldown:
+            raise Exception(
+                f"Login on cooldown for {agent_id}. "
+                f"Please wait {remaining}s before retrying. "
+                f"This prevents spamming FUB with verification emails."
+            )
+
         # Initialize browser if needed
         if not self._initialized:
             await self.initialize()
@@ -261,9 +303,19 @@ class PlaywrightSMSService:
         # Create new session
         logger.info(f"Creating new session for agent {agent_id}")
         session = FUBBrowserSession(self.browser, agent_id, self.session_store)
-        await session.login(credentials)
-        self.sessions[agent_id] = session
-        return session
+
+        try:
+            await session.login(credentials)
+            # Login succeeded - clear any cooldown
+            self._clear_login_cooldown(agent_id)
+            self.sessions[agent_id] = session
+            return session
+        except Exception as e:
+            error_msg = str(e)
+            # If login failed due to email verification issue, set cooldown
+            if any(x in error_msg.lower() for x in ['verification', 'security check', 'new location', 'email']):
+                self._set_login_cooldown(agent_id, f"email verification failed: {error_msg[:100]}")
+            raise
 
     async def send_sms(
         self,

@@ -220,7 +220,7 @@ register_supabase_api(app)
 app.register_blueprint(sse_bp, url_prefix='/api/supabase')  # Register SSE endpoints
 
 # Version tracking for deployment verification
-DEPLOY_VERSION = "2026-01-28-v2-session-stability"
+DEPLOY_VERSION = "2026-01-28-v4-login-rate-limit"
 
 # Add a basic health check endpoint
 @app.route("/")
@@ -242,6 +242,8 @@ def version():
             "step_level_timeouts",
             "consecutive_failure_recovery",
             "page_state_reset",
+            "email_verification_flexible_search",
+            "login_rate_limiting_10min_cooldown",
         ],
         "timestamp": datetime.now().isoformat(),
     })

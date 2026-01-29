@@ -101,6 +101,8 @@ def get_settings():
                 "llm_model_fallback": settings.llm_model_fallback,
                 # Agent notification
                 "notification_fub_person_id": settings.notification_fub_person_id,
+                # Phone number filter
+                "ai_respond_to_phone_numbers": settings.ai_respond_to_phone_numbers,
             }
         })
 
@@ -197,6 +199,9 @@ def update_settings():
         # Agent notification
         if 'notification_fub_person_id' in data:
             current_settings.notification_fub_person_id = int(data['notification_fub_person_id']) if data['notification_fub_person_id'] else None
+        # Phone number filter
+        if 'ai_respond_to_phone_numbers' in data:
+            current_settings.ai_respond_to_phone_numbers = data['ai_respond_to_phone_numbers'] if isinstance(data['ai_respond_to_phone_numbers'], list) else []
 
         # Save settings
         success = run_async(service.save_settings(current_settings, user_id, org_id))

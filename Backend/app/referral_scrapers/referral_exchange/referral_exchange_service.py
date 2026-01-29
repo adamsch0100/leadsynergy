@@ -99,8 +99,9 @@ class ReferralExchangeService(BaseReferralService):
             self.owns_driver = False
         else:
             self.owns_driver = True
-            if not hasattr(self, 'driver_service'):
-                self.driver_service = DriverService()
+            # Always create a fresh DriverService for this instance
+            # (don't reuse the one from BaseReferralService which isn't initialized)
+            self.driver_service = DriverService(organization_id=self.organization_id)
             initialized = self.driver_service.initialize_driver()
 
             if not initialized:

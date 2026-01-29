@@ -558,7 +558,7 @@ class Email2FAHelper:
             ids = message_ids[0].split()
             ids.reverse()
 
-            logger.debug(f"Found {len(ids)} recent emails to check for links")
+            logger.info(f"Found {len(ids)} recent emails to check for verification links")
 
             # Check each email
             for msg_id in ids[:20]:
@@ -573,12 +573,18 @@ class Email2FAHelper:
 
                     # Check sender
                     from_header = msg.get("From", "")
+                    subject = self._decode_header(msg.get("Subject", ""))
+
+                    # Log every email we're checking for debugging
+                    logger.info(f"  Checking email: from='{from_header[:60]}' subject='{subject[:50]}'")
+
                     if sender_contains and sender_contains.lower() not in from_header.lower():
+                        logger.info(f"    -> Skipped: sender doesn't contain '{sender_contains}'")
                         continue
 
-                    # Check subject
-                    subject = self._decode_header(msg.get("Subject", ""))
+                    # Check subject (only if filter is specified)
                     if subject_contains and subject_contains.lower() not in subject.lower():
+                        logger.info(f"    -> Skipped: subject doesn't contain '{subject_contains}'")
                         continue
 
                     # Check date
@@ -588,17 +594,22 @@ class Email2FAHelper:
                         now = datetime.now(msg_date.tzinfo) if msg_date.tzinfo else datetime.now()
                         age = (now - msg_date).total_seconds()
                         if age > max_age_seconds:
+                            logger.info(f"    -> Skipped: email is {age:.0f}s old (max: {max_age_seconds}s)")
                             continue
 
-                    logger.info(f"Checking email for links from: {from_header}, subject: {subject[:50]}")
+                    logger.info(f"    -> MATCH! Extracting links from this email...")
 
                     # Extract body (prefer HTML for links)
                     body = self._get_email_body_html(msg)
+                    logger.info(f"    Email body length: {len(body)} chars")
 
                     # Find verification links
                     link = self._extract_verification_link(body, link_contains)
                     if link:
+                        logger.info(f"    -> FOUND verification link!")
                         return (link, msg_id)
+                    else:
+                        logger.info(f"    -> No verification link found in this email (link_contains='{link_contains}')")
 
                 except Exception as e:
                     logger.debug(f"Error parsing email {msg_id}: {e}")
@@ -656,7 +667,8 @@ class Email2FAHelper:
         # Keywords that indicate a verification link
         verification_keywords = [
             'verify', 'confirm', 'approve', 'signin', 'sign-in', 'login',
-            'auth', 'authenticate', 'validation', 'activate', 'account'
+            'auth', 'authenticate', 'validation', 'validate', 'activate', 'account',
+            'security', 'new-location', 'newlocation', 'device', 'locationchange'
         ]
 
         all_links = []
@@ -664,28 +676,39 @@ class Email2FAHelper:
             matches = re.findall(pattern, text, re.IGNORECASE)
             all_links.extend(matches)
 
+        logger.info(f"    Found {len(all_links)} total links in email")
+
         # Filter and prioritize links
+        matching_domain_links = []
         for link in all_links:
             link_lower = link.lower()
 
             # Skip obviously non-verification links
-            if any(skip in link_lower for skip in ['unsubscribe', 'privacy', 'terms', 'help', 'support', '.css', '.js', '.png', '.jpg']):
+            if any(skip in link_lower for skip in ['unsubscribe', 'privacy', 'terms', 'help', 'support', '.css', '.js', '.png', '.jpg', '.gif', 'tracking', 'pixel']):
                 continue
 
             # If link_contains is specified, filter by it
             if link_contains and link_contains.lower() not in link_lower:
                 continue
 
+            matching_domain_links.append(link)
+
             # Check for verification keywords
             if any(keyword in link_lower for keyword in verification_keywords):
-                logger.debug(f"Found verification link: {link[:100]}")
+                logger.info(f"    Found verification link with keyword: {link[:100]}")
                 return link
 
+        logger.info(f"    Found {len(matching_domain_links)} links matching domain filter")
+
         # If no verification keyword found but we have link_contains filter, return first match
-        if link_contains:
-            for link in all_links:
-                if link_contains.lower() in link.lower():
-                    return link
+        if link_contains and matching_domain_links:
+            logger.info(f"    Returning first domain-matching link (no keyword match): {matching_domain_links[0][:100]}")
+            return matching_domain_links[0]
+
+        # Log some sample links for debugging
+        if all_links and not matching_domain_links:
+            sample_links = [l[:80] for l in all_links[:5]]
+            logger.info(f"    Sample links found (no domain match): {sample_links}")
 
         return None
 

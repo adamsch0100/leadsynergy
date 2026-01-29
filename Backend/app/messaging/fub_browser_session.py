@@ -286,16 +286,18 @@ class FUBBrowserSession:
             logger.info(f"Gmail helper configured with email: {email_helper.email_address}")
 
             logger.info(f"Checking email inbox for FUB verification link...")
-            logger.info(f"  Search criteria: sender contains 'followupboss', subject contains 'login'")
+            logger.info(f"  Search criteria: sender contains 'followupboss', link contains 'followupboss.com'")
             logger.info(f"  Will retry up to 15 times with 3 second delays (max 45 seconds)")
 
             # Get the verification link from the FUB security email
+            # NOTE: Don't filter by subject - FUB uses various subjects like "Verify your sign-in",
+            # "New location detected", etc. Matching sender + link domain is sufficient.
             try:
                 with email_helper:
                     logger.info("  IMAP connection established successfully")
                     verification_link = email_helper.get_verification_link(
                         sender_contains="followupboss",
-                        subject_contains="login",
+                        subject_contains=None,  # Don't filter by subject - FUB uses various subjects
                         link_contains="followupboss.com",
                         max_age_seconds=300,  # 5 minutes
                         max_retries=15,

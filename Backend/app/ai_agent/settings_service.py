@@ -114,6 +114,13 @@ class AIAgentSettings:
     # Then set notification_fub_person_id to that lead's ID (e.g., 12345678)
     notification_fub_person_id: Optional[int] = None  # FUB person ID to text for hot lead alerts
 
+    # Phone Number Filter Settings
+    # List of FUB phone numbers the AI agent should respond to (normalized format: +1XXXXXXXXXX)
+    # If empty, AI responds to all incoming texts
+    # If populated, AI only responds to texts received on these specific numbers
+    # Example: ["+19165551234", "+19165555678"] - only respond to these two numbers
+    ai_respond_to_phone_numbers: list = field(default_factory=list)
+
     # NOTE: Gmail credentials moved to system_settings (global, program-wide)
     # Use get_gmail_credentials() to access them
 
@@ -201,6 +208,8 @@ class AIAgentSettings:
             fub_login_type=row.get('fub_login_type') or "email",
             # Agent Notification
             notification_fub_person_id=row.get('notification_fub_person_id'),
+            # Phone number filter
+            ai_respond_to_phone_numbers=row.get('ai_respond_to_phone_numbers') or [],
             # NOTE: Gmail credentials now in system_settings (global)
             # LLM Model Configuration
             llm_provider=row.get('llm_provider') or "openrouter",
@@ -390,6 +399,8 @@ class AIAgentSettingsService:
                 "llm_model_fallback": settings.llm_model_fallback,
                 # Agent notification
                 "notification_fub_person_id": settings.notification_fub_person_id,
+                # Phone number filter
+                "ai_respond_to_phone_numbers": settings.ai_respond_to_phone_numbers,
             }
 
             # Add user/org ID

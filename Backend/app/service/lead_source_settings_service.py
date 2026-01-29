@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from flask import jsonify
 
+print("!!!! LEAD_SOURCE_SETTINGS_SERVICE MODULE LOADED V4 !!!!")
+
 from app.database.supabase_client import SupabaseClientSingleton
 from app.models.lead import Lead
 from app.models.lead_source_settings import LeadSourceSettings
@@ -1017,9 +1019,10 @@ class LeadSourceSettingsService:
                     })
 
             self.logger.info(f"[ReferralExchange Sync] Stage mapping check: {len(leads_data)} with mapping, {len(skipped_no_mapping)} without")
+            print(f"!!!! SYNC FUNCTION EXECUTING V5 - {len(leads_data)} leads !!!!")
             tracker.update_progress(
                 sync_id,
-                message=f"Found {len(leads_data)} leads to process, {len(skipped_no_mapping)} with no mapping"
+                message=f"[SYNC_V5] Found {len(leads_data)} leads to process, {len(skipped_no_mapping)} with no mapping"
             )
 
             if not leads_data:
@@ -1049,12 +1052,21 @@ class LeadSourceSettingsService:
             template_lead = leads_data[0][0]
             template_status = leads_data[0][1]
 
-            service = ReferralExchangeService(
-                lead=template_lead,
-                status=template_status,
-                organization_id=template_lead.organization_id,
-                min_sync_interval_hours=min_sync_interval_hours
-            )
+            tracker.update_progress(sync_id, message=f"TEST_DEBUG_V3: Creating service for {template_lead.first_name} {template_lead.last_name}...")
+
+            try:
+                service = ReferralExchangeService(
+                    lead=template_lead,
+                    status=template_status,
+                    organization_id=template_lead.organization_id,
+                    min_sync_interval_hours=min_sync_interval_hours
+                )
+                driver_status = "initialized" if service.driver_service.driver else "NOT INITIALIZED"
+                creds_status = "loaded" if service.email and service.password else "MISSING"
+                tracker.update_progress(sync_id, message=f"Service created: driver={driver_status}, creds={creds_status}")
+            except Exception as service_err:
+                tracker.complete_sync(sync_id, error=f"Failed to create service: {str(service_err)}")
+                return
 
             tracker.update_progress(sync_id, message="Starting ReferralExchange login...")
 

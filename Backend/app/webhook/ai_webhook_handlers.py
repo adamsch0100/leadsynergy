@@ -313,6 +313,9 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             logger.info(f"Skipping outbound message for person {person_id}")
             return
 
+        # Get the FUB phone number that received this message
+        to_number = text_msg.get('toNumber')
+
         # MULTI-TENANT: Use org_id from URL if provided, otherwise resolve
         organization_id = org_id_hint or await resolve_organization_for_person(person_id)
         user_id = await resolve_user_for_person(person_id, organization_id)
@@ -348,6 +351,58 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 extracted_data={"ai_disabled": True, "reason": "AI system globally disabled"},
             )
             return
+
+        # ============================================
+        # PHONE NUMBER FILTER CHECK
+        # ============================================
+        # If ai_respond_to_phone_numbers is configured, only respond to
+        # messages received on those specific FUB phone numbers.
+        # This allows agents to limit AI responses to their personal inbox
+        # and exclude leads, sign calls, website, etc.
+        # ============================================
+        allowed_phone_numbers = ai_settings.ai_respond_to_phone_numbers or []
+        if allowed_phone_numbers and to_number:
+            # Normalize the to_number for comparison
+            # FUB may send it in various formats: +1XXXXXXXXXX, (XXX) XXX-XXXX, etc.
+            import re
+            normalized_to = re.sub(r'[^\d]', '', to_number)
+            if not normalized_to.startswith('1') and len(normalized_to) == 10:
+                normalized_to = '1' + normalized_to
+            normalized_to = '+' + normalized_to if not normalized_to.startswith('+') else normalized_to
+
+            # Check if normalized_to matches any allowed number
+            is_allowed = False
+            for allowed in allowed_phone_numbers:
+                normalized_allowed = re.sub(r'[^\d]', '', allowed)
+                if not normalized_allowed.startswith('1') and len(normalized_allowed) == 10:
+                    normalized_allowed = '1' + normalized_allowed
+                normalized_allowed = '+' + normalized_allowed if not normalized_allowed.startswith('+') else normalized_allowed
+
+                if normalized_to == normalized_allowed:
+                    is_allowed = True
+                    break
+
+            if not is_allowed:
+                logger.info(
+                    f"Skipping person {person_id} - message received on phone {to_number} "
+                    f"which is not in allowed list: {allowed_phone_numbers}"
+                )
+                await log_ai_message(
+                    conversation_id=None,
+                    fub_person_id=person_id,
+                    direction="inbound",
+                    channel="sms",
+                    message_content=message_content,
+                    extracted_data={
+                        "ai_disabled": True,
+                        "reason": f"Phone number {to_number} not in allowed list",
+                        "to_number": to_number,
+                        "allowed_numbers": allowed_phone_numbers,
+                    },
+                )
+                return
+
+            logger.info(f"Phone number {to_number} is in allowed list - proceeding with AI response")
 
         # Global is ON - now check per-lead setting (OPT-IN model)
         from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton

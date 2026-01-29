@@ -1,8 +1,10 @@
 from flask import Blueprint, request, jsonify
 from app.service.fub_api_key_service import FUBAPIKeyServiceSingleton
 import asyncio
+import logging
 
 setup_bp = Blueprint('setup', __name__)
+logger = logging.getLogger(__name__)
 
 @setup_bp.route('/fub-api-key', methods=['POST'])
 def setup_fub_api_key():
@@ -47,8 +49,37 @@ def setup_fub_api_key():
     if profile:
         profile.onboarding_completed = True
         user_service.update_profile(profile)
-    
-    return jsonify({"message": "FUB API key configured successfully"})
+
+    # Auto-provision FUB team members
+    team_result = None
+    try:
+        from app.service.fub_team_provisioning_service import FUBTeamProvisioningServiceSingleton
+        provisioning_service = FUBTeamProvisioningServiceSingleton.get_instance()
+
+        # Get or create organization for this user
+        organization_id = provisioning_service.get_or_create_organization(user_id)
+
+        # Provision team members from FUB
+        team_result = provisioning_service.provision_team_from_fub(
+            broker_user_id=user_id,
+            organization_id=organization_id,
+            fub_api_key=api_key
+        )
+
+        logger.info(
+            f"Team provisioning for user {user_id}: "
+            f"{team_result.get('provisioned_count', 0)} provisioned, "
+            f"{team_result.get('skipped_count', 0)} skipped"
+        )
+    except Exception as e:
+        logger.error(f"Error during team provisioning: {e}")
+        # Don't fail the API key setup if team provisioning fails
+        team_result = {"error": str(e), "provisioned_count": 0}
+
+    return jsonify({
+        "message": "FUB API key configured successfully",
+        "team_provisioned": team_result
+    })
 
 @setup_bp.route('/fub-api-key-status', methods=['GET'])
 def get_fub_api_key_status():
