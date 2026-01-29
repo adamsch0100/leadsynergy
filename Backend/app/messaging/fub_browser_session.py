@@ -16,7 +16,7 @@ class FUBBrowserSession:
     """Manages a single agent's FUB browser session."""
 
     FUB_BASE_URL = "https://app.followupboss.com"
-    WARM_SESSION_THRESHOLD_SECONDS = 30  # Skip validation if used within this time
+    WARM_SESSION_THRESHOLD_SECONDS = 300  # 5 min - skip validation if used recently
 
     def __init__(self, browser: Browser, agent_id: str, session_store: 'SessionStore'):
         self.browser = browser

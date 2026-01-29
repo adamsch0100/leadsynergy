@@ -274,22 +274,28 @@ class PlaywrightSMSService:
 
     async def _get_session_internal(self, agent_id: str, credentials: dict) -> FUBBrowserSession:
         """Internal session getter - assumes agent is already acquired."""
+        import time as _time
+        _sess_start = _time.time()
+
         # Check for existing valid session
         if agent_id in self.sessions:
-            logger.debug(f"Found existing session for agent {agent_id}")
+            logger.info(f"[session] Found existing session for {agent_id}, validating...")
             session = self.sessions[agent_id]
             try:
                 if await session.is_valid():
-                    logger.debug(f"Session valid for agent {agent_id}")
+                    logger.info(f"[session] Session valid ({_time.time() - _sess_start:.1f}s)")
                     return session
+                else:
+                    logger.warning(f"[session] Session INVALID ({_time.time() - _sess_start:.1f}s)")
             except Exception as e:
-                logger.warning(f"Session validity check failed: {e}")
+                logger.warning(f"[session] Validation error ({_time.time() - _sess_start:.1f}s): {e}")
             # Session invalid, close it
             try:
                 await session.close()
             except Exception:
                 pass
             del self.sessions[agent_id]
+            logger.info(f"[session] Old session closed, will create new one ({_time.time() - _sess_start:.1f}s)")
 
         # Check if login is on cooldown (prevents spamming FUB with verification emails)
         on_cooldown, remaining = self._is_login_on_cooldown(agent_id)
