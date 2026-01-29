@@ -23,6 +23,7 @@ class PlaywrightSMSService:
 
     # Self-healing settings
     MAX_CONSECUTIVE_FAILURES = 2  # Destroy session after this many failures
+    PROACTIVE_RESTART_INTERVAL = 2  # Restart browser every N operations to prevent zombie process buildup
 
     # Login rate limiting - prevent spamming FUB with verification emails
     LOGIN_COOLDOWN_SECONDS = 600  # 10 minutes cooldown after failed login
@@ -38,6 +39,7 @@ class PlaywrightSMSService:
         self._agent_busy_lock = threading.Lock()  # Quick lock for flag check only
         self._consecutive_failures: Dict[str, int] = {}  # Track failures per agent
         self._login_cooldown: Dict[str, float] = {}  # agent_id -> timestamp when cooldown ends
+        self._operation_count: int = 0  # Track operations for proactive browser restart
 
     async def initialize(self):
         """Initialize Playwright and browser instance."""
@@ -69,7 +71,15 @@ class PlaywrightSMSService:
                 '--disable-setuid-sandbox',
                 '--disable-gpu',
                 '--disable-web-security',
-                '--disable-features=IsolateOrigins,site-per-process'
+                '--disable-features=IsolateOrigins,site-per-process',
+                # Memory-saving flags for Railway containers
+                '--disable-extensions',
+                '--disable-background-networking',
+                '--disable-default-apps',
+                '--disable-sync',
+                '--disable-translate',
+                '--no-first-run',
+                '--js-flags=--max-old-space-size=256',
             ]
         )
 
@@ -219,9 +229,20 @@ class PlaywrightSMSService:
 
         On Railway, the Chromium process can die between operations due to
         container resource limits, OOM kills, or process management.
+
+        Also handles proactive restarts every PROACTIVE_RESTART_INTERVAL
+        operations to prevent zombie Chromium process buildup. Each browser
+        restart that doesn't properly kill the old process leaks ~100-200MB.
+        Proactive graceful restarts prevent this accumulation.
         """
+        # Proactive restart: gracefully restart browser before it dies
+        if self._initialized and self._operation_count >= self.PROACTIVE_RESTART_INTERVAL:
+            await self._proactive_browser_restart()
+            return
+
         if not self._initialized or not self.browser:
             logger.warning("[browser] Not initialized, initializing...")
+            await self._kill_orphaned_chromium()
             await self.initialize()
             return
 
@@ -235,16 +256,151 @@ class PlaywrightSMSService:
             logger.warning("[browser] Health check passed")
         except Exception as e:
             logger.warning(f"[browser] Health check FAILED ({type(e).__name__}), restarting browser...")
-            # Browser is dead. DON'T try to close it - that hangs on a dead process.
-            # Just abandon the old references and start completely fresh.
-            # The old Chromium process will be cleaned up by the OS when the
-            # new Playwright instance starts (or by container restart).
-            self.browser = None
-            self.playwright = None
-            self._initialized = False
-            self.sessions.clear()
+            await self._cleanup_dead_browser()
             await self.initialize()
             logger.warning("[browser] Browser restarted successfully")
+            self._log_process_diagnostics()
+
+    async def _proactive_browser_restart(self):
+        """Gracefully restart browser to prevent zombie process buildup.
+
+        Called every PROACTIVE_RESTART_INTERVAL operations. By restarting
+        gracefully (close + stop) while the browser is still alive, we avoid
+        the zombie process leak that happens when the browser dies and we
+        can't close it properly.
+        """
+        logger.warning(f"[browser] Proactive restart after {self._operation_count} operations")
+        self._operation_count = 0
+
+        # Try graceful shutdown (browser should still be alive)
+        try:
+            if self.browser:
+                await asyncio.wait_for(self.browser.close(), timeout=5)
+                logger.warning("[browser] Browser closed gracefully")
+        except Exception as e:
+            logger.warning(f"[browser] Graceful browser close failed: {e}")
+
+        try:
+            if self.playwright:
+                await asyncio.wait_for(self.playwright.stop(), timeout=3)
+                logger.warning("[browser] Playwright stopped gracefully")
+        except Exception as e:
+            logger.warning(f"[browser] Playwright stop failed: {e}")
+
+        # Kill any remaining orphaned processes as safety net
+        await self._kill_orphaned_chromium()
+
+        # Reset state and start fresh
+        self.browser = None
+        self.playwright = None
+        self._initialized = False
+        self.sessions.clear()
+        await self.initialize()
+        logger.warning("[browser] Proactive restart complete")
+
+    async def _cleanup_dead_browser(self):
+        """Aggressively clean up a dead browser and its processes.
+
+        When Chromium dies on Railway, we can't close it gracefully (hangs
+        forever). Instead we:
+        1. Capture the PID of the dead browser process
+        2. Null out all references
+        3. Force-kill the process by PID
+        4. Try to stop old Playwright with timeout
+        5. Kill any remaining orphaned chromium processes
+        """
+        self._operation_count = 0
+
+        # Step 1: Try to get browser PID before losing the reference
+        browser_pid = None
+        try:
+            if self.browser and hasattr(self.browser, 'process') and self.browser.process:
+                browser_pid = self.browser.process.pid
+                logger.warning(f"[cleanup] Browser PID: {browser_pid}")
+        except Exception:
+            pass
+
+        # Step 2: Save old playwright reference, null everything
+        old_playwright = self.playwright
+        self.browser = None
+        self.playwright = None
+        self._initialized = False
+        self.sessions.clear()
+
+        # Step 3: Force-kill browser process by PID
+        if browser_pid:
+            try:
+                os.kill(browser_pid, 9)  # SIGKILL
+                logger.warning(f"[cleanup] Killed browser process {browser_pid}")
+            except (ProcessLookupError, OSError) as e:
+                logger.warning(f"[cleanup] Browser process {browser_pid} already dead: {e}")
+
+        # Step 4: Try to stop old Playwright (manages its own Node.js subprocess)
+        if old_playwright:
+            try:
+                await asyncio.wait_for(old_playwright.stop(), timeout=3)
+                logger.warning("[cleanup] Old Playwright stopped")
+            except asyncio.TimeoutError:
+                logger.warning("[cleanup] Old Playwright stop timed out (3s)")
+            except Exception as e:
+                logger.warning(f"[cleanup] Old Playwright stop error: {e}")
+
+        # Step 5: Kill any remaining orphaned chromium processes
+        await self._kill_orphaned_chromium()
+
+    async def _kill_orphaned_chromium(self):
+        """Kill orphaned Chromium processes to free memory.
+
+        Each browser restart that doesn't properly close the old process
+        leaks a Chromium instance (~100-200MB). This method cleans them up.
+        Safe in Railway containers where we own all processes.
+        """
+        import subprocess as sp
+        try:
+            if os.name == 'nt':
+                # Windows: don't kill - user might have other Chrome instances
+                return
+            # Linux/Railway: kill orphaned chromium processes
+            result = sp.run(
+                ['pkill', '-9', '-f', 'chromium'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                logger.warning("[cleanup] Killed orphaned chromium processes")
+            else:
+                logger.warning("[cleanup] No orphaned chromium processes found")
+        except FileNotFoundError:
+            # pkill not available, try killall
+            try:
+                sp.run(['killall', '-9', 'chromium'],
+                       capture_output=True, timeout=5)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"[cleanup] Process cleanup error: {e}")
+
+    def _log_process_diagnostics(self):
+        """Log process and memory info for Railway debugging."""
+        import subprocess as sp
+        try:
+            if os.name == 'nt':
+                return
+            # Count chromium processes
+            result = sp.run(['pgrep', '-c', '-f', 'chromium'],
+                           capture_output=True, text=True, timeout=3)
+            chromium_count = result.stdout.strip() if result.returncode == 0 else '0'
+
+            # Get Python process memory usage
+            result = sp.run(['ps', '-o', 'rss=', '-p', str(os.getpid())],
+                           capture_output=True, text=True, timeout=3)
+            rss_mb = int(result.stdout.strip()) / 1024 if result.stdout.strip() else -1
+
+            logger.warning(
+                f"[diagnostics] Chromium procs: {chromium_count}, "
+                f"Python RSS: {rss_mb:.0f}MB, Ops since restart: {self._operation_count}"
+            )
+        except Exception:
+            pass
 
     async def _run_with_session(self, agent_id: str, credentials: dict, operation_name: str, operation_func, timeout: int = 90):
         """Run an operation with a FRESH browser context each time.
@@ -325,6 +481,8 @@ class PlaywrightSMSService:
 
             session = None  # Prevent double-close in finally
             self._record_success(agent_id)
+            self._operation_count += 1
+            logger.warning(f"[{operation_name}] Op count: {self._operation_count}/{self.PROACTIVE_RESTART_INTERVAL}")
             return result
 
         except asyncio.TimeoutError:
