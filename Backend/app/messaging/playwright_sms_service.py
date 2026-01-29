@@ -235,16 +235,10 @@ class PlaywrightSMSService:
             logger.warning("[browser] Health check passed")
         except Exception as e:
             logger.warning(f"[browser] Health check FAILED ({type(e).__name__}), restarting browser...")
-            # Browser is dead. Close everything and restart.
-            try:
-                await self.browser.close()
-            except Exception:
-                pass
-            try:
-                if self.playwright:
-                    await self.playwright.stop()
-            except Exception:
-                pass
+            # Browser is dead. DON'T try to close it - that hangs on a dead process.
+            # Just abandon the old references and start completely fresh.
+            # The old Chromium process will be cleaned up by the OS when the
+            # new Playwright instance starts (or by container restart).
             self.browser = None
             self.playwright = None
             self._initialized = False
