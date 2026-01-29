@@ -285,9 +285,15 @@ class FUBBrowserSession:
 
             logger.info(f"Gmail helper configured with email: {email_helper.email_address}")
 
+            # Wait a bit for FUB to send the email before checking
+            # FUB can be slow to send verification emails (sometimes 5-10 seconds)
+            import asyncio
+            logger.info("Waiting 10 seconds for FUB to send verification email...")
+            await asyncio.sleep(10)
+
             logger.info(f"Checking email inbox for FUB verification link...")
             logger.info(f"  Search criteria: sender contains 'followupboss', link contains 'followupboss.com'")
-            logger.info(f"  Will retry up to 15 times with 3 second delays (max 45 seconds)")
+            logger.info(f"  Will retry up to 20 times with 5 second delays (max 100 seconds)")
 
             # Get the verification link from the FUB security email
             # NOTE: Don't filter by subject - FUB uses various subjects like "Verify your sign-in",
@@ -300,8 +306,8 @@ class FUBBrowserSession:
                         subject_contains=None,  # Don't filter by subject - FUB uses various subjects
                         link_contains="followupboss.com",
                         max_age_seconds=300,  # 5 minutes
-                        max_retries=15,
-                        retry_delay=3.0
+                        max_retries=20,  # More retries
+                        retry_delay=5.0  # Longer delay between retries
                     )
             except Exception as imap_error:
                 logger.error(f"IMAP connection/search failed: {imap_error}")

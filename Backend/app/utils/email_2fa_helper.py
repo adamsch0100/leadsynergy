@@ -538,27 +538,31 @@ class Email2FAHelper:
             # Select inbox
             self._connection.select("INBOX")
 
-            # Search for recent UNREAD emails first, then fall back to all recent
+            # Search for recent UNREAD emails first (to get fresh verification links)
             since_date = (datetime.now() - timedelta(seconds=max_age_seconds)).strftime("%d-%b-%Y")
 
-            # Try unread emails first
+            # Try unread emails first - these are fresh verification links
             search_criteria = f'(SINCE "{since_date}" UNSEEN)'
+            logger.info(f"  Searching UNREAD emails since {since_date}...")
             status, message_ids = self._connection.search(None, search_criteria)
 
+            search_type = "UNREAD"
             if status != "OK" or not message_ids[0]:
-                # Fall back to all recent emails
+                # Fall back to all recent emails (including already-read ones)
+                logger.info("  No unread emails, falling back to ALL recent emails...")
                 search_criteria = f'(SINCE "{since_date}")'
                 status, message_ids = self._connection.search(None, search_criteria)
+                search_type = "ALL"
 
             if status != "OK" or not message_ids[0]:
-                logger.debug("No recent emails found")
+                logger.info("  No recent emails found at all")
                 return None
 
             # Get message IDs (most recent first)
             ids = message_ids[0].split()
             ids.reverse()
 
-            logger.info(f"Found {len(ids)} recent emails to check for verification links")
+            logger.info(f"  Found {len(ids)} {search_type} emails to check for verification links")
 
             # Check each email
             for msg_id in ids[:20]:
