@@ -711,26 +711,38 @@ class FUBBrowserSession:
             Dict with 'success', 'message' (the text content), 'is_incoming', 'timestamp'
             or 'success': False with 'error'
         """
-        logger.info(f"Reading latest message for person {person_id}")
+        import time as _time
+        _read_start = _time.time()
+        logger.info(f"[READ {person_id}] START")
 
         if not self._logged_in:
             raise Exception("Not logged in. Call login() first.")
 
         # Reset page state before operation to avoid stale DOM/JS
         await self._reset_page_state(light=True)
+        logger.info(f"[READ {person_id}] Page reset done ({_time.time() - _read_start:.1f}s)")
 
         # Navigate to lead profile - use the captured team subdomain URL
         person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
-        logger.info(f"Navigating to person page: {person_url}")
+        logger.info(f"[READ {person_id}] Navigating to {person_url}")
         await self.page.goto(
             person_url,
             wait_until="domcontentloaded",
             timeout=self.NAVIGATION_TIMEOUT_MS
         )
-        logger.debug(f"Navigation complete for person {person_id}")
+        logger.info(f"[READ {person_id}] Navigation done ({_time.time() - _read_start:.1f}s)")
+
+        # Check if we got redirected to login (session expired)
+        current_url = self.page.url
+        if "login" in current_url or "signin" in current_url:
+            logger.error(f"[READ {person_id}] Session expired - redirected to login: {current_url}")
+            self._logged_in = False
+            raise Exception("Session expired during read - redirected to login page")
+
         await self._human_delay(1.5, 2.5)
 
-        # Click Messages tab to see conversation - use the same robust approach as send_sms
+        # Click Messages tab to see conversation
+        logger.info(f"[READ {person_id}] Clicking Messages tab...")
         messages_tab_selectors = [
             # Specific FUB selector - BoxTabPadding containing bubble icon
             '.BoxTabPadding:has(.BaseIcon-bubble)',
@@ -812,11 +824,7 @@ class FUBBrowserSession:
             except Exception as e:
                 logger.debug(f"Reading: Messages tab click failed: {e}")
 
-        # FUB message structure (observed Jan 2025):
-        # - Messages are in a conversation thread
-        # - Incoming messages have different styling than outgoing
-        # - Message bubbles contain the text content
-        # - Look for the most recent incoming message (from the lead)
+        logger.info(f"[READ {person_id}] Messages tab done, clicked={messages_clicked} ({_time.time() - _read_start:.1f}s)")
 
         # Selectors for message elements - FUB specific
         # Incoming messages typically have different class/styling
@@ -860,6 +868,8 @@ class FUBBrowserSession:
             except Exception as e:
                 continue
 
+        logger.info(f"[READ {person_id}] CSS selector search done ({_time.time() - _read_start:.1f}s), found={'yes' if latest_message else 'no'}")
+
         # Second approach: Parse all messages and find the last incoming one
         if not latest_message:
             try:
@@ -887,9 +897,9 @@ class FUBBrowserSession:
             except Exception as e:
                 logger.warning(f"Could not find message thread: {e}")
 
+        logger.info(f"[READ {person_id}] Thread search done ({_time.time() - _read_start:.1f}s)")
+
         # Third approach: JavaScript execution to extract messages
-        # FUB Jan 2026: Messages are in BodyContainer elements within timeline items
-        # Header shows "Sender Name > Recipient Name" pattern to identify direction
         if not latest_message:
             try:
                 # Get the lead's name from the page title (most reliable)
@@ -995,6 +1005,8 @@ class FUBBrowserSession:
                         logger.info(f"Found message via JS: {latest_message[:50]}...")
             except Exception as e:
                 logger.warning(f"JS message extraction failed: {e}")
+
+        logger.info(f"[READ {person_id}] JS extraction done ({_time.time() - _read_start:.1f}s), found={'yes' if latest_message else 'no'}")
 
         # Take debug screenshot if we couldn't find a message
         if not latest_message:

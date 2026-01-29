@@ -233,7 +233,9 @@ class PlaywrightSMSService:
             waited += 2
 
         try:
-            logger.debug(f"Agent {agent_id} acquired for {operation_name}")
+            import time as _time
+            _op_start = _time.time()
+            logger.info(f"[{operation_name}] Agent {agent_id} acquired")
 
             # Check if we've had too many consecutive failures - force fresh session
             if self._consecutive_failures.get(agent_id, 0) >= self.MAX_CONSECUTIVE_FAILURES:
@@ -245,17 +247,19 @@ class PlaywrightSMSService:
                 self._get_session_internal(agent_id, credentials),
                 timeout=timeout
             )
+            logger.info(f"[{operation_name}] Session ready ({_time.time() - _op_start:.1f}s)")
 
             # Run the operation (with timeout to prevent indefinite hangs)
-            logger.debug(f"Running {operation_name} with {timeout}s timeout")
             result = await asyncio.wait_for(operation_func(session), timeout=timeout)
+            logger.info(f"[{operation_name}] Operation complete ({_time.time() - _op_start:.1f}s)")
 
             # Operation succeeded - reset failure counter
             self._record_success(agent_id)
             return result
 
         except asyncio.TimeoutError:
-            logger.error(f"Operation {operation_name} timed out after {timeout}s for agent {agent_id}")
+            elapsed = _time.time() - _op_start if '_op_start' in dir() else -1
+            logger.error(f"[{operation_name}] TIMED OUT after {elapsed:.1f}s (limit={timeout}s) for agent {agent_id}")
             self._record_failure(agent_id)
             raise Exception(f"Operation {operation_name} timed out after {timeout}s")
 
