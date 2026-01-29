@@ -214,18 +214,65 @@ class PlaywrightSMSService:
             # The caller will use the session for their operation
             pass  # Don't release here - release after the operation completes
 
-    async def _run_with_session(self, agent_id: str, credentials: dict, operation_name: str, operation_func, timeout: int = 90):
-        """Run an operation with proper agent locking and operation timeout.
+    async def _ensure_browser_alive(self):
+        """Check if the browser process is alive. If not, restart it.
 
-        This ensures only one Playwright operation runs at a time per agent.
-        The operation itself has a timeout to prevent indefinite hangs.
+        On Railway, the Chromium process can die between operations due to
+        container resource limits, OOM kills, or process management.
+        """
+        if not self._initialized or not self.browser:
+            logger.warning("[browser] Not initialized, initializing...")
+            await self.initialize()
+            return
+
+        # Quick health check: try to create and immediately close a context
+        try:
+            test_ctx = await asyncio.wait_for(
+                self.browser.new_context(),
+                timeout=5
+            )
+            await test_ctx.close()
+            logger.warning("[browser] Health check passed")
+        except Exception as e:
+            logger.warning(f"[browser] Health check FAILED ({type(e).__name__}), restarting browser...")
+            # Browser is dead. Close everything and restart.
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
+            try:
+                if self.playwright:
+                    await self.playwright.stop()
+            except Exception:
+                pass
+            self.browser = None
+            self.playwright = None
+            self._initialized = False
+            self.sessions.clear()
+            await self.initialize()
+            logger.warning("[browser] Browser restarted successfully")
+
+    async def _run_with_session(self, agent_id: str, credentials: dict, operation_name: str, operation_func, timeout: int = 90):
+        """Run an operation with a FRESH browser context each time.
+
+        CRITICAL DESIGN: We create a new browser context for every operation and
+        close it when done. This avoids the Railway issue where Chromium contexts
+        freeze between operations (the browser process dies or becomes unresponsive
+        after ~20-30 seconds of inactivity).
+
+        The flow:
+        1. Ensure browser is alive (restart if dead)
+        2. Create fresh context with saved cookies
+        3. Run the operation
+        4. Save updated cookies
+        5. Close the context
 
         Args:
             agent_id: Agent identifier
             credentials: FUB login credentials
             operation_name: Name for logging
             operation_func: Async function taking session as argument
-            timeout: Max seconds for the operation (default 90s, reduced from 120s for faster failure)
+            timeout: Max seconds for the operation (default 90s)
         """
         # Wait for agent to become available
         max_wait = 120
@@ -237,28 +284,52 @@ class PlaywrightSMSService:
             await asyncio.sleep(2)
             waited += 2
 
+        session = None
         try:
             import time as _time
             _op_start = _time.time()
             logger.warning(f"[{operation_name}] Agent {agent_id} acquired")
 
-            # Check if we've had too many consecutive failures - force fresh session
-            if self._consecutive_failures.get(agent_id, 0) >= self.MAX_CONSECUTIVE_FAILURES:
-                logger.warning(f"Agent {agent_id} has {self._consecutive_failures[agent_id]} consecutive failures, forcing fresh session")
-                await self._force_fresh_session(agent_id)
+            # Check if login is on cooldown
+            on_cooldown, remaining = self._is_login_on_cooldown(agent_id)
+            if on_cooldown:
+                raise Exception(
+                    f"Login on cooldown for {agent_id}. "
+                    f"Please wait {remaining}s before retrying."
+                )
 
-            # Get or create session (with timeout)
-            session = await asyncio.wait_for(
-                self._get_session_internal(agent_id, credentials),
-                timeout=timeout
+            # Ensure browser process is alive (restart if crashed)
+            await self._ensure_browser_alive()
+
+            # Close any stale session from previous operation
+            if agent_id in self.sessions:
+                old = self.sessions.pop(agent_id)
+                try:
+                    await asyncio.wait_for(old.close(), timeout=3)
+                except Exception:
+                    pass  # Don't care if stale close fails
+
+            # Create a FRESH session (new context + login/cookie restore)
+            logger.warning(f"[{operation_name}] Creating fresh session...")
+            session = FUBBrowserSession(self.browser, agent_id, self.session_store)
+            await asyncio.wait_for(
+                session.login(credentials),
+                timeout=60  # Login timeout (includes potential 2FA)
             )
+            self._clear_login_cooldown(agent_id)
             logger.warning(f"[{operation_name}] Session ready ({_time.time() - _op_start:.1f}s)")
 
-            # Run the operation (with timeout to prevent indefinite hangs)
+            # Run the operation
             result = await asyncio.wait_for(operation_func(session), timeout=timeout)
             logger.warning(f"[{operation_name}] Operation complete ({_time.time() - _op_start:.1f}s)")
 
-            # Operation succeeded - reset failure counter
+            # Save cookies for next operation, then close context
+            try:
+                await session.save_cookies_and_close()
+            except Exception as e:
+                logger.warning(f"[{operation_name}] Cookie save/close error: {e}")
+
+            session = None  # Prevent double-close in finally
             self._record_success(agent_id)
             return result
 
@@ -269,68 +340,21 @@ class PlaywrightSMSService:
             raise Exception(f"Operation {operation_name} timed out after {timeout}s")
 
         except Exception as e:
-            # Record the failure for tracking
+            error_msg = str(e)
+            if any(x in error_msg.lower() for x in ['verification', 'security check', 'new location', 'email']):
+                self._set_login_cooldown(agent_id, f"email verification failed: {error_msg[:100]}")
             self._record_failure(agent_id)
             raise
 
         finally:
+            # Always close the context to avoid leaving Chromium state around
+            if session:
+                try:
+                    await asyncio.wait_for(session.close(), timeout=5)
+                except Exception:
+                    pass
             self._release_agent(agent_id)
             logger.debug(f"Agent {agent_id} released after {operation_name}")
-
-    async def _get_session_internal(self, agent_id: str, credentials: dict) -> FUBBrowserSession:
-        """Internal session getter - assumes agent is already acquired."""
-        import time as _time
-        _sess_start = _time.time()
-
-        # Check for existing valid session
-        if agent_id in self.sessions:
-            logger.warning(f"[session] Found existing session for {agent_id}, validating...")
-            session = self.sessions[agent_id]
-            try:
-                if await session.is_valid():
-                    logger.warning(f"[session] Session valid ({_time.time() - _sess_start:.1f}s)")
-                    return session
-                else:
-                    logger.warning(f"[session] Session INVALID ({_time.time() - _sess_start:.1f}s)")
-            except Exception as e:
-                logger.warning(f"[session] Validation error ({_time.time() - _sess_start:.1f}s): {e}")
-            # Session invalid, close it
-            try:
-                await session.close()
-            except Exception:
-                pass
-            del self.sessions[agent_id]
-            logger.warning(f"[session] Old session closed, will create new one ({_time.time() - _sess_start:.1f}s)")
-
-        # Check if login is on cooldown (prevents spamming FUB with verification emails)
-        on_cooldown, remaining = self._is_login_on_cooldown(agent_id)
-        if on_cooldown:
-            raise Exception(
-                f"Login on cooldown for {agent_id}. "
-                f"Please wait {remaining}s before retrying. "
-                f"This prevents spamming FUB with verification emails."
-            )
-
-        # Initialize browser if needed
-        if not self._initialized:
-            await self.initialize()
-
-        # Create new session
-        logger.info(f"Creating new session for agent {agent_id}")
-        session = FUBBrowserSession(self.browser, agent_id, self.session_store)
-
-        try:
-            await session.login(credentials)
-            # Login succeeded - clear any cooldown
-            self._clear_login_cooldown(agent_id)
-            self.sessions[agent_id] = session
-            return session
-        except Exception as e:
-            error_msg = str(e)
-            # If login failed due to email verification issue, set cooldown
-            if any(x in error_msg.lower() for x in ['verification', 'security check', 'new location', 'email']):
-                self._set_login_cooldown(agent_id, f"email verification failed: {error_msg[:100]}")
-            raise
 
     async def send_sms(
         self,

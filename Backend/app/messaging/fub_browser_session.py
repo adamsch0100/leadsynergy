@@ -1700,6 +1700,21 @@ class FUBBrowserSession:
             logger.warning(f"[page-reset] Fresh page creation failed: {e2}")
             raise
 
+    async def save_cookies_and_close(self):
+        """Save cookies to the session store then close the context.
+
+        Called after every successful operation so the next operation can
+        create a fresh context with the saved cookies (avoiding re-login).
+        """
+        if self.context:
+            try:
+                storage_state = await self.context.storage_state()
+                await self.session_store.save_cookies(self.agent_id, storage_state)
+                logger.warning(f"[session] Cookies saved for {self.agent_id}")
+            except Exception as e:
+                logger.warning(f"[session] Failed to save cookies for {self.agent_id}: {e}")
+        await self.close()
+
     async def close(self):
         """Close the browser context."""
         if self.context:
