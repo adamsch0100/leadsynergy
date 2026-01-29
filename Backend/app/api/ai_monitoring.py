@@ -92,14 +92,14 @@ def get_lead_monitoring_details(person_id: int):
 
         # Get AI conversation data
         conv_result = supabase.table('ai_conversations').select('*').eq(
-            'person_id', person_id
+            'fub_person_id', person_id
         ).order('updated_at', desc=True).limit(1).execute()
 
         conversation = conv_result.data[0] if conv_result.data else None
 
         # Get recent messages
         msg_result = supabase.table('ai_message_log').select('*').eq(
-            'person_id', person_id
+            'fub_person_id', person_id
         ).order('created_at', desc=True).limit(20).execute()
 
         messages = msg_result.data or []
@@ -158,7 +158,7 @@ def get_lead_conversation(person_id: int):
 
         # Get messages from ai_message_log
         result = supabase.table('ai_message_log').select('*').eq(
-            'person_id', person_id
+            'fub_person_id', person_id
         ).order('created_at', desc=False).limit(limit).execute()
 
         messages = result.data or []
@@ -227,7 +227,7 @@ def perform_lead_action(person_id: int):
             supabase.table('ai_conversations').update({
                 'state': 'escalated',
                 'escalation_reason': f'Manually escalated by {user_email or "admin"}',
-            }).eq('person_id', person_id).execute()
+            }).eq('fub_person_id', person_id).execute()
 
             await_log = note_service.log_activity(
                 person_id=person_id,
@@ -481,10 +481,10 @@ def get_ai_enabled_leads():
         # Get conversation states for these leads
         if person_ids:
             conv_result = supabase.table('ai_conversations').select(
-                'person_id, state, current_score, updated_at'
-            ).in_('person_id', person_ids).execute()
+                'fub_person_id, state, current_score, updated_at'
+            ).in_('fub_person_id', person_ids).execute()
 
-            conv_by_person = {c['person_id']: c for c in (conv_result.data or [])}
+            conv_by_person = {c['fub_person_id']: c for c in (conv_result.data or [])}
         else:
             conv_by_person = {}
 
@@ -492,12 +492,12 @@ def get_ai_enabled_leads():
         if person_ids:
             # This is a simplified approach - in production you might want a more efficient query
             msg_result = supabase.table('ai_message_log').select(
-                'person_id, direction, created_at'
-            ).in_('person_id', person_ids).order('created_at', desc=True).limit(500).execute()
+                'fub_person_id, direction, created_at'
+            ).in_('fub_person_id', person_ids).order('created_at', desc=True).limit(500).execute()
 
             msg_counts = {}
             for msg in (msg_result.data or []):
-                pid = msg['person_id']
+                pid = msg['fub_person_id']
                 if pid not in msg_counts:
                     msg_counts[pid] = {'sent': 0, 'received': 0, 'last_activity': None}
                 if msg['direction'] == 'outbound':
@@ -715,4 +715,34 @@ def cancel_tasks_for_lead(person_id: int):
 
     except Exception as e:
         logger.error(f"Error cancelling tasks for lead {person_id}: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@ai_monitoring_bp.route('/api/ai-monitoring/lead/<int:person_id>/clear-opt-out', methods=['POST'])
+def clear_lead_opt_out(person_id):
+    """Clear opt-out status for a lead (re-subscribe).
+
+    Use when a lead was falsely opted out or explicitly opts back in.
+    """
+    try:
+        supabase = get_supabase_client()
+
+        # Clear opt-out directly on sms_consent table by fub_person_id
+        result = supabase.table('sms_consent').update({
+            'opted_out': False,
+            'opted_out_at': None,
+            'opt_out_reason': None,
+        }).eq('fub_person_id', person_id).execute()
+
+        if result.data:
+            return jsonify({
+                'success': True,
+                'message': f'Opt-out cleared for person {person_id}',
+                'person_id': person_id
+            })
+        else:
+            return jsonify({'error': f'No consent record found for person {person_id}'}), 404
+
+    except Exception as e:
+        logger.error(f"Error clearing opt-out for person {person_id}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500

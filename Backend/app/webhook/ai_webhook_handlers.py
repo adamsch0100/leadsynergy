@@ -541,8 +541,38 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
 
         # person_data, organization_id, and user_id already fetched earlier - no need to fetch again
 
-        # Check for opt-out keywords first
+        # Check for opt-in keyword (START) - re-subscribe opted-out leads
         compliance_checker = ComplianceChecker(supabase_client=supabase)
+        if message_content.strip().lower() == "start":
+            logger.info(f"Opt-in keyword (START) detected from person {person_id}")
+            await compliance_checker.clear_opt_out(
+                fub_person_id=person_id,
+                organization_id=organization_id,
+            )
+            # Send confirmation via browser automation
+            from app.messaging.playwright_sms_service import PlaywrightSMSService
+            from app.ai_agent.settings_service import get_fub_browser_credentials
+
+            credentials = await get_fub_browser_credentials(
+                supabase_client=supabase,
+                user_id=user_id,
+                organization_id=organization_id,
+            )
+
+            if credentials:
+                if _playwright_sms_service is None:
+                    _playwright_sms_service = PlaywrightSMSService()
+
+                agent_id = credentials.get("agent_id", user_id or "default")
+                await _playwright_sms_service.send_sms(
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    message="You've been re-subscribed! We're happy to have you back. How can we help?",
+                    credentials=credentials,
+                )
+            return
+
+        # Check for opt-out keywords
         if compliance_checker.is_opt_out_keyword(message_content):
             logger.info(f"Opt-out keyword detected from person {person_id}")
             await compliance_checker.record_opt_out(
@@ -1182,25 +1212,43 @@ async def get_conversation_history(fub_person_id: int, limit: int = 15) -> List[
     """Get conversation history from database."""
     try:
         result = supabase.table("ai_message_log").select(
-            "direction, channel, message_content, created_at"
+            "direction, channel, message_content, ai_model, created_at"
         ).eq(
             "fub_person_id", fub_person_id
         ).order(
             "created_at", desc=True
-        ).limit(limit).execute()
+        ).limit(limit + 20).execute()  # Fetch extra to account for filtered messages
 
         if result.data:
             # Reverse to get chronological order
             history = list(reversed(result.data))
 
-            # Filter out privacy-redacted messages (from FUB API issues)
+            # Filter out non-conversation messages
             filtered_history = []
             for h in history:
                 content = h.get("message_content", "")
+                ai_model = h.get("ai_model", "")
+
                 # Skip messages that are privacy placeholders
                 if "Body is hidden" in content or "hidden for privacy" in content.lower():
                     logger.debug(f"Skipping privacy-redacted message in history for person {fub_person_id}")
                     continue
+
+                # Skip enrichment/skip trace data logged as messages
+                # These are from historical_sync and contain contact info, criminal records, etc.
+                if ai_model == "historical_sync" and (
+                    "Contact Information:" in content
+                    or "Criminal History" in content
+                    or "Email Owner:" in content
+                    or "Phone Numbers" in content and "Addresses" in content
+                    or "Risk Assessment:" in content
+                    or "Test note from" in content
+                    or "Re-engagement Test" in content
+                    or len(content) > 500  # Historical sync messages that are too long are likely enrichment data
+                ):
+                    logger.debug(f"Skipping enrichment/sync data in history for person {fub_person_id}")
+                    continue
+
                 filtered_history.append({
                     "role": "lead" if h["direction"] == "inbound" else "agent",
                     "content": content,
@@ -1208,7 +1256,8 @@ async def get_conversation_history(fub_person_id: int, limit: int = 15) -> List[
                     "timestamp": h["created_at"],
                 })
 
-            return filtered_history
+            # Return only the most recent `limit` messages after filtering
+            return filtered_history[-limit:]
     except Exception as e:
         logger.error(f"Error fetching conversation history: {e}")
 

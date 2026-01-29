@@ -17,6 +17,7 @@ Key Rules:
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Optional, Dict, Any, Tuple, List
@@ -462,6 +463,44 @@ class ComplianceChecker:
             logger.error(f"Error recording opt-out: {e}")
             return False
 
+    async def clear_opt_out(
+        self,
+        fub_person_id: int,
+        organization_id: str,
+    ) -> bool:
+        """Clear opt-out status for a lead (re-subscribe).
+
+        Use when a lead was falsely opted out or explicitly opts back in
+        (e.g., texts START).
+
+        Args:
+            fub_person_id: FUB person ID
+            organization_id: Organization ID
+
+        Returns:
+            True if successfully cleared
+        """
+        if not self.supabase:
+            return False
+
+        try:
+            result = self.supabase.table("sms_consent").update({
+                "opted_out": False,
+                "opted_out_at": None,
+                "opt_out_reason": None,
+            }).eq(
+                "fub_person_id", fub_person_id
+            ).eq(
+                "organization_id", organization_id
+            ).execute()
+
+            logger.info(f"Opt-out cleared for FUB person {fub_person_id}")
+            return bool(result.data)
+
+        except Exception as e:
+            logger.error(f"Error clearing opt-out: {e}")
+            return False
+
     async def increment_message_count(
         self,
         fub_person_id: int,
@@ -583,22 +622,26 @@ class ComplianceChecker:
         return '+' + digits
 
     def is_opt_out_keyword(self, message: str) -> bool:
-        """Check if message contains opt-out keyword."""
-        opt_out_keywords = [
-            "stop",
-            "unsubscribe",
-            "cancel",
-            "end",
-            "quit",
-            "optout",
-            "opt out",
-            "remove me",
-            "don't text",
-            "dont text",
+        """Check if message contains opt-out keyword.
+
+        Uses word-boundary matching (\b) to avoid false positives from
+        substrings like 'send' triggering 'end', 'quite' triggering 'quit',
+        or 'understand' triggering 'end'.
+        """
+        message_lower = message.lower().strip()
+
+        opt_out_patterns = [
+            r'\bstop\b',              # TCPA required keyword
+            r'\bunsubscribe\b',       # Standard opt-out
+            r'\bcancel\b',            # Intent to stop
+            r'\bend\b',              # Intent to stop
+            r'\bquit\b',             # Intent to stop
+            r'\bopt\s*out\b',        # "opt out" or "optout"
+            r'\bremove me\b',        # Request to remove
+            r"\bdon'?t\s+text\b",    # "don't text" or "dont text"
         ]
 
-        message_lower = message.lower().strip()
-        return any(keyword in message_lower for keyword in opt_out_keywords)
+        return any(re.search(pattern, message_lower) for pattern in opt_out_patterns)
 
 
 # Convenience function for quick compliance check
