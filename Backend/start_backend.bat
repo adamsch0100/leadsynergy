@@ -23,11 +23,26 @@ echo Process cleanup complete.
 echo.
 
 cd /d "%~dp0"
-if exist venv\Scripts\Activate.bat (
-    call venv\Scripts\Activate.bat
-    python main.py
+
+REM Prefer uv (fast, manages venv automatically)
+where uv >nul 2>&1
+if %ERRORLEVEL%==0 (
+    echo Using uv to run backend...
+    uv run python main.py
 ) else (
-    echo Virtual environment not found. Using system Python...
-    python main.py
+    python -m uv run python main.py 2>nul
+    if %ERRORLEVEL% NEQ 0 (
+        REM Fallback: activate .venv or venv manually
+        if exist .venv\Scripts\Activate.bat (
+            call .venv\Scripts\Activate.bat
+            python main.py
+        ) else if exist venv\Scripts\Activate.bat (
+            call venv\Scripts\Activate.bat
+            python main.py
+        ) else (
+            echo No virtual environment found. Using system Python...
+            python main.py
+        )
+    )
 )
 pause

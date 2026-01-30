@@ -10,8 +10,6 @@ import asyncio
 import threading
 import os
 
-from selenium.webdriver.common.devtools.v85.runtime import await_promise
-
 from app.database.lead_cache import LeadCacheSingleton, LeadCacheService
 from app.database.note_cache import NoteCacheService, NoteCacheSingleton
 from app.models.lead import Lead, LeadNote
