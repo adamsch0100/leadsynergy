@@ -994,10 +994,18 @@ MIGRATIONS = [
             ALTER TABLE ai_agent_settings
                 ADD COLUMN IF NOT EXISTS team_members VARCHAR(255);
             """,
-            # Add max_response_length column if not exists
+            # Add message length columns (max_sms_length replaces old max_response_length)
             """
             ALTER TABLE ai_agent_settings
-                ADD COLUMN IF NOT EXISTS max_response_length INTEGER DEFAULT 160;
+                ADD COLUMN IF NOT EXISTS max_response_length INTEGER DEFAULT 1000;
+            """,
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS max_sms_length INTEGER DEFAULT 1000;
+            """,
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS max_email_length INTEGER DEFAULT 5000;
             """,
             # Add LLM model columns if not exist
             """
@@ -1066,6 +1074,79 @@ MIGRATIONS = [
             """
             COMMENT ON COLUMN ai_agent_settings.ai_respond_to_phone_numbers IS
                 'List of FUB phone numbers (normalized +1XXXXXXXXXX format) the AI should respond to. Empty = respond to all.';
+            """,
+            # IMPORTANT: Reload PostgREST schema cache so the new column is recognized
+            # Without this, Supabase API silently ignores the new column in reads/writes
+            """
+            NOTIFY pgrst, 'reload schema';
+            """,
+        ]
+    },
+    {
+        'version': '20250129_add_sequence_and_timing_settings',
+        'description': 'Add sequence toggles, timing, and NBA settings columns to ai_agent_settings',
+        'sql_statements': [
+            # Sequence channel toggles
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS sequence_sms_enabled BOOLEAN DEFAULT true,
+                ADD COLUMN IF NOT EXISTS sequence_email_enabled BOOLEAN DEFAULT true,
+                ADD COLUMN IF NOT EXISTS sequence_voice_enabled BOOLEAN DEFAULT false,
+                ADD COLUMN IF NOT EXISTS sequence_rvm_enabled BOOLEAN DEFAULT false;
+            """,
+            # Day 0 aggression and behavior flags
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS day_0_aggression VARCHAR(20) DEFAULT 'aggressive',
+                ADD COLUMN IF NOT EXISTS proactive_appointment_enabled BOOLEAN DEFAULT true,
+                ADD COLUMN IF NOT EXISTS qualification_questions_enabled BOOLEAN DEFAULT true;
+            """,
+            # Instant response settings
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS instant_response_enabled BOOLEAN DEFAULT true,
+                ADD COLUMN IF NOT EXISTS instant_response_max_delay_seconds INTEGER DEFAULT 60;
+            """,
+            # NBA scan intervals
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS nba_hot_lead_scan_interval_minutes INTEGER DEFAULT 5,
+                ADD COLUMN IF NOT EXISTS nba_cold_lead_scan_interval_minutes INTEGER DEFAULT 15;
+            """,
+            # Response timing fine-tuning
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS response_delay_min_seconds INTEGER DEFAULT 30,
+                ADD COLUMN IF NOT EXISTS response_delay_max_seconds INTEGER DEFAULT 120,
+                ADD COLUMN IF NOT EXISTS first_message_delay_min INTEGER DEFAULT 15,
+                ADD COLUMN IF NOT EXISTS first_message_delay_max INTEGER DEFAULT 60;
+            """,
+            # Reload PostgREST schema cache
+            """
+            NOTIFY pgrst, 'reload schema';
+            """,
+            # Performance indexes for scale (100K+ leads)
+            # Compound index for fast message history lookups
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_message_log_person_created
+                ON ai_message_log(fub_person_id, created_at DESC);
+            """,
+            # Compound index for multi-tenant conversation queries
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_conversations_org_person
+                ON ai_conversations(organization_id, fub_person_id);
+            """,
+            # Partial index for stale handoff detection
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_conversations_handoff
+                ON ai_conversations(state, updated_at)
+                WHERE state = 'handed_off';
+            """,
+            # Partial index for scheduled followup processing
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_scheduled_followups_pending
+                ON ai_scheduled_followups(scheduled_at, status)
+                WHERE status = 'pending';
             """,
         ]
     }

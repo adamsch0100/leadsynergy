@@ -702,6 +702,235 @@ class FUBBrowserSession:
         logger.warning(f"[SEND {person_id}] COMPLETE")
         return {"success": True, "person_id": person_id, "message_length": len(message)}
 
+    async def send_email(self, person_id: int, subject: str, body: str) -> dict:
+        """
+        Navigate to lead profile and send an email via FUB web interface.
+
+        Follows the same pattern as send_text_message() but clicks the Email
+        tab instead of Messages tab.
+
+        Args:
+            person_id: The FUB person ID
+            subject: Email subject line
+            body: Email body text
+
+        Returns:
+            Dict with success status and details
+        """
+        logger.warning(f"[EMAIL {person_id}] START - Subject: {subject[:50]}")
+
+        if not self._logged_in:
+            raise Exception("Not logged in. Call login() first.")
+
+        # Reset page state before operation
+        await self._reset_page_state(light=True)
+
+        # Navigate to lead profile
+        person_url = f"{self._get_base_url()}/2/people/view/{person_id}"
+        logger.info(f"[EMAIL {person_id}] Navigating to: {person_url}")
+        await self.page.goto(
+            person_url,
+            wait_until="domcontentloaded",
+            timeout=self.NAVIGATION_TIMEOUT_MS,
+        )
+        await self._human_delay(1.5, 2.5)
+
+        # Debug screenshot
+        import os
+        debug_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        screenshot_path = os.path.join(debug_dir, f"debug_fub_email_{person_id}.png")
+        await self.page.screenshot(path=screenshot_path)
+        logger.info(f"[EMAIL {person_id}] Debug screenshot: {screenshot_path}")
+
+        # ---- Step 1: Click the Email tab ----
+        email_tab_selectors = [
+            'div:has(.BaseIcon-email):has-text("Email")',
+            'div:has(.BaseIcon-envelope):has-text("Email")',
+            '.BaseIcon-email',
+            '.BaseIcon-envelope',
+            '[class*="BoxTabPadding"]:has-text("Email")',
+            'button:has-text("Email")',
+            'a:has-text("Email")',
+            '[role="tab"]:has-text("Email")',
+        ]
+
+        email_tab = await self._find_element_by_selectors(email_tab_selectors)
+        if email_tab:
+            await email_tab.click()
+            logger.info(f"[EMAIL {person_id}] Clicked Email tab via selector")
+        else:
+            # Fallback: try JavaScript to find and click the tab
+            logger.warning(f"[EMAIL {person_id}] Selector-based tab click failed, trying JS approach")
+            js_clicked = await self.page.evaluate("""() => {
+                // Look for tab elements containing "Email" text
+                const tabs = document.querySelectorAll('[class*="BoxTabPadding"], [role="tab"], div[class*="Tab"]');
+                for (const tab of tabs) {
+                    if (tab.textContent.trim().includes('Email')) {
+                        tab.click();
+                        return true;
+                    }
+                }
+                // Broader search
+                const allElements = document.querySelectorAll('div, button, a, span');
+                for (const el of allElements) {
+                    if (el.textContent.trim() === 'Email' && el.offsetParent !== null) {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            if not js_clicked:
+                debug_path = os.path.join(debug_dir, f"debug_no_email_tab_{person_id}.png")
+                await self.page.screenshot(path=debug_path)
+                # Enumerate available tabs for debugging
+                try:
+                    tabs = await self.page.query_selector_all('[class*="BoxTabPadding"], [role="tab"]')
+                    for i, tab in enumerate(tabs[:10]):
+                        text = await tab.evaluate('el => el.textContent.trim()')
+                        logger.info(f"[EMAIL {person_id}] Tab {i}: '{text}'")
+                except Exception:
+                    pass
+                raise Exception(f"Could not find Email tab for person {person_id}. Screenshot: {debug_path}")
+
+        await self._human_delay(1.0, 2.0)
+
+        # Screenshot after Email tab click
+        await self.page.screenshot(path=os.path.join(debug_dir, f"debug_after_email_tab_{person_id}.png"))
+
+        # ---- Step 2: Fill the subject field ----
+        subject_selectors = [
+            'input[placeholder*="Subject"]',
+            'input[placeholder*="subject"]',
+            'input[name="subject"]',
+            '[class*="subject"] input',
+            '[class*="Subject"] input',
+        ]
+
+        subject_field = await self._find_element_by_selectors(subject_selectors)
+        if not subject_field:
+            # Try broader search
+            subject_field = await self.page.evaluate("""() => {
+                const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+                for (const inp of inputs) {
+                    const placeholder = (inp.placeholder || '').toLowerCase();
+                    const name = (inp.name || '').toLowerCase();
+                    if (placeholder.includes('subject') || name.includes('subject')) {
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            if subject_field:
+                subject_field = await self.page.query_selector('input[placeholder*="ubject"], input[name*="ubject"]')
+
+        if subject_field:
+            await subject_field.click()
+            await self._human_delay(0.2, 0.4)
+            await subject_field.fill("")
+            await self._simulated_typing(subject_field, subject)
+            await self._human_delay(0.3, 0.6)
+            logger.info(f"[EMAIL {person_id}] Subject filled: {subject[:50]}")
+        else:
+            logger.warning(f"[EMAIL {person_id}] No subject field found - some email views may not have one")
+
+        # ---- Step 3: Fill the email body ----
+        body_selectors = [
+            '[class*="email-compose"] textarea',
+            '[class*="email"] textarea',
+            'textarea[placeholder*="Write your message"]',
+            'textarea[placeholder*="Write your email"]',
+            'textarea[placeholder*="Message"]',
+            'textarea[placeholder*="message"]',
+            # FUB may use a contenteditable div for rich text
+            '[contenteditable="true"][class*="email"]',
+            '[contenteditable="true"][role="textbox"]',
+            '[class*="email-compose"] [contenteditable="true"]',
+            # Fallback: any textarea that's NOT the SMS one
+            'textarea:not([placeholder*="text"])',
+            'textarea',
+        ]
+
+        body_field = await self._find_element_by_selectors(body_selectors)
+        if not body_field:
+            # Enumerate available form elements for debugging
+            try:
+                elements = await self.page.query_selector_all('textarea, [contenteditable="true"], input')
+                for i, el in enumerate(elements[:10]):
+                    tag = await el.evaluate('el => el.tagName')
+                    placeholder = await el.get_attribute('placeholder') or ''
+                    classes = await el.get_attribute('class') or ''
+                    logger.info(f"[EMAIL {person_id}] Form element {i}: <{tag}> placeholder='{placeholder}' class='{classes[:60]}'")
+            except Exception:
+                pass
+
+            debug_path = os.path.join(debug_dir, f"debug_no_email_compose_{person_id}.png")
+            await self.page.screenshot(path=debug_path)
+            raise Exception(f"Could not find email compose area for person {person_id}. Screenshot: {debug_path}")
+
+        await body_field.click()
+        await self._human_delay(0.2, 0.4)
+
+        # Check if it's a contenteditable div or a textarea
+        tag_name = await body_field.evaluate('el => el.tagName.toLowerCase()')
+        if tag_name in ('div', 'span', 'p'):
+            # Contenteditable element - use keyboard typing
+            await body_field.evaluate('el => el.textContent = ""')
+            await self.page.keyboard.type(body, delay=50)
+        else:
+            # Standard textarea
+            await body_field.fill("")
+            await self._simulated_typing(body_field, body)
+
+        await self._human_delay(0.5, 1.0)
+        logger.info(f"[EMAIL {person_id}] Body filled ({len(body)} chars)")
+
+        # ---- Step 4: Click send button ----
+        send_selectors = [
+            '.sendEmailButton-FSSelector',
+            '[class*="sendEmailButton"]',
+            '[class*="sendEmail"]',
+            'button:has-text("Send Email")',
+            'button:has-text("Send")',
+            '[class*="send"] button',
+            'button[type="submit"]',
+        ]
+
+        send_button = await self._find_element_by_selectors(send_selectors)
+        if not send_button:
+            # JS fallback
+            js_sent = await self.page.evaluate("""() => {
+                const buttons = document.querySelectorAll('button, [role="button"]');
+                for (const btn of buttons) {
+                    const text = btn.textContent.trim().toLowerCase();
+                    if (text.includes('send email') || text === 'send') {
+                        btn.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            if not js_sent:
+                debug_path = os.path.join(debug_dir, f"debug_no_send_email_btn_{person_id}.png")
+                await self.page.screenshot(path=debug_path)
+                raise Exception(f"Could not find Send Email button for person {person_id}. Screenshot: {debug_path}")
+        else:
+            await send_button.click()
+
+        await self._human_delay(1.5, 2.5)
+
+        # Mark success and park the page
+        self.mark_operation_success()
+        await self._park_page()
+
+        logger.warning(f"[EMAIL {person_id}] COMPLETE - Subject: {subject[:50]}")
+        return {
+            "success": True,
+            "person_id": person_id,
+            "subject": subject,
+            "body_length": len(body),
+        }
+
     async def read_latest_message(self, person_id: int) -> dict:
         """
         Navigate to lead profile and read the latest incoming SMS message.

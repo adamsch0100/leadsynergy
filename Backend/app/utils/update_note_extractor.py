@@ -19,10 +19,10 @@ from html import unescape
 class UpdateNoteExtractor:
     """Extracts @update: messages from FUB notes for platform sync."""
 
-    # Pattern to match @update: followed by content (case-insensitive)
-    # Captures everything after @update: until the next @update: or end of string
+    # Pattern to match @update (with or without colon) followed by content (case-insensitive)
+    # Captures everything after @update[:] until the next @update or end of string
     MARKER_PATTERN = re.compile(
-        r'@update:\s*(.+?)(?=@update:|$)',
+        r'@update:?\s*(.+?)(?=@update:?\s|$)',
         re.IGNORECASE | re.DOTALL
     )
 

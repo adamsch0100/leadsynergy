@@ -34,13 +34,15 @@ class AIAgentSettings:
     use_assigned_agent_name: bool = False  # If True, use lead's assigned agent name instead of branded name
 
     # Response timing settings (human-like delays)
-    response_delay_seconds: int = 30  # Configurable delay (for UI)
-    response_delay_min_seconds: int = 30  # Minimum delay to feel human
-    response_delay_max_seconds: int = 120  # Maximum delay (2 minutes)
-    first_message_delay_min: int = 45  # First message to lead - slightly longer
-    first_message_delay_max: int = 180  # Up to 3 minutes for first message
+    # Priority: instant_response (new leads) > first_message_delay > response_delay (ongoing)
+    response_delay_seconds: int = 30  # Configurable delay for UI
+    response_delay_min_seconds: int = 30  # Min delay for ongoing conversation (reply #2+)
+    response_delay_max_seconds: int = 120  # Max delay for ongoing conversation (2 min)
+    first_message_delay_min: int = 15  # First message to NEW lead — speed to lead matters
+    first_message_delay_max: int = 60  # Max 1 minute for first message (research: 5 min = 21x conversion)
     typing_speed_chars_per_second: float = 4.0  # Simulate typing time
-    max_response_length: int = 160  # SMS character limit
+    max_sms_length: int = 1000  # Max SMS chars (configurable from frontend)
+    max_email_length: int = 5000  # Max email chars (configurable from frontend)
 
     # Working hours (TCPA compliance)
     working_hours_start: time = field(default_factory=lambda: time(8, 0))  # 8 AM
@@ -201,7 +203,8 @@ class AIAgentSettings:
             re_engagement_max_attempts=row.get('re_engagement_max_attempts') or 3,
             long_term_nurture_after_days=row.get('long_term_nurture_after_days') or 7,
             re_engagement_channels=row.get('re_engagement_channels') or ["sms", "email"],
-            max_response_length=row.get('max_response_length') or 160,
+            max_sms_length=row.get('max_sms_length') or row.get('max_response_length') or 1000,
+            max_email_length=row.get('max_email_length') or 5000,
             # FUB Browser Login
             fub_login_email=row.get('fub_login_email'),
             fub_login_password=row.get('fub_login_password'),
@@ -378,25 +381,60 @@ class AIAgentSettingsService:
 
         try:
             data = {
+                # Identity
                 "agent_name": settings.agent_name,
                 "brokerage_name": settings.brokerage_name,
                 "team_members": settings.team_members,
                 "personality_tone": settings.personality_tone,
+                # Response timing
                 "response_delay_seconds": settings.response_delay_seconds,
-                "max_response_length": settings.max_response_length,
+                "response_delay_min_seconds": settings.response_delay_min_seconds,
+                "response_delay_max_seconds": settings.response_delay_max_seconds,
+                "first_message_delay_min": settings.first_message_delay_min,
+                "first_message_delay_max": settings.first_message_delay_max,
+                # Message limits
+                "max_sms_length": settings.max_sms_length,
+                "max_email_length": settings.max_email_length,
+                # Working hours
                 "working_hours_start": settings.working_hours_start.strftime('%H:%M'),
                 "working_hours_end": settings.working_hours_end.strftime('%H:%M'),
                 "timezone": settings.timezone,
+                # Automation
                 "auto_handoff_score": settings.auto_handoff_score,
                 "max_ai_messages_per_lead": settings.max_ai_messages_per_lead,
                 "is_enabled": settings.is_enabled,
                 "auto_enable_new_leads": settings.auto_enable_new_leads,
                 "qualification_questions": settings.qualification_questions,
                 "custom_scripts": settings.custom_scripts,
+                # Re-engagement
+                "re_engagement_enabled": settings.re_engagement_enabled,
+                "quiet_hours_before_re_engage": settings.quiet_hours_before_re_engage,
+                "re_engagement_max_attempts": settings.re_engagement_max_attempts,
+                "long_term_nurture_after_days": settings.long_term_nurture_after_days,
+                "re_engagement_channels": settings.re_engagement_channels,
+                # Sequence toggles
+                "sequence_sms_enabled": settings.sequence_sms_enabled,
+                "sequence_email_enabled": settings.sequence_email_enabled,
+                "sequence_voice_enabled": settings.sequence_voice_enabled,
+                "sequence_rvm_enabled": settings.sequence_rvm_enabled,
+                "day_0_aggression": settings.day_0_aggression,
+                # Behavior flags
+                "proactive_appointment_enabled": settings.proactive_appointment_enabled,
+                "qualification_questions_enabled": settings.qualification_questions_enabled,
+                # Instant response
+                "instant_response_enabled": settings.instant_response_enabled,
+                "instant_response_max_delay_seconds": settings.instant_response_max_delay_seconds,
+                # NBA scan intervals
+                "nba_hot_lead_scan_interval_minutes": settings.nba_hot_lead_scan_interval_minutes,
+                "nba_cold_lead_scan_interval_minutes": settings.nba_cold_lead_scan_interval_minutes,
                 # LLM Model settings
                 "llm_provider": settings.llm_provider,
                 "llm_model": settings.llm_model,
                 "llm_model_fallback": settings.llm_model_fallback,
+                # FUB Browser Login
+                "fub_login_email": settings.fub_login_email,
+                "fub_login_password": settings.fub_login_password,
+                "fub_login_type": settings.fub_login_type,
                 # Agent notification
                 "notification_fub_person_id": settings.notification_fub_person_id,
                 # Phone number filter

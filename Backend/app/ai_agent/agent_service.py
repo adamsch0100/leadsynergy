@@ -175,7 +175,8 @@ class AgentSettings:
 
     # Response settings
     response_delay_seconds: int = 30  # Delay to feel more human
-    max_response_length: int = 160  # SMS character limit
+    max_sms_length: int = 1000  # Max SMS chars (configurable from frontend)
+    max_email_length: int = 5000  # Max email chars (configurable from frontend)
 
     # Qualification settings
     max_qualification_questions: int = 8
@@ -304,6 +305,9 @@ class AIAgentService:
             self.response_generator.agent_name = settings.agent_name
             self.response_generator.brokerage_name = settings.brokerage_name
             self.response_generator.use_assigned_agent_name = settings.use_assigned_agent_name
+            self.response_generator.max_sms_length = settings.max_sms_length
+            self.response_generator.max_email_length = settings.max_email_length
+            self.tool_executor.max_sms_length = settings.max_sms_length
 
             # Update LLM provider/model settings from database
             if settings.llm_provider:
@@ -377,6 +381,27 @@ class AIAgentService:
             )
 
         try:
+            # Guard: Skip AI if conversation already handed off to human
+            if conversation_context and conversation_context.state == ConversationState.HANDED_OFF:
+                logger.info(f"Conversation already handed off for lead {lead_id} - skipping AI response")
+                return AgentResponse(
+                    response_text="",
+                    result=ProcessingResult.SKIPPED,
+                    error_message="Conversation already handed off to human agent",
+                )
+
+            # Guard: Check message count limit for handoff
+            if conversation_context:
+                should_hand_off, handoff_reason = conversation_context.should_handoff()
+                if should_hand_off:
+                    logger.info(f"Message count handoff for lead {lead_id}: {handoff_reason}")
+                    return AgentResponse(
+                        response_text="",
+                        result=ProcessingResult.HANDOFF_TRIGGERED,
+                        should_handoff=True,
+                        handoff_reason=handoff_reason,
+                    )
+
             # Initialize response
             response = AgentResponse(
                 response_text="",
@@ -478,6 +503,18 @@ class AIAgentService:
                     fub_person_id=fub_person_id,
                 )
 
+            # Step 4.2: Check for deferred follow-up ("call me next month")
+            if detected.primary_intent == Intent.DEFERRED_FOLLOWUP:
+                return await self._handle_deferred_followup(
+                    response=response,
+                    lead_profile=lead_profile,
+                    fub_person_id=fub_person_id,
+                    detected=detected,
+                    conversation_context=conversation_context,
+                    organization_id=organization_id,
+                    start_time=start_time,
+                )
+
             # Step 4.5: Check for channel preference changes (smart routing)
             channel_pref_result = self._handle_channel_preference(detected, response)
             if channel_pref_result:
@@ -540,6 +577,7 @@ class AIAgentService:
 
             # Step 7: Generate AI response
             previous_state = conversation_context.state.value
+            qual_dict = qual_manager.data.to_dict()
             ai_response = await self.response_generator.generate_response(
                 incoming_message=message,
                 conversation_history=conversation_history or [],
@@ -547,9 +585,24 @@ class AIAgentService:
                     "first_name": lead_profile.first_name,
                     "score": lead_profile.score,
                     "source": lead_profile.source,
+                    # Qualification progress
+                    "budget": qual_dict.get("budget"),
+                    "timeline": qual_dict.get("timeline"),
+                    "pre_approved": qual_dict.get("pre_approved"),
+                    "location_preference": qual_dict.get("location"),
+                    "property_type": qual_dict.get("property_type"),
+                    "motivation": qual_dict.get("motivation"),
+                    # Lead profile
+                    "stage_name": lead_profile.stage_name,
+                    "assigned_agent": lead_profile.assigned_agent,
+                    "tags": getattr(lead_profile, 'tags', []),
+                    # Conversation metadata
+                    "messages_exchanged": len(conversation_context.conversation_history),
+                    "current_state": conversation_context.state.value,
+                    "re_engagement_count": getattr(conversation_context, 're_engagement_count', 0),
                 },
                 current_state=conversation_context.state.value,
-                qualification_data=qual_manager.data.to_dict(),
+                qualification_data=qual_dict,
                 lead_profile=lead_profile,
             )
 
@@ -875,6 +928,111 @@ class AIAgentService:
         response.template_used = "opt_out"
 
         logger.info(f"[OPT-OUT] Opt-out complete for person {fub_person_id}")
+        return response
+
+    async def _handle_deferred_followup(
+        self,
+        response: AgentResponse,
+        lead_profile: LeadProfile,
+        fub_person_id: int,
+        detected,
+        conversation_context=None,
+        organization_id: str = None,
+        start_time=None,
+    ) -> AgentResponse:
+        """
+        Handle deferred follow-up request — lead wants contact at a specific future time.
+
+        When a lead says "call me next month" or "reach out in 2 weeks":
+        1. Extract the requested date from the message
+        2. Cancel current follow-up sequence
+        3. Schedule a single re-engagement at the requested date
+        4. Set conversation state to NURTURE
+        5. Send a graceful acknowledgment
+        """
+        logger.info(f"[DEFERRED] Processing deferred follow-up for person {fub_person_id}")
+
+        # 1. Extract the target date from detected entities
+        target_date = None
+        timeframe_text = ""
+        for entity in (detected.entities or []):
+            if entity.entity_type == "deferred_date":
+                target_date = entity.value  # "YYYY-MM-DD" string
+                timeframe_text = entity.raw_text
+                break
+
+        if not target_date:
+            # Fallback: default to 30 days if no date extracted
+            from datetime import timedelta
+            target_date = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")
+            timeframe_text = "about a month"
+
+        logger.info(f"[DEFERRED] Lead {fub_person_id} requested follow-up at {target_date} ('{timeframe_text}')")
+
+        # 2. Cancel current follow-up sequences
+        try:
+            from app.scheduler.ai_tasks import cancel_lead_sequences
+            cancel_lead_sequences.delay(
+                fub_person_id=fub_person_id,
+                reason="deferred_followup_requested"
+            )
+            logger.info(f"[DEFERRED] Cancelled current sequences for person {fub_person_id}")
+        except Exception as e:
+            logger.error(f"[DEFERRED] Error cancelling sequences: {e}")
+
+        # 3. Schedule a re-engagement at the requested date
+        try:
+            if self.supabase:
+                import uuid
+                self.supabase.table("ai_scheduled_followups").insert({
+                    "id": str(uuid.uuid4()),
+                    "fub_person_id": fub_person_id,
+                    "organization_id": organization_id,
+                    "scheduled_at": f"{target_date}T10:00:00Z",  # 10 AM on the target date
+                    "channel": "sms",
+                    "message_type": "deferred_followup",
+                    "sequence_step": 1,
+                    "sequence_id": f"deferred_{fub_person_id}",
+                    "status": "pending",
+                }).execute()
+                logger.info(f"[DEFERRED] Scheduled re-engagement for {target_date}")
+        except Exception as e:
+            logger.error(f"[DEFERRED] Error scheduling re-engagement: {e}")
+
+        # 4. Update conversation state to NURTURE
+        if conversation_context:
+            conversation_context.state = ConversationState.NURTURE
+
+        if self.supabase:
+            try:
+                self.supabase.table("ai_conversations").update({
+                    "state": "nurture",
+                    "handoff_reason": f"Deferred follow-up: {timeframe_text} ({target_date})",
+                }).eq("fub_person_id", fub_person_id).eq("is_active", True).execute()
+            except Exception as e:
+                logger.error(f"[DEFERRED] Error updating conversation state: {e}")
+
+        # 5. Add FUB note
+        try:
+            from app.database.fub_api_client import FUBApiClient
+            fub = FUBApiClient()
+            fub.add_note(
+                person_id=fub_person_id,
+                note_content=f"<b>AI: Deferred Follow-Up</b><br><br>Lead requested follow-up '{timeframe_text}'. Re-engagement scheduled for {target_date}. Current sequences cancelled.",
+            )
+        except Exception as e:
+            logger.error(f"[DEFERRED] Error adding FUB note: {e}")
+
+        # 6. Send graceful acknowledgment
+        agent_name = self.settings.agent_name or "Sarah"
+        response.response_text = f"Absolutely! I'll reach out {timeframe_text}. In the meantime, if anything comes up, don't hesitate to text back. Talk soon!"
+        response.result = ProcessingResult.SUCCESS
+        response.detected_intent = Intent.DEFERRED_FOLLOWUP.value
+        response.template_used = "deferred_followup"
+        if start_time:
+            response.response_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+        logger.info(f"[DEFERRED] Deferred follow-up complete for person {fub_person_id}")
         return response
 
     async def _create_handoff_task(
@@ -1232,14 +1390,18 @@ ACTION REQUIRED: Respond to this lead promptly!
         )
         response.lead_score = current_score.total
 
-        # Check if should suggest scheduling
+        # Check if should suggest scheduling -> immediate handoff to human agent
+        # When a lead is qualified enough for scheduling, hand off to the human
+        # agent rather than having the AI try to book appointments itself.
         if (current_score.total >= self.settings.auto_schedule_score_threshold and
             conversation_context.state == ConversationState.QUALIFYING and
             progress.is_minimally_qualified):
             response.appointment_requested = True
-            conversation_context.state = ConversationState.SCHEDULING
-            response.conversation_state = ConversationState.SCHEDULING.value
+            conversation_context.state = ConversationState.HANDED_OFF
+            response.conversation_state = ConversationState.HANDED_OFF.value
             response.state_changed = True
+            response.should_handoff = True
+            response.handoff_reason = "Lead is qualified and ready for appointment scheduling"
 
         # Check if should auto-handoff due to high score
         if current_score.total >= self.settings.auto_handoff_score_threshold:

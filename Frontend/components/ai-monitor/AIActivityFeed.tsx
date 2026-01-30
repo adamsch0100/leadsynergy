@@ -20,7 +20,11 @@ import {
   ChevronDown,
   ChevronUp,
   RefreshCw,
-  Activity
+  Activity,
+  CalendarCheck,
+  UserX,
+  Lightbulb,
+  ShieldAlert,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -97,6 +101,10 @@ export function AIActivityFeed({
       resumed: Play,
       note_created: FileText,
       note_approved: FileText,
+      deferred_followup_scheduled: CalendarCheck,
+      stale_handoff_detected: UserX,
+      nba_recommendation: Lightbulb,
+      dropped_ball_alert: ShieldAlert,
     }
     return icons[activityType] || Bot
   }
@@ -111,6 +119,10 @@ export function AIActivityFeed({
       resumed: "text-green-600 bg-green-100",
       note_created: "text-cyan-600 bg-cyan-100",
       note_approved: "text-green-600 bg-green-100",
+      deferred_followup_scheduled: "text-blue-600 bg-blue-100",
+      stale_handoff_detected: "text-red-600 bg-red-100",
+      nba_recommendation: "text-yellow-600 bg-yellow-100",
+      dropped_ball_alert: "text-orange-600 bg-orange-100",
     }
     return colors[activityType] || "text-gray-600 bg-gray-100"
   }

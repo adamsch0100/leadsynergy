@@ -460,6 +460,55 @@ class FUBApiClient:
 
         return response.json()
 
+    def get_custom_fields(self) -> List[Dict[str, Any]]:
+        """
+        Get all custom fields defined in FUB.
+
+        Returns:
+            List of custom field dicts with keys: id, label, name, type, choices, isRecurring
+        """
+        url = f"{self.base_url}customFields"
+
+        response = requests.get(url, headers=self.headers)
+        response.raise_for_status()
+
+        result = response.json()
+        return result.get("customFields", result.get("data", []))
+
+    def create_custom_field(
+        self,
+        label: str,
+        field_type: str = "text",
+        choices: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a custom field in FUB.
+
+        Note: Requires account owner access.
+
+        Args:
+            label: Display name for the field (e.g., "AI - Timeline")
+            field_type: One of: text, number, date, dropdown
+            choices: List of choices for dropdown fields
+
+        Returns:
+            Created custom field data from FUB
+        """
+        url = f"{self.base_url}customFields"
+
+        data: Dict[str, Any] = {
+            "label": label,
+            "type": field_type,
+        }
+
+        if choices and field_type == "dropdown":
+            data["choices"] = choices
+
+        response = requests.post(url, headers=self.headers, json=data)
+        response.raise_for_status()
+
+        return response.json()
+
     def update_person(self, person_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update a person's data in FUB.

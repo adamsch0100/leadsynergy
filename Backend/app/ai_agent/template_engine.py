@@ -80,7 +80,7 @@ class MessageTemplate:
     variables: List[str]  # Variable names used
     conditions: Dict[str, Any] = field(default_factory=dict)  # When to use
     temperature: Optional[LeadTemperature] = None
-    max_chars: int = 160
+    max_chars: int = 1000
     tags: List[str] = field(default_factory=list)
 
     def render(

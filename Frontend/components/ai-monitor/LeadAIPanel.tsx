@@ -26,7 +26,10 @@ import {
   User,
   Clock,
   TrendingUp,
-  X
+  X,
+  CheckCircle,
+  Circle,
+  CalendarCheck,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ConversationTimeline } from "./ConversationTimeline"
@@ -215,6 +218,8 @@ export function LeadAIPanel({
       completed: "bg-gray-100 text-gray-700",
       escalated: "bg-red-100 text-red-700",
       nurturing: "bg-cyan-100 text-cyan-700",
+      nurture: "bg-cyan-100 text-cyan-700",
+      objection_handling: "bg-orange-100 text-orange-700",
     }
     return colors[state] || "bg-gray-100 text-gray-700"
   }
@@ -381,23 +386,84 @@ export function LeadAIPanel({
               <TabsContent value="data" className="flex-1 overflow-hidden">
                 <ScrollArea className="h-[calc(100vh-400px)]">
                   <div className="space-y-4 py-2">
-                    {/* Extracted Data */}
-                    <div>
-                      <h4 className="text-sm font-medium mb-2">Extracted Data</h4>
-                      {data.conversation?.qualification_data ? (
-                        <div className="bg-muted/50 rounded-lg p-3 space-y-2">
-                          {Object.entries(data.conversation.qualification_data).map(([key, value]) => (
-                            <div key={key} className="flex items-center justify-between text-sm">
-                              <span className="text-muted-foreground capitalize">
-                                {key.replace(/_/g, ' ')}
-                              </span>
-                              <span className="font-medium">
-                                {typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)}
-                              </span>
-                            </div>
-                          ))}
+                    {/* Stale Handoff Warning */}
+                    {data.summary.state === 'handed_off' && data.conversation?.updated_at && (() => {
+                      const hoursAgo = (Date.now() - new Date(data.conversation.updated_at).getTime()) / 3600000
+                      return hoursAgo >= 48 ? (
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+                          <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+                          <div>
+                            <p className="text-sm font-medium text-red-800">Stale Handoff</p>
+                            <p className="text-xs text-red-600">
+                              Handed off {Math.round(hoursAgo)} hours ago with no agent follow-up
+                            </p>
+                          </div>
                         </div>
-                      ) : (
+                      ) : null
+                    })()}
+
+                    {/* Deferred Follow-up Notice */}
+                    {data.summary.state === 'nurture' && data.conversation?.scheduled_followup_at && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-start gap-2">
+                        <CalendarCheck className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-blue-800">Follow-up Scheduled</p>
+                          <p className="text-xs text-blue-600">
+                            Re-engagement on {new Date(data.conversation.scheduled_followup_at).toLocaleDateString('en-US', {
+                              weekday: 'long', month: 'long', day: 'numeric'
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Qualification Progress */}
+                    <div>
+                      <h4 className="text-sm font-medium mb-2">Qualification Progress</h4>
+                      {data.conversation?.qualification_data ? (() => {
+                        const qd = data.conversation.qualification_data
+                        const fields = [
+                          { key: 'timeline', label: 'Timeline' },
+                          { key: 'budget', label: 'Budget' },
+                          { key: 'location', label: 'Location' },
+                          { key: 'pre_approved', label: 'Pre-approved' },
+                          { key: 'property_type', label: 'Property Type' },
+                          { key: 'motivation', label: 'Motivation' },
+                          { key: 'transaction_type', label: 'Transaction Type' },
+                        ]
+                        const collected = fields.filter(f => qd[f.key] != null).length
+                        return (
+                          <div className="bg-muted/50 rounded-lg p-3 space-y-2">
+                            <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                              <span>{collected}/{fields.length} fields collected</span>
+                              <span>{Math.round((collected / fields.length) * 100)}%</span>
+                            </div>
+                            <div className="h-2 bg-muted rounded-full overflow-hidden mb-3">
+                              <div
+                                className="h-full bg-primary rounded-full transition-all"
+                                style={{ width: `${(collected / fields.length) * 100}%` }}
+                              />
+                            </div>
+                            {fields.map(f => (
+                              <div key={f.key} className="flex items-center gap-2 text-sm">
+                                {qd[f.key] != null ? (
+                                  <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                                ) : (
+                                  <Circle className="h-4 w-4 text-muted-foreground/40 shrink-0" />
+                                )}
+                                <span className={qd[f.key] != null ? "" : "text-muted-foreground"}>
+                                  {f.label}
+                                </span>
+                                {qd[f.key] != null && (
+                                  <span className="ml-auto text-xs text-muted-foreground truncate max-w-[120px]">
+                                    {typeof qd[f.key] === 'boolean' ? (qd[f.key] ? 'Yes' : 'No') : String(qd[f.key])}
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })() : (
                         <p className="text-sm text-muted-foreground">No data extracted yet</p>
                       )}
                     </div>

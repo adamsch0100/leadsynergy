@@ -7,7 +7,7 @@ celery = Celery(
     'tasks',
     broker=redis_url,
     backend=redis_url,
-    include=['app.scheduler.tasks'],
+    include=['app.scheduler.tasks', 'app.scheduler.ai_tasks'],
 )
 # crontab(hour=9, minute=0, day_of_week='fri')
 # crontab(hour=9, minute=15, day_of_week='fri') -> notes
@@ -33,6 +33,16 @@ celery.conf.beat_schedule = {
     'process_off_hours_queue': {
         'task': 'app.scheduler.ai_tasks.process_off_hours_queue',
         'schedule': crontab(minute='*/5', hour='15-17'),  # 8-10 AM MT = 15-17 UTC
+    },
+    # NBA scan: find new leads, silent leads, dormant leads, stale handoffs
+    'run_nba_scan': {
+        'task': 'app.scheduler.ai_tasks.run_nba_scan_task',
+        'schedule': crontab(minute='*/15'),  # Every 15 minutes
+    },
+    # Process pending scheduled messages (follow-up sequences, deferred messages)
+    'process_pending_messages': {
+        'task': 'app.scheduler.ai_tasks.process_pending_messages',
+        'schedule': crontab(minute='*/5'),  # Every 5 minutes
     },
 }
 

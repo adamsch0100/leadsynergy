@@ -704,7 +704,24 @@ class ReferralExchangeService(BaseReferralService):
                     if self.find_and_click_customer_by_name(lead_name, self.status):
                         # Get comment from @update notes if available
                         lead_comment = comments.get(lead.id)
-                        if lead_comment:
+                        # Auto-extract @update from FUB notes if not provided
+                        if not lead_comment and getattr(lead, 'fub_person_id', None):
+                            try:
+                                from app.utils.update_note_extractor import UpdateNoteExtractor
+                                from app.database.fub_api_client import FUBApiClient
+                                fub_client = FUBApiClient()
+                                notes = fub_client.get_notes_for_person(lead.fub_person_id)
+                                extractor = UpdateNoteExtractor()
+                                update = extractor.get_update_for_platform(
+                                    notes, "referralexchange",
+                                    lead_metadata=lead.metadata or {}
+                                )
+                                if update:
+                                    lead_comment = update
+                                    print(f"[UPDATE] Auto-extracted @update from FUB for {lead_name}: {lead_comment[:50]}...")
+                            except Exception as e:
+                                print(f"[WARNING] Could not extract @update note: {e}")
+                        elif lead_comment:
                             print(f"[UPDATE] Using @update comment for {lead_name}: {lead_comment[:50]}...")
 
                         if self.update_customers(comment=lead_comment):

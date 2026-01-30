@@ -78,11 +78,20 @@ def get_settings():
                 "brokerage_name": settings.brokerage_name,
                 "team_members": settings.team_members,
                 "personality_tone": settings.personality_tone,
+                # Response timing
                 "response_delay_seconds": settings.response_delay_seconds,
-                "max_response_length": settings.max_response_length,
+                "response_delay_min_seconds": settings.response_delay_min_seconds,
+                "response_delay_max_seconds": settings.response_delay_max_seconds,
+                "first_message_delay_min": settings.first_message_delay_min,
+                "first_message_delay_max": settings.first_message_delay_max,
+                # Message limits
+                "max_sms_length": settings.max_sms_length,
+                "max_email_length": settings.max_email_length,
+                # Working hours
                 "working_hours_start": settings.working_hours_start.strftime('%H:%M'),
                 "working_hours_end": settings.working_hours_end.strftime('%H:%M'),
                 "timezone": settings.timezone,
+                # Automation
                 "auto_handoff_score": settings.auto_handoff_score,
                 "max_ai_messages_per_lead": settings.max_ai_messages_per_lead,
                 "is_enabled": settings.is_enabled,
@@ -95,6 +104,21 @@ def get_settings():
                 "re_engagement_max_attempts": settings.re_engagement_max_attempts,
                 "long_term_nurture_after_days": settings.long_term_nurture_after_days,
                 "re_engagement_channels": settings.re_engagement_channels,
+                # Sequence settings
+                "sequence_sms_enabled": settings.sequence_sms_enabled,
+                "sequence_email_enabled": settings.sequence_email_enabled,
+                "sequence_voice_enabled": settings.sequence_voice_enabled,
+                "sequence_rvm_enabled": settings.sequence_rvm_enabled,
+                "day_0_aggression": settings.day_0_aggression,
+                # Behavior flags
+                "proactive_appointment_enabled": settings.proactive_appointment_enabled,
+                "qualification_questions_enabled": settings.qualification_questions_enabled,
+                # Instant response
+                "instant_response_enabled": settings.instant_response_enabled,
+                "instant_response_max_delay_seconds": settings.instant_response_max_delay_seconds,
+                # NBA intervals
+                "nba_hot_lead_scan_interval_minutes": settings.nba_hot_lead_scan_interval_minutes,
+                "nba_cold_lead_scan_interval_minutes": settings.nba_cold_lead_scan_interval_minutes,
                 # LLM Model settings
                 "llm_provider": settings.llm_provider,
                 "llm_model": settings.llm_model,
@@ -153,8 +177,13 @@ def update_settings():
             current_settings.personality_tone = data['personality_tone']
         if 'response_delay_seconds' in data:
             current_settings.response_delay_seconds = int(data['response_delay_seconds'])
-        if 'max_response_length' in data:
-            current_settings.max_response_length = int(data['max_response_length'])
+        if 'max_sms_length' in data:
+            current_settings.max_sms_length = int(data['max_sms_length'])
+        if 'max_email_length' in data:
+            current_settings.max_email_length = int(data['max_email_length'])
+        # Backward compat: accept old field name too
+        if 'max_response_length' in data and 'max_sms_length' not in data:
+            current_settings.max_sms_length = int(data['max_response_length'])
         if 'working_hours_start' in data:
             parts = data['working_hours_start'].split(':')
             current_settings.working_hours_start = time(int(parts[0]), int(parts[1]))
@@ -189,6 +218,43 @@ def update_settings():
         # Team members
         if 'team_members' in data:
             current_settings.team_members = data['team_members']
+        # Sequence settings
+        if 'sequence_sms_enabled' in data:
+            current_settings.sequence_sms_enabled = bool(data['sequence_sms_enabled'])
+        if 'sequence_email_enabled' in data:
+            current_settings.sequence_email_enabled = bool(data['sequence_email_enabled'])
+        if 'sequence_voice_enabled' in data:
+            current_settings.sequence_voice_enabled = bool(data['sequence_voice_enabled'])
+        if 'sequence_rvm_enabled' in data:
+            current_settings.sequence_rvm_enabled = bool(data['sequence_rvm_enabled'])
+        if 'day_0_aggression' in data:
+            valid_levels = ['aggressive', 'moderate', 'conservative']
+            if data['day_0_aggression'] in valid_levels:
+                current_settings.day_0_aggression = data['day_0_aggression']
+        # Behavior flags
+        if 'proactive_appointment_enabled' in data:
+            current_settings.proactive_appointment_enabled = bool(data['proactive_appointment_enabled'])
+        if 'qualification_questions_enabled' in data:
+            current_settings.qualification_questions_enabled = bool(data['qualification_questions_enabled'])
+        # Instant response
+        if 'instant_response_enabled' in data:
+            current_settings.instant_response_enabled = bool(data['instant_response_enabled'])
+        if 'instant_response_max_delay_seconds' in data:
+            current_settings.instant_response_max_delay_seconds = int(data['instant_response_max_delay_seconds'])
+        # NBA intervals
+        if 'nba_hot_lead_scan_interval_minutes' in data:
+            current_settings.nba_hot_lead_scan_interval_minutes = int(data['nba_hot_lead_scan_interval_minutes'])
+        if 'nba_cold_lead_scan_interval_minutes' in data:
+            current_settings.nba_cold_lead_scan_interval_minutes = int(data['nba_cold_lead_scan_interval_minutes'])
+        # Timing fine-tuning
+        if 'response_delay_min_seconds' in data:
+            current_settings.response_delay_min_seconds = int(data['response_delay_min_seconds'])
+        if 'response_delay_max_seconds' in data:
+            current_settings.response_delay_max_seconds = int(data['response_delay_max_seconds'])
+        if 'first_message_delay_min' in data:
+            current_settings.first_message_delay_min = int(data['first_message_delay_min'])
+        if 'first_message_delay_max' in data:
+            current_settings.first_message_delay_max = int(data['first_message_delay_max'])
         # LLM Model settings
         if 'llm_provider' in data:
             current_settings.llm_provider = data['llm_provider']

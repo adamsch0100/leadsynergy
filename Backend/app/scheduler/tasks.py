@@ -510,7 +510,7 @@ def send_appointment_reminder(
         sms_service = FUBSMSServiceSingleton.get_instance()
         result = asyncio.run(sms_service.send_text_message_async(
             person_id=fub_person_id,
-            message=message[:160],
+            message=message,
         ))
 
         if result.get("success"):

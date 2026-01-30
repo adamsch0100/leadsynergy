@@ -39,10 +39,10 @@ import type { User } from "@supabase/supabase-js"
 
 interface AISettings {
   is_enabled: boolean
-  auto_enable_new_leads: boolean  // Auto-enable AI for new leads
+  auto_enable_new_leads: boolean
   agent_name: string
   brokerage_name: string
-  team_members: string  // Human agent names (e.g., "Adam and Mandi")
+  team_members: string
   personality_tone: string
   working_hours_start: string
   working_hours_end: string
@@ -60,7 +60,22 @@ interface AISettings {
   // Agent Notification
   notification_fub_person_id: number | null
   // Phone Number Filter
-  ai_respond_to_phone_numbers: string[]  // List of FUB phone numbers to respond to (empty = all)
+  ai_respond_to_phone_numbers: string[]
+  // Message limits
+  max_sms_length: number
+  max_email_length: number
+  // Sequence settings
+  sequence_sms_enabled: boolean
+  sequence_email_enabled: boolean
+  day_0_aggression: string
+  // Re-engagement
+  re_engagement_enabled: boolean
+  quiet_hours_before_re_engage: number
+  re_engagement_max_attempts: number
+  long_term_nurture_after_days: number
+  // Instant response
+  instant_response_enabled: boolean
+  instant_response_max_delay_seconds: number
 }
 
 interface FUBLoginSettings {
@@ -101,6 +116,21 @@ const DEFAULT_SETTINGS: AISettings = {
   notification_fub_person_id: null,
   // Phone Number Filter
   ai_respond_to_phone_numbers: [],
+  // Message limits
+  max_sms_length: 1000,
+  max_email_length: 5000,
+  // Sequence settings
+  sequence_sms_enabled: true,
+  sequence_email_enabled: true,
+  day_0_aggression: "aggressive",
+  // Re-engagement
+  re_engagement_enabled: true,
+  quiet_hours_before_re_engage: 24,
+  re_engagement_max_attempts: 3,
+  long_term_nurture_after_days: 7,
+  // Instant response
+  instant_response_enabled: true,
+  instant_response_max_delay_seconds: 60,
 }
 
 // Available LLM Models (OpenRouter)
@@ -570,7 +600,7 @@ export default function AISettingsPage() {
       )}
 
       <Tabs defaultValue="identity" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="identity" className="flex items-center gap-2">
             <Sparkles className="h-4 w-4" />
             Identity
@@ -578,6 +608,10 @@ export default function AISettingsPage() {
           <TabsTrigger value="behavior" className="flex items-center gap-2">
             <Settings2 className="h-4 w-4" />
             Behavior
+          </TabsTrigger>
+          <TabsTrigger value="sequences" className="flex items-center gap-2">
+            <Send className="h-4 w-4" />
+            Sequences
           </TabsTrigger>
           <TabsTrigger value="schedule" className="flex items-center gap-2">
             <Clock className="h-4 w-4" />
@@ -1011,6 +1045,181 @@ export default function AISettingsPage() {
                     </p>
                   </AlertDescription>
                 </Alert>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* Sequences & Follow-Up Tab */}
+        <TabsContent value="sequences">
+          <div className="grid gap-6 md:grid-cols-2">
+            {/* Message Limits */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Message Limits</CardTitle>
+                <CardDescription>Maximum character lengths for AI-generated messages</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="max_sms_length">Max SMS Length (characters)</Label>
+                  <Input
+                    id="max_sms_length"
+                    type="number"
+                    min={100}
+                    max={5000}
+                    value={settings.max_sms_length}
+                    onChange={(e) => setSettings({ ...settings, max_sms_length: parseInt(e.target.value) || 1000 })}
+                  />
+                  <p className="text-xs text-muted-foreground">Recommended: 1000. Standard SMS is 160 chars but FUB supports longer.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="max_email_length">Max Email Length (characters)</Label>
+                  <Input
+                    id="max_email_length"
+                    type="number"
+                    min={500}
+                    max={20000}
+                    value={settings.max_email_length}
+                    onChange={(e) => setSettings({ ...settings, max_email_length: parseInt(e.target.value) || 5000 })}
+                  />
+                  <p className="text-xs text-muted-foreground">Recommended: 5000. Keep emails concise but substantive.</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Follow-Up Sequences */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Follow-Up Channels</CardTitle>
+                <CardDescription>Which channels to use in automated follow-up sequences</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>SMS in Sequences</Label>
+                    <p className="text-xs text-muted-foreground">Send follow-up text messages</p>
+                  </div>
+                  <Switch
+                    checked={settings.sequence_sms_enabled}
+                    onCheckedChange={(checked) => setSettings({ ...settings, sequence_sms_enabled: checked })}
+                  />
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Email in Sequences</Label>
+                    <p className="text-xs text-muted-foreground">Send follow-up emails</p>
+                  </div>
+                  <Switch
+                    checked={settings.sequence_email_enabled}
+                    onCheckedChange={(checked) => setSettings({ ...settings, sequence_email_enabled: checked })}
+                  />
+                </div>
+                <Separator />
+                <div className="space-y-2">
+                  <Label>Day 0 Follow-Up Intensity</Label>
+                  <Select
+                    value={settings.day_0_aggression}
+                    onValueChange={(value) => setSettings({ ...settings, day_0_aggression: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="aggressive">Aggressive (4 touches on Day 0)</SelectItem>
+                      <SelectItem value="moderate">Moderate (2-3 touches on Day 0)</SelectItem>
+                      <SelectItem value="conservative">Conservative (1 touch on Day 0)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">How many messages to send on the first day. Research shows quick follow-up increases conversion 21x.</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Re-Engagement */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Re-Engagement</CardTitle>
+                <CardDescription>Automatically re-engage leads who go quiet</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Auto Re-Engage Quiet Leads</Label>
+                    <p className="text-xs text-muted-foreground">Restart follow-up when leads stop responding</p>
+                  </div>
+                  <Switch
+                    checked={settings.re_engagement_enabled}
+                    onCheckedChange={(checked) => setSettings({ ...settings, re_engagement_enabled: checked })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="quiet_hours">Hours Before Re-Engagement</Label>
+                  <Input
+                    id="quiet_hours"
+                    type="number"
+                    min={6}
+                    max={168}
+                    value={settings.quiet_hours_before_re_engage}
+                    onChange={(e) => setSettings({ ...settings, quiet_hours_before_re_engage: parseInt(e.target.value) || 24 })}
+                  />
+                  <p className="text-xs text-muted-foreground">Hours of silence before starting re-engagement</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="max_attempts">Max Re-Engagement Attempts</Label>
+                  <Input
+                    id="max_attempts"
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={settings.re_engagement_max_attempts}
+                    onChange={(e) => setSettings({ ...settings, re_engagement_max_attempts: parseInt(e.target.value) || 3 })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nurture_days">Days Before Long-Term Nurture</Label>
+                  <Input
+                    id="nurture_days"
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={settings.long_term_nurture_after_days}
+                    onChange={(e) => setSettings({ ...settings, long_term_nurture_after_days: parseInt(e.target.value) || 7 })}
+                  />
+                  <p className="text-xs text-muted-foreground">Switch to low-frequency nurture after this many days</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Speed-to-Lead */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Speed-to-Lead</CardTitle>
+                <CardDescription>How fast the AI responds to new leads</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Instant Response for New Leads</Label>
+                    <p className="text-xs text-muted-foreground">Respond within seconds to new lead inquiries</p>
+                  </div>
+                  <Switch
+                    checked={settings.instant_response_enabled}
+                    onCheckedChange={(checked) => setSettings({ ...settings, instant_response_enabled: checked })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="instant_delay">Max Instant Response Delay (seconds)</Label>
+                  <Input
+                    id="instant_delay"
+                    type="number"
+                    min={5}
+                    max={300}
+                    value={settings.instant_response_max_delay_seconds}
+                    onChange={(e) => setSettings({ ...settings, instant_response_max_delay_seconds: parseInt(e.target.value) || 60 })}
+                  />
+                  <p className="text-xs text-muted-foreground">Max seconds before responding to a brand new lead. MIT research: 5-minute response = 21x higher conversion.</p>
+                </div>
               </CardContent>
             </Card>
           </div>

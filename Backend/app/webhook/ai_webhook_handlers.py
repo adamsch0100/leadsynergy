@@ -1542,7 +1542,7 @@ CONVERSATION HISTORY:
 {history_str}
 
 RULES:
-- Keep responses under 160 characters for SMS
+- Be substantive and conversational for SMS
 - Ask ONE question at a time
 - Never pressure or use urgency tactics
 - If lead seems frustrated, asks for human, or uses profanity, set should_handoff to true
@@ -1822,10 +1822,12 @@ async def log_ai_message(
     lead_score_delta: int = 0,
     extracted_data: Dict[str, Any] = None,
     intent_detected: str = None,
+    tokens_used: int = None,
+    response_time_ms: int = None,
 ):
     """Log an AI message for analytics and auditing."""
     try:
-        supabase.table("ai_message_log").insert({
+        row = {
             "id": str(uuid.uuid4()),
             "conversation_id": conversation_id,
             "fub_person_id": fub_person_id,
@@ -1836,7 +1838,12 @@ async def log_ai_message(
             "lead_score_delta": lead_score_delta,
             "extracted_data": extracted_data or {},
             "intent_detected": intent_detected,
-        }).execute()
+        }
+        if tokens_used is not None:
+            row["tokens_used"] = tokens_used
+        if response_time_ms is not None:
+            row["response_time_ms"] = response_time_ms
+        supabase.table("ai_message_log").insert(row).execute()
     except Exception as e:
         logger.error(f"Error logging AI message: {e}")
 

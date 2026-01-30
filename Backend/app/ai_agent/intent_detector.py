@@ -88,6 +88,9 @@ class Intent(Enum):
     PROPERTY_QUESTION = "property_question"         # Question about a listing
     SHOWING_REQUEST = "showing_request"             # Wants to see a property
 
+    # Deferred follow-up — lead wants contact at a specific future time
+    DEFERRED_FOLLOWUP = "deferred_followup"         # "Call me next month", "reach out in 2 weeks"
+
     # Fallback
     UNKNOWN = "unknown"                             # Could not determine
 
@@ -312,7 +315,18 @@ class PatternMatcher:
             (r'\b(working with someone|already represented|have representation)\b',
              Intent.OBJECTION_OTHER_AGENT, 0.9, None),
 
-            # Objection - Not ready
+            # Deferred follow-up — lead wants contact at a specific future time
+            # These must come BEFORE OBJECTION_NOT_READY to match the more specific intent
+            (r'\b(call|text|reach out|contact|follow up|check back|get back to) (me )?(in|next|after) \w+',
+             Intent.DEFERRED_FOLLOWUP, 0.9, 'deferred_date'),
+            (r'\b(try (me )?again|hit me up|circle back) (in|next|after) \w+',
+             Intent.DEFERRED_FOLLOWUP, 0.85, 'deferred_date'),
+            (r'\bnot (right )?now[,.]* (but )?(maybe |try )?(in|next|after) \w+',
+             Intent.DEFERRED_FOLLOWUP, 0.85, 'deferred_date'),
+            (r'\b(let\'?s (talk|connect|chat) (in|next|after)|after the holidays|after (christmas|thanksgiving|new year))',
+             Intent.DEFERRED_FOLLOWUP, 0.85, 'deferred_date'),
+
+            # Objection - Not ready (generic "not now" without a specific time)
             (r'\b(not ready|not (quite )?there yet|need (more )?time|not (right )?now)\b',
              Intent.OBJECTION_NOT_READY, 0.85, None),
             (r'\b(maybe later|down the (road|line)|some(day|time))\b',
@@ -637,6 +651,48 @@ class EntityExtractor:
         return None
 
     @classmethod
+    def extract_deferred_date(cls, text: str) -> Optional[ExtractedEntity]:
+        """Extract a deferred follow-up date from text like 'call me next month' or 'in 2 weeks'."""
+        from datetime import datetime, timedelta
+        text_lower = text.lower()
+
+        # Map relative time expressions to approximate days
+        time_mappings = {
+            # "in X weeks/months"
+            r'in (\d+) weeks?': lambda m: int(m.group(1)) * 7,
+            r'in (\d+) months?': lambda m: int(m.group(1)) * 30,
+            r'in (\d+) days?': lambda m: int(m.group(1)),
+            r'in a (week|couple weeks)': lambda m: 7 if 'couple' not in m.group(0) else 14,
+            r'in a (month|couple months)': lambda m: 30 if 'couple' not in m.group(0) else 60,
+            # "next week/month"
+            r'next week': lambda m: 7,
+            r'next month': lambda m: 30,
+            r'next (spring|summer|fall|winter)': lambda m: 90,
+            # "after" holidays
+            r'after (the )?holidays': lambda m: 30,
+            r'after (christmas|thanksgiving|new year)': lambda m: 30,
+            # "a few weeks/months"
+            r'(a )?few weeks': lambda m: 21,
+            r'(a )?few months': lambda m: 90,
+            r'(a )?couple (of )?weeks': lambda m: 14,
+            r'(a )?couple (of )?months': lambda m: 60,
+        }
+
+        for pattern, days_fn in time_mappings.items():
+            match = re.search(pattern, text_lower)
+            if match:
+                days = days_fn(match)
+                target_date = datetime.utcnow() + timedelta(days=days)
+                return ExtractedEntity(
+                    entity_type="deferred_date",
+                    value=target_date.strftime("%Y-%m-%d"),
+                    raw_text=match.group(0),
+                    confidence=0.85,
+                )
+
+        return None
+
+    @classmethod
     def extract_all(cls, text: str) -> List[ExtractedEntity]:
         """Extract all entities from text."""
         entities = []
@@ -649,6 +705,7 @@ class EntityExtractor:
             cls.extract_property_type,
             cls.extract_time_slot_selection,
             cls.extract_channel_preference,
+            cls.extract_deferred_date,
         ]
 
         for extractor in extractors:

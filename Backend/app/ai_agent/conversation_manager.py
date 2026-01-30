@@ -144,6 +144,10 @@ class ConversationContext:
             "lead_source": self.lead_source,
         }
 
+    # Keep only the last N messages in JSONB to prevent unbounded growth.
+    # Full audit trail lives in ai_message_log table (individual rows, indexed).
+    MAX_STORED_MESSAGES = 50
+
     def add_message(self, direction: str, content: str, channel: str = "sms"):
         """Add a message to conversation history."""
         self.conversation_history.append({
@@ -152,6 +156,9 @@ class ConversationContext:
             "channel": channel,
             "timestamp": datetime.utcnow().isoformat(),
         })
+        # Truncate to prevent JSONB bloat — full history is in ai_message_log
+        if len(self.conversation_history) > self.MAX_STORED_MESSAGES:
+            self.conversation_history = self.conversation_history[-self.MAX_STORED_MESSAGES:]
 
         if direction == "outbound":
             self.last_ai_message_at = datetime.utcnow()

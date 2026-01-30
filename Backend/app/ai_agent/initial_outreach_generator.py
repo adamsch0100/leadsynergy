@@ -271,7 +271,7 @@ class InitialOutreachGenerator:
 CRITICAL RULES:
 1. Be warm, conversational, and human - NOT salesy or pushy
 2. Reference specific details about the lead (location, timeline, price range if known) to show you paid attention
-3. Keep SMS under 160 characters if possible, max 300 characters
+3. Be substantive and personal in SMS — reference their situation specifically.
 4. Match the urgency to their timeline (immediate = ready to help now, 6-12 months = no pressure)
 5. NEVER use generic phrases like "I saw your inquiry" - be specific about WHERE they came from
 6. Don't oversell or make promises - just start a friendly conversation
@@ -326,7 +326,7 @@ SOURCE-SPECIFIC TONE:
 SMS RULES:
 - Super casual and brief - email handles the full intro
 - End with a simple question they can easily answer
-- Under 160 chars ideal, max 300
+- Warm and substantive
 - Can mention you're also sending an email with more info
 - DO NOT ask buyer/seller if Lead Type is known!
 
@@ -459,7 +459,7 @@ TONE GUIDE by timeline:
         friendly_source = lead_context.get_friendly_source()
         user_prompt = f"""Based on this lead information, generate a world-class initial outreach:
 
-1. SMS: Short, casual, ends with easy question (under 160 chars ideal, max 300)
+1. SMS: Warm, substantive, ends with easy question
 2. Email subject: Personal, specific to them, not generic
 3. Email body: COMPLETE HTML email with ALL required sections:
    - Greeting ("Hey [Name]!")

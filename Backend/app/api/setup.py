@@ -76,9 +76,38 @@ def setup_fub_api_key():
         # Don't fail the API key setup if team provisioning fails
         team_result = {"error": str(e), "provisioned_count": 0}
 
+    # Auto-create AI custom fields in FUB
+    custom_fields_result = None
+    try:
+        from app.ai_agent.crm_sync_service import CRMSyncService
+        from app.database.fub_api_client import FUBApiClient
+
+        fub_client = FUBApiClient(api_key=api_key)
+        crm_service = CRMSyncService(fub_client=fub_client)
+
+        org_id = organization_id if 'organization_id' in dir() else None
+        loop2 = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop2)
+        custom_fields_result = loop2.run_until_complete(
+            crm_service.auto_create_missing_fields(organization_id=org_id)
+        )
+        loop2.close()
+
+        created_count = len(custom_fields_result.get("created", []))
+        existing_count = len(custom_fields_result.get("existing", []))
+        failed_count = len(custom_fields_result.get("failed", []))
+        logger.info(
+            f"Custom fields for user {user_id}: "
+            f"{created_count} created, {existing_count} existed, {failed_count} failed"
+        )
+    except Exception as e:
+        logger.error(f"Error creating custom fields: {e}")
+        custom_fields_result = {"error": str(e)}
+
     return jsonify({
         "message": "FUB API key configured successfully",
-        "team_provisioned": team_result
+        "team_provisioned": team_result,
+        "custom_fields": custom_fields_result,
     })
 
 @setup_bp.route('/fub-api-key-status', methods=['GET'])

@@ -529,35 +529,85 @@ class RedfinService(BaseReferralService):
                     print("[Google 2FA] Clicked 'Try another way'")
                     self.wis.human_delay(2, 3)
 
-                    # Now look for email verification option
+                    # Now look for email verification option specifically
+                    # Google shows multiple options like:
+                    #   "Get a verification code at (***) ***-1234" (SMS - DO NOT select)
+                    #   "Get a verification code at a****@s******.com" (Email - SELECT THIS)
+                    # We need to find the one with "@" (email address indicator)
                     page_source = self.driver_service.driver.page_source.lower()
 
-                    # Try to find and click email verification option
-                    email_option_selectors = [
-                        '//div[contains(text(), "email")]',
-                        '//li[contains(text(), "email")]',
-                        '//span[contains(text(), "Get a verification code")]',
-                        '//div[contains(text(), "Get a verification code")]',
+                    # First try Google's internal data attributes for email challenge
+                    email_option = None
+                    email_specific_selectors = [
                         '[data-challengetype="12"]',  # Email challenge type
                         '[data-sendmethod="EMAIL"]',
                     ]
 
-                    email_option = None
-                    for selector in email_option_selectors:
+                    for selector in email_specific_selectors:
                         try:
-                            if selector.startswith('//'):
-                                email_option = self.driver_service.find_element(By.XPATH, selector)
-                            else:
-                                email_option = self.driver_service.find_element(By.CSS_SELECTOR, selector)
+                            email_option = self.driver_service.find_element(By.CSS_SELECTOR, selector)
                             if email_option:
+                                print(f"[Google 2FA] Found email option via: {selector}")
                                 break
                         except:
                             continue
+
+                    # If data attributes didn't work, find all "Get a verification code" options
+                    # and pick the one containing "@" (email) rather than phone number
+                    if not email_option:
+                        try:
+                            all_options = self.driver_service.find_elements(
+                                By.XPATH, "//*[contains(text(), 'verification code') or contains(text(), 'Verification code')]"
+                            )
+                            print(f"[Google 2FA] Found {len(all_options)} verification options")
+                            for opt in all_options:
+                                opt_text = opt.text.strip()
+                                print(f"[Google 2FA]   Option: '{opt_text}'")
+                                # Select the one with "@" (email address)
+                                if "@" in opt_text:
+                                    email_option = opt
+                                    print(f"[Google 2FA] Found EMAIL option (contains @): '{opt_text}'")
+                                    break
+                            # If no "@" option found, try to find any option with "email" text
+                            if not email_option:
+                                for opt in all_options:
+                                    opt_text = opt.text.strip().lower()
+                                    if "email" in opt_text:
+                                        email_option = opt
+                                        print(f"[Google 2FA] Found email option by text")
+                                        break
+                        except Exception as e:
+                            print(f"[Google 2FA] Error finding options: {e}")
+
+                    # Fallback: try broader selectors
+                    if not email_option:
+                        fallback_selectors = [
+                            '//div[contains(text(), "email")]',
+                            '//li[contains(text(), "email")]',
+                            '//li[contains(text(), "@")]',
+                            '//div[contains(text(), "@")]',
+                        ]
+                        for selector in fallback_selectors:
+                            try:
+                                email_option = self.driver_service.find_element(By.XPATH, selector)
+                                if email_option:
+                                    print(f"[Google 2FA] Found email option via fallback: {selector}")
+                                    break
+                            except:
+                                continue
 
                     if email_option:
                         self.driver_service.safe_click(email_option)
                         print("[Google 2FA] Selected email verification option")
                         self.wis.human_delay(3, 5)
+                    else:
+                        print("[Google 2FA] WARNING: Could not find email-specific verification option")
+                        print("[Google 2FA] Page text (first 500 chars):")
+                        try:
+                            body = self.driver_service.driver.find_element(By.TAG_NAME, "body")
+                            print(f"[Google 2FA] {body.text[:500]}")
+                        except:
+                            pass
 
             # Check if we have 2FA credentials
             if not self.twofa_email or not self.twofa_app_password:

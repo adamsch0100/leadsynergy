@@ -351,15 +351,21 @@ class CRMSyncService:
         # Default: convert to string
         return str(value)
 
+    # Dropdown choices for custom fields
+    DROPDOWN_CHOICES = {
+        "ai_timeline": ["30_days", "60_days", "90_days", "6_months", "1_year", "just_looking"],
+        "ai_motivation": ["upgrading", "downsize", "relocating", "investing", "first_home", "other"],
+        "ai_preapproval": ["yes", "no", "pending", "not_asked"],
+        "ai_property_type": ["single_family", "condo", "townhouse", "multi_family", "land", "other"],
+        "ai_conv_state": ["initial", "qualifying", "objection_handling", "scheduling", "nurture", "handed_off", "completed"],
+    }
+
     async def ensure_custom_fields_exist(
         self,
         organization_id: str,
     ) -> Dict[str, Any]:
         """
-        Ensure all required custom fields exist in FUB.
-
-        Note: FUB custom fields are typically created via the UI or API.
-        This method checks which fields exist and which need to be created.
+        Check which required custom fields exist in FUB and which are missing.
 
         Args:
             organization_id: Organization ID
@@ -373,7 +379,8 @@ class CRMSyncService:
         try:
             # Get existing custom fields from FUB
             existing_fields = self.fub.get_custom_fields()
-            existing_ids = set(f.get("id") for f in existing_fields)
+            existing_labels = set(f.get("label", "").lower() for f in existing_fields)
+            existing_names = set(f.get("name", "").lower() for f in existing_fields)
 
             # Get our required mappings
             mappings = await self.get_field_mappings(organization_id)
@@ -382,7 +389,9 @@ class CRMSyncService:
             missing = []
 
             for ai_field, mapping in mappings.items():
-                if mapping.fub_field_id in existing_ids:
+                label_match = mapping.fub_field_name.lower() in existing_labels
+                name_match = mapping.fub_field_id.lower() in existing_names
+                if label_match or name_match:
                     existing.append(ai_field)
                 else:
                     missing.append({
@@ -401,6 +410,83 @@ class CRMSyncService:
         except Exception as e:
             logger.error(f"Error checking custom fields: {e}", exc_info=True)
             return {"error": str(e)}
+
+    async def auto_create_missing_fields(
+        self,
+        organization_id: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Check for missing custom fields in FUB and create them via API.
+
+        Called automatically after broker saves their API key.
+        Uses FUB API: GET /v1/customFields to list, POST /v1/customFields to create.
+
+        Args:
+            organization_id: Optional organization ID for custom mappings
+
+        Returns:
+            Dict with created, existing, and failed field lists
+        """
+        if not self.fub:
+            return {"error": "No FUB client"}
+
+        results = {
+            "created": [],
+            "existing": [],
+            "failed": [],
+        }
+
+        try:
+            # Get existing fields from FUB
+            existing_fields = self.fub.get_custom_fields()
+            existing_labels = {f.get("label", "").lower(): f for f in existing_fields}
+
+            # Get required mappings
+            if organization_id:
+                mappings = await self.get_field_mappings(organization_id)
+            else:
+                mappings = DEFAULT_FIELD_MAPPINGS
+
+            for ai_field, mapping in mappings.items():
+                label_lower = mapping.fub_field_name.lower()
+
+                # Check if field already exists by label
+                if label_lower in existing_labels:
+                    results["existing"].append(ai_field)
+                    continue
+
+                # Create the missing field
+                try:
+                    choices = self.DROPDOWN_CHOICES.get(mapping.fub_field_id)
+                    created = self.fub.create_custom_field(
+                        label=mapping.fub_field_name,
+                        field_type=mapping.field_type,
+                        choices=choices,
+                    )
+                    results["created"].append({
+                        "ai_field": ai_field,
+                        "fub_field_name": mapping.fub_field_name,
+                        "field_type": mapping.field_type,
+                    })
+                    logger.info(f"Created FUB custom field: {mapping.fub_field_name} ({mapping.field_type})")
+
+                except Exception as field_error:
+                    results["failed"].append({
+                        "ai_field": ai_field,
+                        "fub_field_name": mapping.fub_field_name,
+                        "error": str(field_error),
+                    })
+                    logger.warning(f"Failed to create FUB custom field '{mapping.fub_field_name}': {field_error}")
+
+            logger.info(
+                f"Custom field setup: {len(results['created'])} created, "
+                f"{len(results['existing'])} existed, {len(results['failed'])} failed"
+            )
+            return results
+
+        except Exception as e:
+            logger.error(f"Error in auto_create_missing_fields: {e}", exc_info=True)
+            return {"error": str(e), **results}
 
     async def save_field_mapping(
         self,

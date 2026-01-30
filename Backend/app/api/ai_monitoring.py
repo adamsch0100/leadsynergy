@@ -11,6 +11,9 @@ Provides REST API for AI agent monitoring dashboard:
 - POST /api/ai-monitoring/notes/<note_id>/approve - Approve a note
 - POST /api/ai-monitoring/notes/<note_id>/dismiss - Dismiss a note
 - POST /api/ai-monitoring/notes/bulk-approve - Bulk approve notes
+- GET /api/ai-monitoring/stale-handoffs - Get leads with stale handoffs
+- GET /api/ai-monitoring/deferred-followups - Get deferred follow-up schedule
+- GET /api/ai-monitoring/nba-recommendations - Get NBA scanner results
 """
 
 from flask import Blueprint, request, jsonify
@@ -745,4 +748,117 @@ def clear_lead_opt_out(person_id):
 
     except Exception as e:
         logger.error(f"Error clearing opt-out for person {person_id}: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@ai_monitoring_bp.route('/stale-handoffs', methods=['GET'])
+def get_stale_handoffs():
+    """Get leads that were handed off but never followed up by a human agent.
+
+    Query params:
+        threshold_hours: Hours since handoff (default 48)
+        limit: Max results (default 20)
+    """
+    try:
+        from datetime import datetime, timedelta
+        supabase = get_supabase_client()
+
+        threshold_hours = int(request.args.get('threshold_hours', 48))
+        limit = int(request.args.get('limit', 20))
+        threshold = (datetime.utcnow() - timedelta(hours=threshold_hours)).isoformat()
+
+        result = supabase.table('ai_conversations').select(
+            'fub_person_id, state, handoff_reason, assigned_agent_id, '
+            'last_ai_message_at, last_human_message_at, updated_at'
+        ).eq(
+            'state', 'handed_off'
+        ).eq(
+            'is_active', True
+        ).lt(
+            'updated_at', threshold
+        ).order(
+            'updated_at', desc=False
+        ).limit(limit).execute()
+
+        handoffs = []
+        for conv in (result.data or []):
+            updated_at = conv.get('updated_at', '')
+            hours_stale = threshold_hours  # default
+            if updated_at:
+                try:
+                    from datetime import timezone
+                    updated_dt = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+                    hours_stale = int((datetime.now(timezone.utc) - updated_dt).total_seconds() / 3600)
+                except (ValueError, AttributeError):
+                    pass
+
+            handoffs.append({
+                **conv,
+                'hours_stale': hours_stale,
+            })
+
+        return jsonify({
+            'success': True,
+            'count': len(handoffs),
+            'stale_handoffs': handoffs,
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting stale handoffs: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@ai_monitoring_bp.route('/deferred-followups', methods=['GET'])
+def get_deferred_followups():
+    """Get leads with deferred follow-up requests ('call me next month').
+
+    Returns pending deferred follow-ups with their scheduled dates.
+    """
+    try:
+        supabase = get_supabase_client()
+
+        result = supabase.table('ai_scheduled_followups').select(
+            'id, fub_person_id, scheduled_at, channel, message_type, status, sequence_id'
+        ).eq(
+            'message_type', 'deferred_followup'
+        ).eq(
+            'status', 'pending'
+        ).order(
+            'scheduled_at', desc=False
+        ).limit(50).execute()
+
+        return jsonify({
+            'success': True,
+            'count': len(result.data or []),
+            'deferred_followups': result.data or [],
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting deferred follow-ups: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@ai_monitoring_bp.route('/nba-recommendations', methods=['GET'])
+def get_nba_recommendations():
+    """Get latest NBA (Next Best Action) scanner results.
+
+    Runs a quick NBA scan and returns recommendations.
+    """
+    try:
+        from app.ai_agent.next_best_action import run_nba_scan
+
+        result = run_async(run_nba_scan(
+            execute=False,  # Don't execute, just recommend
+            batch_size=30,
+        ))
+
+        return jsonify({
+            'success': True,
+            'recommendations_count': result.get('recommendations_count', 0),
+            'recommendations': result.get('recommendations', []),
+            'scan_time': result.get('scan_time'),
+        })
+
+    except Exception as e:
+        logger.error(f"Error running NBA scan: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500

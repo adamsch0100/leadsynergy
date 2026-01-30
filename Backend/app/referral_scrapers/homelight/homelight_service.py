@@ -301,13 +301,17 @@ class HomelightService(BaseReferralService):
                 except:
                     print(f"  {i}: (normalized: '{option_norm}')")
 
+                # Skip empty/blank options (disabled earlier stages in pipeline)
+                if not option_norm:
+                    continue
+
                 # Try multiple matching strategies
                 match_score = 0
-                
+
                 # Exact match (highest priority)
                 if option_norm == stage_name_norm:
                     match_score = 100
-                # Contains match
+                # Contains match (both strings must be non-empty)
                 elif stage_name_norm in option_norm or option_norm in stage_name_norm:
                     match_score = 80
                 # Word overlap match
@@ -339,6 +343,39 @@ class HomelightService(BaseReferralService):
             self.driver_service.safe_click(option)
             self.wis.human_delay(2, 3)
             return True
+
+        # Stage not found in dropdown - check if lead is already at or past the target stage
+        # HomeLight pipeline order (earlier → later)
+        pipeline_order = [
+            'agent left voicemail', 'agent left vm/email', 'left voicemail',
+            'connected',
+            'meeting scheduled',
+            'met with person', 'met with client',
+            'coming soon',
+            'listing',
+            'in escrow',
+        ]
+
+        # Get current stage from dropdown text (read before we opened it)
+        current_stage_norm = final_text if 'final_text' in dir() else ''
+        target_pos = -1
+        current_pos = -1
+
+        for idx, stage in enumerate(pipeline_order):
+            if stage_name_norm == stage or stage in stage_name_norm or stage_name_norm in stage:
+                target_pos = idx
+            if current_stage_norm == stage or stage in current_stage_norm or current_stage_norm in stage:
+                current_pos = idx
+
+        if target_pos >= 0 and current_pos >= 0 and current_pos >= target_pos:
+            print(f"[PIPELINE] Lead is already at '{current_stage_norm}' (position {current_pos}), "
+                  f"target '{stage_name_norm}' is at position {target_pos} - no regression needed")
+            try:
+                self.driver_service.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+            except:
+                pass
+            # Return "already_synced" string to signal no change needed but not a failure
+            return "already_synced"
 
         print(f"Could not find matching stage option for '{stage_name}'")
         print(f"Available options were: {[opt.text.strip() for opt in options]}")
@@ -373,9 +410,29 @@ class HomelightService(BaseReferralService):
             return self._fill_in_escrow_fields(metadata)
         return True
 
+    def _find_note_textarea(self):
+        """Find the notes textarea using multiple possible selectors for different stages."""
+        # Try broadest selector first (fastest match), then fall back to specific ones
+        textarea_selectors = [
+            "textarea[data-test*='-notes']",  # Catch any stage-notes pattern (broadest)
+            "textarea[data-test='connected-notes']",
+            "textarea[data-test='meeting-scheduled-notes']",
+            "textarea[placeholder*='Add an optional note']",
+            "textarea[placeholder*='note']",
+        ]
+        for selector in textarea_selectors:
+            try:
+                el = self.driver_service.find_element(By.CSS_SELECTOR, selector, timeout=3)
+                if el:
+                    print(f"Found note textarea via: {selector}")
+                    return el
+            except:
+                continue
+        return None
+
     def _open_add_note_form(self) -> bool:
         # First check if the note textarea is already available
-        note_textarea = self.driver_service.find_element(By.CSS_SELECTOR, "textarea[data-test='connected-notes']")
+        note_textarea = self._find_note_textarea()
         if note_textarea:
             print("Note textarea is already available")
             return True
@@ -393,12 +450,13 @@ class HomelightService(BaseReferralService):
                 add_note_button = note_buttons[0]
 
         if not add_note_button:
-            print("Could not find a button to add a note, but checking if textarea exists...")
-            # Double-check if textarea appeared after stage selection
-            note_textarea = self.driver_service.find_element(By.CSS_SELECTOR, "textarea[data-test='connected-notes']")
+            print("Could not find a button to add a note, checking for textarea one more time...")
+            note_textarea = self._find_note_textarea()
             if note_textarea:
                 print("Note textarea found after stage selection")
                 return True
+            # Note form not available - this is OK for stage changes that don't require notes
+            print("No note textarea or Add Note button found - note may not be required for this stage")
             return False
 
         self.driver_service.safe_click(add_note_button)
@@ -588,11 +646,7 @@ class HomelightService(BaseReferralService):
             custom_note: Optional custom note from @update to append
         """
         try:
-            # Try the specific selector first
-            note_field = self.driver_service.find_element(By.CSS_SELECTOR, 'textarea[data-test="connected-notes"]')
-            if not note_field:
-                # Fallback to the placeholder selector
-                note_field = self.driver_service.find_element(By.CSS_SELECTOR, 'textarea[placeholder*="Add an optional note"]')
+            note_field = self._find_note_textarea()
             if not note_field:
                 print("Could not locate note field to add sync note")
                 return False
@@ -1565,18 +1619,60 @@ class HomelightService(BaseReferralService):
 
                         # Get comment from @update notes if available
                         lead_comment = comments.get(lead.id)
-                        if lead_comment:
+                        # Auto-extract @update from FUB notes if not provided
+                        if not lead_comment and getattr(lead, 'fub_person_id', None):
+                            try:
+                                from app.utils.update_note_extractor import UpdateNoteExtractor
+                                from app.database.fub_api_client import FUBApiClient
+                                fub_client = FUBApiClient()
+                                notes = fub_client.get_notes_for_person(lead.fub_person_id)
+                                extractor = UpdateNoteExtractor()
+                                update = extractor.get_update_for_platform(
+                                    notes, "homelight",
+                                    lead_metadata=lead.metadata or {}
+                                )
+                                if update:
+                                    lead_comment = update
+                                    print(f"[UPDATE] Auto-extracted @update from FUB: {lead_comment[:50]}...")
+                            except Exception as e:
+                                print(f"[WARNING] Could not extract @update note: {e}")
+                        elif lead_comment:
                             print(f"[UPDATE] Using @update comment: {lead_comment[:50]}...")
 
                         update_start = time.time()
                         success = self.update_customers(target_status, custom_note=lead_comment)
                         update_time = time.time() - update_start
 
-                        if success:
+                        if success == "already_synced":
+                            total_time = time.time() - lead_start_time
+                            print(f"[ALREADY SYNCED] Lead already at or past target stage (took {total_time:.1f}s)")
+                            logger.info(f"Lead {full_name} already at or past target stage '{target_status}'")
+
+                            # Update metadata to track check time
+                            try:
+                                from datetime import datetime, timezone
+                                if not lead.metadata:
+                                    lead.metadata = {}
+                                lead.metadata["homelight_last_updated"] = datetime.now(timezone.utc).isoformat()
+                                from app.service.lead_service import LeadServiceSingleton
+                                lead_service = LeadServiceSingleton.get_instance()
+                                lead_service.update(lead)
+                            except Exception as e:
+                                print(f"[WARNING] Could not update lead sync timestamp: {e}")
+
+                            results["successful"] += 1
+                            results["details"].append({
+                                "lead_id": lead.id,
+                                "fub_person_id": lead.fub_person_id,
+                                "name": f"{lead.first_name} {lead.last_name}",
+                                "status": "already_synced",
+                                "processing_time": round(total_time, 2)
+                            })
+                        elif success:
                             total_time = time.time() - lead_start_time
                             print(f"[SUCCESS] Lead updated successfully! (update took {update_time:.1f}s, total {total_time:.1f}s)")
                             logger.info(f"Successfully updated lead {full_name} in {total_time:.1f} seconds")
-                            
+
                             # Update lead metadata to track last sync time
                             try:
                                 from datetime import datetime, timezone
@@ -1590,7 +1686,7 @@ class HomelightService(BaseReferralService):
                             except Exception as e:
                                 print(f"[WARNING] Could not update lead sync timestamp: {e}")
                                 logger.warning(f"Could not update lead sync timestamp for {full_name}: {e}")
-                            
+
                             results["successful"] += 1
                             results["details"].append({
                                 "lead_id": lead.id,
@@ -2475,7 +2571,11 @@ class HomelightService(BaseReferralService):
             # Wait for detail panel to load
             self.wis.human_delay(2, 3)
 
-            if not self._select_stage_option(primary_stage):
+            stage_result = self._select_stage_option(primary_stage)
+            if stage_result == "already_synced":
+                print(f"Lead is already at or past target stage '{primary_stage}' - skipping stage change")
+                return "already_synced"
+            if not stage_result:
                 print(f"Failed to select stage '{primary_stage}'")
                 return False
 
@@ -2484,13 +2584,13 @@ class HomelightService(BaseReferralService):
                 return False
 
             # Attempt to add a factual sync note based on FUB data
-            if not self._open_add_note_form():
-                return False
-
-            print("Adding sync note based on FUB data...")
-            if not self._add_sync_note(primary_stage, sub_stage, custom_note=self._custom_note):
-                print("Failed to add sync note")
-                return False
+            note_form_available = self._open_add_note_form()
+            if note_form_available:
+                print("Adding sync note based on FUB data...")
+                if not self._add_sync_note(primary_stage, sub_stage, custom_note=self._custom_note):
+                    print("Failed to add sync note - continuing to submit stage change anyway")
+            else:
+                print("Note form not available for this stage - proceeding with stage update only")
 
             # After changing the stage, look for "Update Stage" button (since we changed the stage)
             print("Confirming stage update...")

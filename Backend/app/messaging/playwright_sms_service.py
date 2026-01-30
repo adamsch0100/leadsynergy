@@ -554,6 +554,61 @@ class PlaywrightSMSService:
         logger.error(f"Failed to send SMS to person {person_id} after {max_retries} attempts: {last_error}")
         return {"success": False, "error": str(last_error)}
 
+    async def send_email(
+        self,
+        agent_id: str,
+        person_id: int,
+        subject: str,
+        body: str,
+        credentials: dict
+    ) -> dict:
+        """Send email to lead via FUB web interface.
+
+        Navigates to the lead's profile in FUB, clicks the Email tab,
+        fills in subject and body, and clicks Send.
+
+        Args:
+            agent_id: The agent's unique identifier (for session management)
+            person_id: The FUB person ID to email
+            subject: Email subject line
+            body: Email body text
+            credentials: Dict with 'type' (email/google/microsoft), 'email', 'password'
+
+        Returns:
+            Dict with 'success' and details or 'error'
+        """
+        async def do_send(session):
+            result = await session.send_email(person_id, subject, body)
+            return {
+                "success": True,
+                "person_id": person_id,
+                "subject": subject,
+                "body_length": len(body),
+            }
+
+        max_retries = 2
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                return await self._run_with_session(
+                    agent_id, credentials, f"send_email_{person_id}", do_send
+                )
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"Send email attempt {attempt + 1} failed for person {person_id}: {e}"
+                )
+                if attempt < max_retries - 1:
+                    logger.info(f"Invalidating session for {agent_id} and retrying...")
+                    await self._invalidate_session(agent_id)
+                    await asyncio.sleep(2)
+
+        logger.error(
+            f"Failed to send email to person {person_id} after {max_retries} attempts: {last_error}"
+        )
+        return {"success": False, "error": str(last_error)}
+
     async def read_latest_message(
         self,
         agent_id: str,
@@ -872,6 +927,52 @@ async def send_sms_with_auto_credentials(
 
     service = await PlaywrightSMSServiceSingleton.get_instance()
     return await service.send_sms(agent_id, person_id, message, credentials)
+
+
+async def send_email_with_auto_credentials(
+    person_id: int,
+    subject: str,
+    body: str,
+    user_id: str = None,
+    organization_id: str = None,
+    supabase_client=None,
+) -> dict:
+    """
+    Send email via FUB browser with automatic credential lookup.
+
+    Retrieves FUB browser credentials from database settings or env vars,
+    then sends email through the FUB web interface using Playwright.
+
+    Args:
+        person_id: FUB person ID to email
+        subject: Email subject line
+        body: Email body text
+        user_id: Optional user ID for credential lookup
+        organization_id: Optional org ID for credential lookup
+        supabase_client: Optional Supabase client for DB lookup
+
+    Returns:
+        Dict with 'success' and details or 'error'
+    """
+    from app.ai_agent.settings_service import get_fub_browser_credentials
+
+    credentials = await get_fub_browser_credentials(
+        supabase_client=supabase_client,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+
+    if not credentials:
+        return {
+            "success": False,
+            "error": "No FUB browser credentials configured. "
+                     "Set FUB_LOGIN_EMAIL and FUB_LOGIN_PASSWORD in environment or database settings."
+        }
+
+    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+
+    service = await PlaywrightSMSServiceSingleton.get_instance()
+    return await service.send_email(agent_id, person_id, subject, body, credentials)
 
 
 async def read_latest_message_via_browser(

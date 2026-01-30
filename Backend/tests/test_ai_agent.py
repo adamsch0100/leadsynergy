@@ -657,5 +657,71 @@ class TestIntegration:
         assert response.response_text is not None
 
 
+# =============================================================================
+# ROUND 4 ADDITIONS TO EXISTING CLASSES
+# =============================================================================
+
+class TestDeferredFollowupInExistingDetector:
+    """Round 4: Deferred follow-up and channel preference tests."""
+
+    def setup_method(self):
+        self.detector = IntentDetector()
+
+    @pytest.mark.round4
+    def test_deferred_followup_detection(self):
+        """Various deferred follow-up phrasings detected (primary or secondary)."""
+        deferred_messages = [
+            "Reach out in 2 weeks",
+            "Check back in 3 weeks",
+            "Let's connect next spring",
+        ]
+        for message in deferred_messages:
+            result = self.detector.detect(message)
+            assert result.primary_intent == Intent.DEFERRED_FOLLOWUP, f"Failed for: {message}"
+
+        # "Call me next month" may also match CHANNEL_PREFER_CALL; check both
+        result = self.detector.detect("Call me next month")
+        deferred_found = (
+            result.primary_intent == Intent.DEFERRED_FOLLOWUP
+            or any(i == Intent.DEFERRED_FOLLOWUP for i, _ in result.secondary_intents)
+        )
+        assert deferred_found, "DEFERRED_FOLLOWUP not found for 'Call me next month'"
+
+    @pytest.mark.round4
+    def test_deferred_beats_not_ready(self):
+        """'Try me again in a month' -> DEFERRED (unambiguous phrasing)."""
+        result = self.detector.detect("Try me again in a month")
+        assert result.primary_intent == Intent.DEFERRED_FOLLOWUP
+
+    @pytest.mark.round4
+    def test_channel_preference_detection(self):
+        """'Email me instead' -> CHANNEL_PREFER_EMAIL."""
+        result = self.detector.detect("Email me instead please")
+        assert result.primary_intent == Intent.CHANNEL_PREFER_EMAIL
+
+    @pytest.mark.round4
+    def test_channel_reduce_entity_extraction(self):
+        """'Too many texts' extracts channel_reduction entity for SMS."""
+        entity = EntityExtractor.extract_channel_preference("too many texts")
+        assert entity is not None
+        assert entity.entity_type == "channel_reduction"
+        assert entity.value == "sms"
+
+
+class TestDeferredDateExtractionInExisting:
+    """Round 4: extract_deferred_date() tests in existing test file."""
+
+    @pytest.mark.round4
+    def test_extract_deferred_date_method(self):
+        """extract_deferred_date('call me in 2 weeks') returns valid date."""
+        entity = EntityExtractor.extract_deferred_date("call me in 2 weeks")
+        assert entity is not None
+        assert entity.entity_type == "deferred_date"
+        # Should be approximately 14 days from now
+        from datetime import datetime, timedelta
+        target = datetime.utcnow() + timedelta(days=14)
+        assert entity.value == target.strftime("%Y-%m-%d")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -27,6 +27,10 @@ import {
   Timer,
   Send,
   X,
+  UserX,
+  Lightbulb,
+  CalendarCheck,
+  CheckCircle,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
@@ -99,6 +103,34 @@ interface ScheduledTask {
   created_at: string
 }
 
+interface StaleHandoff {
+  conversation_id: string
+  fub_person_id: number
+  lead_name?: string
+  handed_off_at: string
+  hours_stale: number
+  handoff_reason?: string
+  assigned_agent?: string
+}
+
+interface DeferredFollowup {
+  id: string
+  fub_person_id: number
+  lead_name?: string
+  scheduled_at: string
+  message_type: string
+  status: string
+}
+
+interface NBARecommendation {
+  fub_person_id: number
+  lead_name?: string
+  action_type: string
+  reason: string
+  priority: number
+  recommended_channel?: string
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export default function AIAnalyticsPage() {
@@ -118,6 +150,9 @@ export default function AIAnalyticsPage() {
   const [isMonitorPanelOpen, setIsMonitorPanelOpen] = useState(false)
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([])
   const [scheduledTasksCounts, setScheduledTasksCounts] = useState<any>({})
+  const [staleHandoffs, setStaleHandoffs] = useState<StaleHandoff[]>([])
+  const [deferredFollowups, setDeferredFollowups] = useState<DeferredFollowup[]>([])
+  const [nbaRecommendations, setNbaRecommendations] = useState<NBARecommendation[]>([])
 
   // Load user session
   useEffect(() => {
@@ -190,6 +225,28 @@ export default function AIAnalyticsPage() {
     }
   }, [user])
 
+  const fetchAttentionItems = useCallback(async () => {
+    if (!user) return
+    try {
+      const headers = { 'X-User-ID': user.id }
+      const [staleRes, deferredRes, nbaRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/ai-monitoring/stale-handoffs`, { headers }),
+        fetch(`${API_BASE_URL}/api/ai-monitoring/deferred-followups`, { headers }),
+        fetch(`${API_BASE_URL}/api/ai-monitoring/nba-recommendations`, { headers }),
+      ])
+      const [staleData, deferredData, nbaData] = await Promise.all([
+        staleRes.json(),
+        deferredRes.json(),
+        nbaRes.json(),
+      ])
+      if (staleData.success) setStaleHandoffs(staleData.stale_handoffs || [])
+      if (deferredData.success) setDeferredFollowups(deferredData.deferred_followups || [])
+      if (nbaData.success) setNbaRecommendations(nbaData.recommendations || [])
+    } catch (err) {
+      console.error('Failed to fetch attention items:', err)
+    }
+  }, [user])
+
   const cancelScheduledTask = async (taskId: string) => {
     if (!user) return
     try {
@@ -211,8 +268,9 @@ export default function AIAnalyticsPage() {
       fetchAnalytics()
       fetchReviewQueue()
       fetchScheduledTasks()
+      fetchAttentionItems()
     }
-  }, [user, period, fetchAnalytics, fetchReviewQueue, fetchScheduledTasks])
+  }, [user, period, fetchAnalytics, fetchReviewQueue, fetchScheduledTasks, fetchAttentionItems])
 
   const openLeadMonitor = (personId: number) => {
     setSelectedPersonId(personId)
@@ -386,6 +444,134 @@ export default function AIAnalyticsPage() {
 
         {/* Monitor Tab */}
         <TabsContent value="monitor" className="space-y-6">
+          {/* Attention Required */}
+          {(staleHandoffs.length > 0 || deferredFollowups.length > 0 || nbaRecommendations.length > 0) && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-orange-500" />
+                Attention Required
+              </h3>
+              <div className="grid gap-4 md:grid-cols-3">
+                {/* Stale Handoffs */}
+                <Card className={staleHandoffs.length > 0 ? "border-red-200 bg-red-50/50" : ""}>
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="h-10 w-10 rounded-lg bg-red-100 flex items-center justify-center">
+                        <UserX className="h-5 w-5 text-red-600" />
+                      </div>
+                      <div>
+                        <p className="text-2xl font-bold">{staleHandoffs.length}</p>
+                        <p className="text-xs text-muted-foreground">Stale Handoffs</p>
+                      </div>
+                    </div>
+                    {staleHandoffs.length > 0 && (
+                      <div className="space-y-2 mt-2">
+                        {staleHandoffs.slice(0, 3).map((item) => (
+                          <div
+                            key={item.conversation_id}
+                            className="flex items-center justify-between text-sm bg-white/80 rounded p-2 cursor-pointer hover:bg-white transition-colors"
+                            onClick={() => openLeadMonitor(item.fub_person_id)}
+                          >
+                            <span className="truncate">{item.lead_name || `Person #${item.fub_person_id}`}</span>
+                            <Badge variant="destructive" className="text-xs shrink-0 ml-2">
+                              {Math.round(item.hours_stale)}h ago
+                            </Badge>
+                          </div>
+                        ))}
+                        {staleHandoffs.length > 3 && (
+                          <p className="text-xs text-muted-foreground text-center">
+                            +{staleHandoffs.length - 3} more
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {staleHandoffs.length === 0 && (
+                      <p className="text-xs text-muted-foreground">No stale handoffs</p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Deferred Follow-ups */}
+                <Card className={deferredFollowups.length > 0 ? "border-blue-200 bg-blue-50/50" : ""}>
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="h-10 w-10 rounded-lg bg-blue-100 flex items-center justify-center">
+                        <CalendarCheck className="h-5 w-5 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="text-2xl font-bold">{deferredFollowups.length}</p>
+                        <p className="text-xs text-muted-foreground">Deferred Follow-ups</p>
+                      </div>
+                    </div>
+                    {deferredFollowups.length > 0 && (
+                      <div className="space-y-2 mt-2">
+                        {deferredFollowups.slice(0, 3).map((item) => (
+                          <div
+                            key={item.id}
+                            className="flex items-center justify-between text-sm bg-white/80 rounded p-2 cursor-pointer hover:bg-white transition-colors"
+                            onClick={() => openLeadMonitor(item.fub_person_id)}
+                          >
+                            <span className="truncate">{item.lead_name || `Person #${item.fub_person_id}`}</span>
+                            <Badge variant="secondary" className="text-xs shrink-0 ml-2">
+                              {new Date(item.scheduled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            </Badge>
+                          </div>
+                        ))}
+                        {deferredFollowups.length > 3 && (
+                          <p className="text-xs text-muted-foreground text-center">
+                            +{deferredFollowups.length - 3} more
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {deferredFollowups.length === 0 && (
+                      <p className="text-xs text-muted-foreground">No deferred follow-ups</p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* NBA Recommendations */}
+                <Card className={nbaRecommendations.length > 0 ? "border-yellow-200 bg-yellow-50/50" : ""}>
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="h-10 w-10 rounded-lg bg-yellow-100 flex items-center justify-center">
+                        <Lightbulb className="h-5 w-5 text-yellow-600" />
+                      </div>
+                      <div>
+                        <p className="text-2xl font-bold">{nbaRecommendations.length}</p>
+                        <p className="text-xs text-muted-foreground">NBA Recommendations</p>
+                      </div>
+                    </div>
+                    {nbaRecommendations.length > 0 && (
+                      <div className="space-y-2 mt-2">
+                        {nbaRecommendations.slice(0, 3).map((item, idx) => (
+                          <div
+                            key={idx}
+                            className="flex items-center justify-between text-sm bg-white/80 rounded p-2 cursor-pointer hover:bg-white transition-colors"
+                            onClick={() => openLeadMonitor(item.fub_person_id)}
+                          >
+                            <span className="truncate">{item.lead_name || `Person #${item.fub_person_id}`}</span>
+                            <Badge variant="outline" className="text-xs shrink-0 ml-2 capitalize">
+                              {item.action_type.replace(/_/g, ' ')}
+                            </Badge>
+                          </div>
+                        ))}
+                        {nbaRecommendations.length > 3 && (
+                          <p className="text-xs text-muted-foreground text-center">
+                            +{nbaRecommendations.length - 3} more
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {nbaRecommendations.length === 0 && (
+                      <p className="text-xs text-muted-foreground">No pending recommendations</p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          )}
+
           {/* Activity Feed */}
           <AIActivityFeed
             userId={user?.id}

@@ -300,6 +300,76 @@ SCENARIOS = {
         expected_final_state="handed_off",
         expected_final_outcome="handed_off",
     ),
+
+    # ----- ROUND 4 ADDITIONS -----
+
+    "deferred_followup": ConversationScenario(
+        name="Deferred Follow-Up",
+        description="Lead asks to be contacted in the future",
+        lead_source="Zillow",
+        lead_type="buyer",
+        steps=[
+            ConversationStep(
+                lead_message="",
+                expected_ai_behavior="AI sends first contact",
+                expected_state="initial",
+            ),
+            ConversationStep(
+                lead_message="Not right now, call me in a couple weeks",
+                expected_ai_behavior="AI acknowledges, schedules deferred follow-up, moves to nurture",
+                expected_state="nurture",
+                expected_intent="deferred_followup",
+            ),
+        ],
+        expected_final_state="nurture",
+        expected_final_outcome="nurture",
+    ),
+
+    "angry_lead_handoff": ConversationScenario(
+        name="Angry Lead - Immediate Handoff",
+        description="Lead is frustrated and uses profanity, triggers immediate handoff",
+        lead_source="MyAgentFinder",
+        lead_type="buyer",
+        steps=[
+            ConversationStep(
+                lead_message="",
+                expected_ai_behavior="AI sends first contact",
+                expected_state="initial",
+            ),
+            ConversationStep(
+                lead_message="Stop texting me, this is BS",
+                expected_ai_behavior="AI detects frustration/profanity, hands off immediately",
+                expected_state="handed_off",
+                expected_intent="profanity",
+                should_handoff=True,
+            ),
+        ],
+        expected_final_state="handed_off",
+        expected_final_outcome="handed_off",
+    ),
+
+    "dormant_lead_revival": ConversationScenario(
+        name="Dormant Lead Revival",
+        description="Lead goes silent for months, NBA triggers re-engagement, lead responds",
+        lead_source="Realtor.com",
+        lead_type="buyer",
+        steps=[
+            ConversationStep(
+                lead_message="",
+                expected_ai_behavior="AI sends re-engagement message after dormancy period",
+                expected_state="nurture",
+            ),
+            ConversationStep(
+                lead_message="Hey actually yes, I'm ready to start looking again",
+                expected_ai_behavior="AI re-qualifies the lead, transitions to qualifying",
+                expected_state="qualifying",
+                expected_intent="positive_interest",
+                expected_score_change="increase",
+            ),
+        ],
+        expected_final_state="qualifying",
+        expected_final_outcome="re_engaged",
+    ),
 }
 
 

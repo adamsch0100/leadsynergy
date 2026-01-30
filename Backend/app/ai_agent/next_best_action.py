@@ -53,6 +53,7 @@ class ActionType(Enum):
     REENGAGEMENT_SMS = "reengagement_sms"        # Re-engage dormant lead
     REENGAGEMENT_EMAIL = "reengagement_email"    # Re-engage via email
     CREATE_TASK = "create_task"                  # Escalate to human
+    STALE_HANDOFF = "stale_handoff"              # Handed off but no human follow-up
     NO_ACTION = "no_action"                      # No action needed now
     WAIT = "wait"                                # Wait - within followup window
 
@@ -91,6 +92,7 @@ class NextBestActionEngine:
     SILENT_THRESHOLD_HOURS = 24        # No response in 24h = needs follow-up
     DORMANT_THRESHOLD_DAYS = 30        # No contact in 30 days = dormant
     REVIVAL_THRESHOLD_DAYS = 90        # No contact in 90 days = revival candidate
+    STALE_HANDOFF_THRESHOLD_HOURS = 48 # Handed off 48h+ ago with no human follow-up
 
     # Batch processing settings
     DEFAULT_BATCH_SIZE = 50
@@ -149,6 +151,10 @@ class NextBestActionEngine:
         # 4. Check pending follow-ups due for execution
         followup_actions = await self._check_pending_followups(organization_id)
         recommendations.extend(followup_actions)
+
+        # 5. Check for stale handoffs (human agent didn't follow up)
+        stale_handoff_actions = await self._check_stale_handoffs(organization_id)
+        recommendations.extend(stale_handoff_actions)
 
         # Sort by priority score (highest first)
         recommendations.sort(key=lambda x: x.priority_score, reverse=True)
@@ -515,6 +521,88 @@ class NextBestActionEngine:
             return bool(result.data)
         except Exception:
             return False
+
+    async def _check_stale_handoffs(
+        self,
+        organization_id: str = None,
+    ) -> List[RecommendedAction]:
+        """
+        Check for leads that were handed off to a human agent but never followed up.
+
+        Detects the "dropped ball" scenario where:
+        1. AI handed off to human agent
+        2. 48+ hours have passed
+        3. No human message was sent after handoff
+        """
+        actions = []
+
+        try:
+            threshold = datetime.utcnow() - timedelta(
+                hours=self.STALE_HANDOFF_THRESHOLD_HOURS
+            )
+
+            query = self.supabase.table("ai_conversations").select(
+                "fub_person_id, state, last_ai_message_at, last_human_message_at, "
+                "handoff_reason, assigned_agent_id, updated_at"
+            ).eq(
+                "state", "handed_off"
+            ).eq(
+                "is_active", True
+            ).lt(
+                "updated_at", threshold.isoformat()
+            ).limit(20)
+
+            if organization_id:
+                query = query.eq("organization_id", organization_id)
+
+            result = query.execute()
+
+            for conv in (result.data or []):
+                person_id = conv.get("fub_person_id")
+                last_human = conv.get("last_human_message_at")
+                updated_at = conv.get("updated_at")
+
+                # If a human message was sent AFTER the handoff, it's not stale
+                if last_human and updated_at:
+                    try:
+                        human_dt = datetime.fromisoformat(last_human.replace("Z", "+00:00"))
+                        updated_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                        if human_dt > updated_dt:
+                            continue  # Human followed up — not stale
+                    except (ValueError, AttributeError):
+                        pass
+
+                # Calculate how long it's been stale
+                hours_stale = 48  # default
+                if updated_at:
+                    try:
+                        updated_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                        hours_stale = (datetime.utcnow().replace(tzinfo=updated_dt.tzinfo) - updated_dt).total_seconds() / 3600
+                    except (ValueError, AttributeError):
+                        pass
+
+                # Higher priority the longer it's been stale
+                priority = 85 if hours_stale >= 72 else 75
+
+                actions.append(RecommendedAction(
+                    fub_person_id=person_id,
+                    action_type=ActionType.STALE_HANDOFF,
+                    priority_score=priority,
+                    reason=f"Handed off {int(hours_stale)}h ago — no human follow-up. Reason: {conv.get('handoff_reason', 'unknown')}",
+                    message_context={
+                        "hours_stale": int(hours_stale),
+                        "handoff_reason": conv.get("handoff_reason"),
+                        "assigned_agent_id": conv.get("assigned_agent_id"),
+                    }
+                ))
+
+            if actions:
+                logger.warning(f"Found {len(actions)} stale handoffs needing attention")
+
+        except Exception as e:
+            logger.error(f"Error checking stale handoffs: {e}")
+
+        return actions
 
     async def execute_action(
         self,

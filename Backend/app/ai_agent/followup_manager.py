@@ -759,7 +759,7 @@ class FollowUpManager:
     # Golden Rule: "Would I read and reply to this myself?"
     #
     # Guidelines from research:
-    # - Keep SMS under 160 chars, conversational
+    # - Keep SMS conversational and substantive (length configurable via settings)
     # - Reference specific details when possible
     # - Don't sound salesy or pushy
     # - Ask ONE question at a time
@@ -1519,16 +1519,53 @@ class FollowUpManager:
                 message_subject = "Following up"
                 ai_used = False
 
-            # Mark as sent
-            self.supabase.table("ai_scheduled_followups").update({
-                "status": FollowUpStatus.SENT.value,
-                "executed_at": datetime.utcnow().isoformat(),
-            }).eq("id", followup_id).execute()
+            # ================================================================
+            # DELIVERY: Actually send the message via the appropriate channel
+            # ================================================================
+            delivery_result = {"success": False, "error": "No delivery attempted"}
 
-            logger.info(f"Processed follow-up {followup_id}: {message_type.value} via {channel} (AI: {ai_used})")
+            try:
+                if channel == "sms":
+                    # Send SMS via Playwright browser automation
+                    from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
+                    delivery_result = await send_sms_with_auto_credentials(
+                        person_id=fub_person_id,
+                        message=message_content,
+                    )
+                elif channel == "email":
+                    # Send email via Playwright browser automation (through FUB)
+                    from app.messaging.playwright_sms_service import send_email_with_auto_credentials
+                    delivery_result = await send_email_with_auto_credentials(
+                        person_id=fub_person_id,
+                        subject=message_subject,
+                        body=message_content,
+                    )
+                else:
+                    # RVM, call, etc. — can't auto-deliver, create task instead
+                    logger.info(f"Channel '{channel}' not auto-deliverable, creating task")
+                    delivery_result = {"success": True, "note": f"Channel {channel} requires manual action"}
+
+            except Exception as delivery_error:
+                logger.error(f"Delivery failed for follow-up {followup_id}: {delivery_error}")
+                delivery_result = {"success": False, "error": str(delivery_error)}
+
+            # Mark status based on delivery result
+            if delivery_result.get("success"):
+                self.supabase.table("ai_scheduled_followups").update({
+                    "status": FollowUpStatus.SENT.value,
+                    "executed_at": datetime.utcnow().isoformat(),
+                }).eq("id", followup_id).execute()
+                logger.info(f"Follow-up {followup_id} DELIVERED: {message_type.value} via {channel} (AI: {ai_used})")
+            else:
+                self.supabase.table("ai_scheduled_followups").update({
+                    "status": FollowUpStatus.FAILED.value,
+                    "error_message": delivery_result.get("error", "Delivery failed"),
+                    "executed_at": datetime.utcnow().isoformat(),
+                }).eq("id", followup_id).execute()
+                logger.warning(f"Follow-up {followup_id} DELIVERY FAILED: {delivery_result.get('error')}")
 
             return {
-                "success": True,
+                "success": delivery_result.get("success", False),
                 "followup_id": followup_id,
                 "channel": channel,
                 "message_type": message_type.value,
@@ -1537,6 +1574,8 @@ class FollowUpManager:
                 "ai_used": ai_used,
                 "fub_person_id": fub_person_id,
                 "sequence_day": sequence_day,
+                "delivered": delivery_result.get("success", False),
+                "delivery_error": delivery_result.get("error") if not delivery_result.get("success") else None,
             }
 
         except Exception as e:
@@ -1776,11 +1815,15 @@ CRITICAL RULES:
 2. DO NOT ask "are you buying or selling?" - we ALREADY KNOW: {lead_type_str}
 3. Reference their situation specifically: looking to {lead_action} in {cities}
 4. Source: They came from {friendly_source}
-5. Keep SMS under 160 characters ideal, max 250
-6. For email, keep it SHORT (2-3 paragraphs max)
+5. Be substantive - acknowledge context, add value, ask one question
+6. For email, be concise but substantive (2-3 short paragraphs). Reference what you know.
 7. Be human, not robotic. Vary your approach each day.
 8. Never guilt trip about no response
 9. Always leave the door open
+10. Each follow-up MUST take a DIFFERENT angle — don't rehash the same approach or message
+11. Lead with something useful (market insight, neighborhood tip, timing advantage) before asking a question
+12. If previous messages were SMS and this is email (or vice versa), transition channels naturally
+13. After 3+ no-responses, switch to lower-pressure approaches: share a resource, mention availability, provide a market update — stop asking direct questions
 
 MESSAGE TYPE: {message_type.value}
 GUIDANCE: {type_guidance}
@@ -1800,7 +1843,7 @@ Type: {message_type.value}
 {prev_context}
 
 Respond with ONLY the SMS text. No JSON, no explanation. Just the message.
-Keep it under 200 characters. Be natural and human."""
+Be natural and human. Substantive but concise."""
     else:
         user_prompt = f"""Generate a follow-up EMAIL for Day {sequence_day}.
 
@@ -1814,7 +1857,7 @@ Respond in this JSON format:
     "body": "Short email body in plain text. 2-3 paragraphs max. Sign with {agent_name} and phone {agent_phone}."
 }}
 
-Keep it SHORT - they've already received multiple messages."""
+Be concise but substantive — reference what you know about them. Don't repeat previous messages — try a fresh angle."""
 
     # Get API key
     openrouter_key = os.environ.get('OPENROUTER_API_KEY')
