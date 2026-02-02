@@ -1,7 +1,8 @@
+import os
 import requests
 from requests.auth import HTTPBasicAuth
 
-api_key = "fka_0jmnNSMPqcxPauaVA0IFDc7MknCsaKMl0o"
+api_key = os.getenv("FUB_API_KEY", "")
 
 # Custom Domains
 custom_domain = "https://www.sec-shit.me"

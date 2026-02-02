@@ -1,10 +1,11 @@
 "use client"
 
 import { createContext, useContext, useState, useEffect } from "react"
-import { createClient } from "@/lib/supabase/client"
-import { PlanId, getPlan, getPlanCredits, getPlanLimits, PLANS } from "@/lib/plans"
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+import { apiFetch } from "@/lib/api"
+import {
+  PlanId, getPlan, getPlanCredits, getPlanLimits, PLANS,
+  type BasePlanId, BASE_PLANS,
+} from "@/lib/plans"
 
 export interface Credits {
   enhancement: {
@@ -64,7 +65,7 @@ function getDefaultSubscription(): Subscription {
   const limits = getPlanLimits("solo")
 
   return {
-    plan: "solo",
+    plan: "solo", // Legacy default — new signups will get "starter"
     planName: plan.name,
     status: "active",
     trialEndsAt: null,
@@ -96,31 +97,51 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   const fetchSubscription = async () => {
     setIsLoading(true)
     try {
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
+      const res = await apiFetch('/api/supabase/user/subscription')
 
-      if (!user) {
+      if (!res) {
         setSubscription(getDefaultSubscription())
         setIsLoading(false)
         return
       }
 
-      const res = await fetch(`${API_BASE_URL}/api/supabase/user/subscription`, {
-        headers: { 'X-User-ID': user.id }
-      })
-
       const data = await res.json()
 
       if (data.success && data.data) {
         const subData = data.data
-        const planId = (subData.plan || "solo") as PlanId
-        const plan = PLANS[planId] || PLANS.solo
-        const planCredits = plan.credits
-        const planLimits = plan.limits
+        const rawPlanId = subData.plan || "solo"
+
+        // Resolve plan info — handle both new base plan IDs and legacy plan IDs
+        let planName: string
+        let planPrice: number
+        let planCredits = { enhancement: 0, criminal: 0, dnc: 0 }
+        let planLimits = { leadSources: 1, teamMembers: -1 }
+
+        if (rawPlanId in BASE_PLANS) {
+          // New modular plan (starter, growth, pro, enterprise)
+          const basePlan = BASE_PLANS[rawPlanId as BasePlanId]
+          planName = basePlan.name
+          planPrice = basePlan.price
+          planLimits = { leadSources: basePlan.platforms, teamMembers: -1 }
+          // Credits come from enhancement subscription, not base plan
+        } else if (rawPlanId in PLANS) {
+          // Legacy bundled plan (solo, team, brokerage, enterprise)
+          const legacyPlan = PLANS[rawPlanId as PlanId]
+          planName = legacyPlan.name
+          planPrice = legacyPlan.price
+          planCredits = legacyPlan.credits
+          planLimits = legacyPlan.limits
+        } else {
+          // Unknown plan — fall back to starter
+          const fallback = BASE_PLANS.starter
+          planName = fallback.name
+          planPrice = fallback.price
+          planLimits = { leadSources: fallback.platforms, teamMembers: -1 }
+        }
 
         setSubscription({
-          plan: planId,
-          planName: plan.name,
+          plan: rawPlanId as PlanId,
+          planName,
           status: subData.status || "active",
           trialEndsAt: subData.trialEndsAt ? new Date(subData.trialEndsAt) : null,
           currentPeriodEnd: subData.currentPeriodEnd
@@ -130,17 +151,17 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
           credits: {
             enhancement: {
               used: subData.credits?.enhancement?.used || 0,
-              limit: planCredits.enhancement,
+              limit: subData.credits?.enhancement?.limit || planCredits.enhancement,
               purchased: subData.credits?.enhancement?.purchased || 0,
             },
             criminal: {
               used: subData.credits?.criminal?.used || 0,
-              limit: planCredits.criminal,
+              limit: subData.credits?.criminal?.limit || planCredits.criminal,
               purchased: subData.credits?.criminal?.purchased || 0,
             },
             dnc: {
               used: subData.credits?.dnc?.used || 0,
-              limit: planCredits.dnc,
+              limit: subData.credits?.dnc?.limit || planCredits.dnc,
               purchased: subData.credits?.dnc?.purchased || 0,
             },
           },
@@ -154,7 +175,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
               limit: planLimits.leadSources,
             },
           },
-          price: plan.price,
+          price: planPrice,
         })
       }
     } catch (err) {
@@ -170,14 +191,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
   const cancelSubscription = async (): Promise<boolean> => {
     try {
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return false
-
-      const res = await fetch(`${API_BASE_URL}/api/supabase/user/subscription/cancel`, {
+      const res = await apiFetch('/api/supabase/user/subscription/cancel', {
         method: 'POST',
-        headers: { 'X-User-ID': user.id }
       })
+      if (!res) return false
       const data = await res.json()
 
       if (data.success) {
@@ -193,14 +210,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
   const reactivateSubscription = async (): Promise<boolean> => {
     try {
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return false
-
-      const res = await fetch(`${API_BASE_URL}/api/supabase/user/subscription/reactivate`, {
+      const res = await apiFetch('/api/supabase/user/subscription/reactivate', {
         method: 'POST',
-        headers: { 'X-User-ID': user.id }
       })
+      if (!res) return false
       const data = await res.json()
 
       if (data.success) {
@@ -220,18 +233,12 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
   const purchaseCredits = async (packageId: string): Promise<boolean> => {
     try {
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return false
-
-      const res = await fetch(`${API_BASE_URL}/api/supabase/user/credits/purchase`, {
+      const res = await apiFetch('/api/supabase/user/credits/purchase', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-ID': user.id
-        },
-        body: JSON.stringify({ packageId })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ packageId }),
       })
+      if (!res) return false
       const data = await res.json()
 
       if (data.success) {
@@ -247,18 +254,12 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
   const changePlan = async (newPlan: PlanId): Promise<boolean> => {
     try {
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return false
-
-      const res = await fetch(`${API_BASE_URL}/api/supabase/user/subscription/change-plan`, {
+      const res = await apiFetch('/api/supabase/user/subscription/change-plan', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-ID': user.id
-        },
-        body: JSON.stringify({ newPlan })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPlan }),
       })
+      if (!res) return false
       const data = await res.json()
 
       if (data.success) {

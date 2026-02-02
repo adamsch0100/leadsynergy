@@ -34,10 +34,13 @@ class RedisService:
         host: str = "localhost",
         port: int = 6379,
         db: int = 0,
-        password: Optional[str] = "Lancelot@123",
+        password: Optional[str] = None,
         decode_responses: bool = True,
     ):
-        # Parse REDIS_URL if available
+        # Use env var for password if not explicitly provided
+        if password is None:
+            password = os.getenv('REDIS_PASSWORD')
+        # Parse REDIS_URL if available (overrides individual params)
         redis_url = os.getenv('REDIS_URL')
         if redis_url:
             parsed_url = urlparse(redis_url)

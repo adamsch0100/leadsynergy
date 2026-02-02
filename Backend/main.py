@@ -9,10 +9,13 @@ from app.webhook.fub_webhook_f import (
 )
 from app.webhook.ai_webhook_handlers import ai_webhook_bp
 from app.webhook.stripe_webhook_handler import register_stripe_webhook
-from app.integrations.stripe.service import create_checkout_session
+from app.integrations.stripe.service import create_checkout_session, create_customer_portal_session
 from flask_cors import CORS
 import os
+import sys
+import signal
 import logging
+import json
 from datetime import datetime
 from dotenv import load_dotenv
 from app.api.setup import setup_bp
@@ -215,6 +218,7 @@ app.add_url_rule(
 # Register Stripe webhook and checkout
 register_stripe_webhook(app)  # This registers /webhooks/stripe/
 app.add_url_rule("/api/checkout", "checkout", create_checkout_session, methods=["POST"])
+app.add_url_rule("/api/billing/portal", "billing_portal", create_customer_portal_session, methods=["POST"])
 
 register_supabase_api(app)
 app.register_blueprint(sse_bp, url_prefix='/api/supabase')  # Register SSE endpoints
@@ -232,6 +236,33 @@ def root():
         "timestamp": datetime.now().isoformat(),
     })
 
+@app.route("/health")
+def health():
+    """
+    Health check endpoint for Railway / load balancer monitoring.
+
+    Returns 200 if the server is running and can reach the database.
+    Returns 503 if critical dependencies are unreachable.
+    """
+    checks = {"server": "ok"}
+    status_code = 200
+
+    # Check database connectivity
+    try:
+        from app.database.supabase_client import SupabaseClientSingleton
+        supabase = SupabaseClientSingleton.get_instance()
+        supabase.table("organizations").select("id").limit(1).execute()
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {str(e)[:100]}"
+        status_code = 503
+
+    checks["version"] = DEPLOY_VERSION
+    checks["timestamp"] = datetime.now().isoformat()
+
+    return jsonify(checks), status_code
+
+
 @app.route("/version")
 def version():
     """Version endpoint for deployment verification."""
@@ -247,6 +278,66 @@ def version():
         ],
         "timestamp": datetime.now().isoformat(),
     })
+
+# =====================================================================
+# Structured JSON logging for production
+# =====================================================================
+class JSONFormatter(logging.Formatter):
+    """JSON log formatter for structured logging in production."""
+    def format(self, record):
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0]:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry)
+
+
+def setup_logging():
+    """Configure logging — JSON in production, human-readable in development."""
+    is_production = os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("FLASK_ENV") == "production"
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    # Remove existing handlers to avoid duplicates
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+
+    handler = logging.StreamHandler(sys.stdout)
+    if is_production:
+        handler.setFormatter(JSONFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        ))
+
+    root.addHandler(handler)
+
+    # Reduce noise from chatty libraries
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("selenium").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+setup_logging()
+logger = logging.getLogger("leadsynergy")
+
+
+# =====================================================================
+# Graceful shutdown
+# =====================================================================
+def graceful_shutdown(signum, frame):
+    """Handle SIGTERM/SIGINT for graceful shutdown."""
+    sig_name = signal.Signals(signum).name
+    logger.info(f"Received {sig_name} — shutting down gracefully")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, graceful_shutdown)
+signal.signal(signal.SIGINT, graceful_shutdown)
+
 
 if __name__ == "__main__":
     # Get port from environment (Railway sets this) or default to 8000

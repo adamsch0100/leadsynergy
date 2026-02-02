@@ -148,7 +148,7 @@ lead_cache = LeadCacheService(
     redis_host=os.environ.get('REDIS_HOST', 'localhost'),
     redis_port=int(os.environ.get('REDIS_PORT', 6379)),
     redis_db=int(os.environ.get('REDIS_DB', 0)),
-    redis_password=os.environ.get('REDIS_PASSWORD', "Lancelot@123"),
+    redis_password=os.environ.get('REDIS_PASSWORD', ''),
     ttl_hours=int(os.environ.get('LEAD_CACHE_TTL_HOURS', 24))
 )
 

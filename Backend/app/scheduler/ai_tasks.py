@@ -213,7 +213,7 @@ def process_off_hours_queue(self):
             logger.info(f"Sending off-hours message {message_id} to person {fub_person_id}")
 
             try:
-                send_result = asyncio.run(_send_sms_via_playwright(
+                send_result = asyncio.run(_send_sms_via_fub_api(
                     fub_person_id=fub_person_id,
                     message=message_content,
                     organization_id=organization_id,
@@ -249,23 +249,19 @@ def process_off_hours_queue(self):
         return {"success": False, "error": str(e)}
 
 
-async def _send_sms_via_playwright(fub_person_id: int, message: str, organization_id: str = None, user_id: str = None) -> dict:
-    """Helper to send SMS via Playwright (async)."""
-    from app.messaging.playwright_sms_service import PlaywrightSMSService
-    from app.ai_agent.settings_service import get_fub_browser_credentials
-    from app.database.supabase_client import get_supabase_client
-
-    supabase = get_supabase_client()
-    credentials = await get_fub_browser_credentials(supabase_client=supabase, user_id=user_id, organization_id=organization_id)
-
-    if not credentials:
-        return {"success": False, "error": "No FUB browser credentials found"}
-
-    agent_id = credentials.get("agent_id", user_id or "default")
+async def _send_sms_via_fub_api(fub_person_id: int, message: str, organization_id: str = None, user_id: str = None) -> dict:
+    """Helper to send SMS via FUB Native Texting API (async)."""
+    from app.messaging.fub_sms_service import FUBSMSService
 
     try:
-        service = PlaywrightSMSService()
-        result = await service.send_sms(agent_id=agent_id, person_id=fub_person_id, message=message, credentials=credentials)
+        # Use org-specific API key if available
+        api_key = None
+        if organization_id:
+            from app.webhook.ai_webhook_handlers import get_fub_api_key_for_org
+            api_key = await get_fub_api_key_for_org(organization_id)
+
+        service = FUBSMSService(api_key=api_key)
+        result = await service.send_text_message_async(person_id=fub_person_id, message=message)
         return result
     except Exception as e:
         return {"success": False, "error": str(e)}

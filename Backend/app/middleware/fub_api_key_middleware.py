@@ -1,6 +1,7 @@
 from functools import wraps
 from flask import request, jsonify, g
 from app.service.fub_api_key_service import FUBAPIKeyServiceSingleton
+from app.middleware.auth import _extract_user_id_from_request
 
 def fub_api_key_required(f):
     """Decorator that ensures the user has a valid FUB API key and injects it into the request context"""
@@ -8,8 +9,8 @@ def fub_api_key_required(f):
     def decorated_function(*args, **kwargs):
         # Skip middleware for auth routes and API key setup
         skip_paths = [
-            "/auth", 
-            "/api/setup", 
+            "/auth",
+            "/api/setup",
             "/api/supabase/auth",
             "/api/supabase/users",
             "/api/supabase/organizations",
@@ -21,13 +22,12 @@ def fub_api_key_required(f):
             "/api/supabase/billing-history",
             "/api/supabase/commissions"
         ]
-        
+
         if any(request.path.startswith(path) for path in skip_paths):
             return f(*args, **kwargs)
 
-        # Get the current user ID - this would normally come from your auth system
-        # For now, we'll look for it in the request headers or session
-        user_id = request.headers.get('X-User-ID') or getattr(g, 'user_id', None)
+        # Get user ID from JWT (preferred) or X-User-ID header (fallback)
+        user_id = _extract_user_id_from_request() or getattr(g, 'user_id', None)
         
         if not user_id:
             return jsonify({"error": "Authentication required"}), 401

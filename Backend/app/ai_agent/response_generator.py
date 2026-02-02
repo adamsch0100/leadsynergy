@@ -1519,7 +1519,8 @@ MESSAGE STRUCTURE (follow this for every response):
 3. ASK ONE clear question — move the conversation forward toward scheduling
 
 LENGTH & STYLE:
-- Write 2-4 sentences per message (up to {max_sms_length} chars). Be substantive, not one-liners.
+- Write 2-3 sentences per message, aim for 200-320 characters. Shorter texts convert better.
+- Hard limit: {max_sms_length} chars. But shorter is always better for SMS.
 - Use contractions naturally: "I'd", "that's", "you'll", "we've"
 - Vary your opening — don't always start with "Hey [name]!"
 - Sound confident and knowledgeable, like you do this every day
@@ -1565,7 +1566,7 @@ MESSAGE STRUCTURE:
 3. MOVE FORWARD with one clear next step
 
 LENGTH & STYLE:
-- Write 2-4 sentences (up to {max_sms_length} chars). Substantive and direct.
+- Write 2-3 sentences, aim for 200-320 characters. Concise = professional. Hard limit: {max_sms_length} chars.
 - Use contractions naturally — you're a pro, not a robot
 - Lead with expertise — reference market data, trends, or experience when relevant
 - Don't waste words, but don't be terse either
@@ -1585,7 +1586,7 @@ MESSAGE STRUCTURE:
 3. ASK ONE question that moves things forward
 
 LENGTH & STYLE:
-- Write 2-4 sentences (up to {max_sms_length} chars). Let your personality shine through.
+- Write 2-3 sentences, aim for 200-320 characters. Keep that energy tight. Hard limit: {max_sms_length} chars.
 - Use contractions and casual language — you're approachable
 - Enthusiasm is great, but earned — tie it to something specific (their area, timing, goals)
 - Don't force positivity if the lead seems stressed or uncertain
@@ -1797,19 +1798,21 @@ WHEN THEY AGREE:
         """
         import random
 
-        # Base delay ranges (from settings or defaults)
+        # Base delay ranges — speed-to-lead is critical
+        # Research: 5-minute response = 21x higher conversion (MIT study)
+        # With FUB native API (<1s send time), these delays are the main bottleneck
         if is_first_message:
-            min_delay = 45  # First message: 45 seconds minimum
-            max_delay = 180  # Up to 3 minutes
+            min_delay = 5   # First message: 5 seconds minimum
+            max_delay = 15  # Up to 15 seconds
         else:
-            min_delay = 20  # Follow-up: 20 seconds minimum
-            max_delay = 90  # Up to 1.5 minutes
+            min_delay = 10  # Follow-up: 10 seconds minimum
+            max_delay = 30  # Up to 30 seconds
 
         # Adjust for source urgency
         urgency_multipliers = {
-            "high": 0.6,    # Referral leads - respond faster (60% of base)
+            "high": 0.5,    # Referral leads (paid for) - respond fastest
             "medium": 1.0,  # Normal
-            "low": 1.3,     # Zillow etc - can take a bit longer
+            "low": 1.2,     # Zillow etc - slightly longer is fine
         }
         multiplier = urgency_multipliers.get(source_urgency, 1.0)
         min_delay = int(min_delay * multiplier)
@@ -1818,23 +1821,23 @@ WHEN THEY AGREE:
         # Adjust for conversation velocity
         if conversation_velocity == "fast":
             # Rapid back-and-forth - respond quicker
-            min_delay = max(10, min_delay - 20)
-            max_delay = max(30, max_delay - 60)
+            min_delay = max(3, min_delay - 5)
+            max_delay = max(10, max_delay - 10)
         elif conversation_velocity == "slow":
-            # Slower pace - can take longer
-            min_delay += 30
-            max_delay += 60
+            # Slower pace - can take slightly longer
+            min_delay += 5
+            max_delay += 10
 
-        # Add simulated typing time (4 chars/second average)
-        typing_time = int(message_length / 4.0)
-        base_delay = random.randint(min_delay, max_delay)
+        # Small typing simulation (faster than real typing)
+        typing_time = min(int(message_length / 8.0), 10)
+        base_delay = random.randint(min_delay, max(min_delay, max_delay))
 
         # Add typing time but cap total delay
-        total_delay = min(base_delay + typing_time, max_delay + 30)
+        total_delay = min(base_delay + typing_time, max_delay + 5)
 
         # Add small random jitter for naturalness
-        jitter = random.randint(-5, 10)
-        total_delay = max(15, total_delay + jitter)  # Never less than 15 seconds
+        jitter = random.randint(-2, 3)
+        total_delay = max(3, total_delay + jitter)  # Never less than 3 seconds
 
         return total_delay
 

@@ -13,8 +13,8 @@ print("-" * 50)
 
 supabase = create_client(supabase_url=URL, supabase_key=KEY)
 
-ADMIN_USER_ID = "420314bc-0bc8-402f-aac6-12257ca2acf6"
-NEW_PASSWORD = "Vitzer0100!"
+ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", "")
+NEW_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 
 print(f"\nUpdating password for user ID: {ADMIN_USER_ID}")
 

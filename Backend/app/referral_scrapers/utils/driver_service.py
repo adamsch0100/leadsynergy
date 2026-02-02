@@ -62,6 +62,11 @@ class DriverService:
             self.logger.error(f"Error setting up proxy config: {str(e)}")
             self.proxy_config = None
 
+    # Page load timeout (seconds) — prevents browser from hanging forever
+    PAGE_LOAD_TIMEOUT = 60
+    # Implicit wait for elements (seconds) — short to avoid masking real issues
+    IMPLICIT_WAIT = 5
+
     def initialize_driver(self) -> bool:
         try:
             # Get the Chrome options with proxy configuration only if proxy is enabled
@@ -72,8 +77,12 @@ class DriverService:
             # Initialize the driver with the options and service
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
 
+            # Set timeouts to prevent indefinite hangs
+            self.driver.set_page_load_timeout(self.PAGE_LOAD_TIMEOUT)
+            self.driver.implicitly_wait(self.IMPLICIT_WAIT)
+
             # Initialize the wait object with the correct driver
-            self.wait = WebDriverWait(self.driver, 10)  # Use self.driver here
+            self.wait = WebDriverWait(self.driver, 10)
 
             # Now apply stealth settings after driver is properly initialized
             self._apply_stealth_settings()
@@ -86,24 +95,33 @@ class DriverService:
             return False
 
     def _apply_stealth_settings(self) -> None:
+        """Apply stealth settings to avoid bot detection by referral platforms."""
         if self.driver:
             try:
-                # Temporarily disable stealth settings to troubleshoot
-                self.logger.info("Skipping stealth settings for troubleshooting")
-                # stealth(
-                #     self.driver,
-                #     languages=['en-US', 'en'],
-                #     vendor='Google Inc.',
-                #     platform='Win32',
-                #     webgl_vendor='Intel Inc.',
-                #     renderer='Intel Iris OpenGL Engine',
-                #     fix_hairline=True
-                # )
-                # self.logger.info("Applied stealth settings to driver")
+                stealth(
+                    self.driver,
+                    languages=['en-US', 'en'],
+                    vendor='Google Inc.',
+                    platform='Win32',
+                    webgl_vendor='Intel Inc.',
+                    renderer='Intel Iris OpenGL Engine',
+                    fix_hairline=True,
+                )
+                self.logger.info("Applied stealth settings to driver")
             except Exception as e:
-                self.logger.error(f"Failed to apply stealth settings: {e}")
+                self.logger.warning(f"Could not apply stealth settings (non-fatal): {e}")
         else:
             self.logger.error("Cannot apply stealth settings - driver is None")
+
+    def is_alive(self) -> bool:
+        """Check if the browser session is still responsive."""
+        try:
+            if not self.driver:
+                return False
+            _ = self.driver.title
+            return True
+        except Exception:
+            return False
 
     def get_page(self, url: str) -> bool:
         try:
@@ -121,10 +139,7 @@ class DriverService:
             # Then find the element directly
             result = self.driver.find_element(by, value)
 
-            # Add extensive debugging
-            self.logger.info(f"Found element {value}")
-            self.logger.info(f"Type: {type(result)}")
-            self.logger.info(f"Is list: {isinstance(result, list)}")
+            self.logger.debug(f"Found element: {value}")
 
             # Ensure we return a single element, not a list
             if isinstance(result, list):

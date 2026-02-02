@@ -92,7 +92,7 @@ class HomelightService(BaseReferralService):
     def _select_stage_option(self, stage_name: str) -> bool:
         stage_name_norm = self._normalize_status_text(stage_name)
         if not stage_name_norm:
-            print("No stage name provided for selection")
+            self.logger.info("No stage name provided for selection")
             return False
 
         # Find the stage dropdown - must EXCLUDE the assigned agent dropdown
@@ -116,7 +116,7 @@ class HomelightService(BaseReferralService):
             for selector_type, selector_value in stage_selectors:
                 try:
                     candidates = self.driver_service.find_elements(selector_type, selector_value)
-                    print(f"Found {len(candidates)} candidate(s) with selector: {selector_value}")
+                    self.logger.info(f"Found {len(candidates)} candidate(s) with selector: {selector_value}")
 
                     for candidate in candidates:
                         try:
@@ -127,23 +127,23 @@ class HomelightService(BaseReferralService):
                             candidate_data_test = candidate.get_attribute('data-test') or ''
 
                             try:
-                                print(f"  Checking candidate: text='{candidate_text}', data-test='{candidate_data_test}'")
+                                self.logger.info(f"  Checking candidate: text='{candidate_text}', data-test='{candidate_data_test}'")
                             except:
-                                print(f"  Checking candidate: data-test='{candidate_data_test}'")
+                                self.logger.info(f"  Checking candidate: data-test='{candidate_data_test}'")
 
                             # EXCLUDE: Check if this is the assigned agent dropdown
                             is_assigned_agent = False
 
                             # Check 1: data-test contains assigned agent identifier
                             if 'referralDetailsModal-assignedAgent' in candidate_data_test or candidate_data_test == 'referralDetailsModal-assignedAgent':
-                                print(f"    SKIPPING: Has assigned agent data-test: '{candidate_data_test}'")
+                                self.logger.info(f"    SKIPPING: Has assigned agent data-test: '{candidate_data_test}'")
                                 is_assigned_agent = True
                             # Check 2: Text content is "Unassigned" or "Assigned"
                             elif candidate_text_lower in ['unassigned', 'assigned']:
                                 try:
-                                    print(f"    SKIPPING: Matches assigned agent text: '{candidate_text}'")
+                                    self.logger.info(f"    SKIPPING: Matches assigned agent text: '{candidate_text}'")
                                 except:
-                                    print(f"    SKIPPING: Matches assigned agent text")
+                                    self.logger.info(f"    SKIPPING: Matches assigned agent text")
                                 is_assigned_agent = True
                             # Check 3: Check parent chain for assigned agent wrapper
                             try:
@@ -152,12 +152,12 @@ class HomelightService(BaseReferralService):
                                     parent = parent.find_element(By.XPATH, "./..")
                                     parent_data_test = parent.get_attribute('data-test') or ''
                                     if 'referralDetailsModal-assignedAgent' in parent_data_test:
-                                        print(f"    SKIPPING: Parent has assigned agent data-test: '{parent_data_test}'")
+                                        self.logger.info(f"    SKIPPING: Parent has assigned agent data-test: '{parent_data_test}'")
                                         is_assigned_agent = True
                                         break
                                     # Also check if parent is the stage container (this is good!)
                                     if 'referralDetailsModal-stageUpdateOptions' in parent_data_test:
-                                        print(f"    [OK] Confirmed: Parent is stage container: '{parent_data_test}'")
+                                        self.logger.info(f"    [OK] Confirmed: Parent is stage container: '{parent_data_test}'")
                                         break
                             except:
                                 pass
@@ -179,38 +179,38 @@ class HomelightService(BaseReferralService):
                             
                             if not has_stage_keyword:
                                 try:
-                                    print(f"    SKIPPING: No stage keywords in text: '{candidate_text}'")
+                                    self.logger.info(f"    SKIPPING: No stage keywords in text: '{candidate_text}'")
                                 except:
-                                    print(f"    SKIPPING: No stage keywords in text")
+                                    self.logger.info(f"    SKIPPING: No stage keywords in text")
                                 continue
 
                             # FOUND: This should be the stage dropdown
                             try:
-                                print(f"    [FOUND] Stage dropdown - text='{candidate_text}', data-test='{candidate_data_test}'")
+                                self.logger.info(f"    [FOUND] Stage dropdown - text='{candidate_text}', data-test='{candidate_data_test}'")
                             except:
-                                print(f"    [FOUND] Stage dropdown - data-test='{candidate_data_test}'")
+                                self.logger.info(f"    [FOUND] Stage dropdown - data-test='{candidate_data_test}'")
                             stage_dropdown = candidate
                             break
 
                         except Exception as e:
                             error_msg = str(e).encode('ascii', 'replace').decode('ascii')
-                            print(f"    Error checking candidate: {error_msg}")
+                            self.logger.info(f"    Error checking candidate: {error_msg}")
                             continue
 
                     if stage_dropdown:
                         break
 
                 except Exception as e:
-                    print(f"Error with selector {selector_value}: {e}")
+                    self.logger.info(f"Error with selector {selector_value}: {e}")
                     continue
 
         except Exception as e:
-            print(f"Error in dropdown search: {e}")
+            self.logger.info(f"Error in dropdown search: {e}")
             import traceback
             traceback.print_exc()
 
         if not stage_dropdown:
-            print("Could not locate stage dropdown. Available buttons on page:")
+            self.logger.info("Could not locate stage dropdown. Available buttons on page:")
             self._log_available_buttons_for_debug()
             return False
 
@@ -222,27 +222,27 @@ class HomelightService(BaseReferralService):
 
             if 'referralDetailsModal-assignedAgent' in final_data_test:
                 try:
-                    print(f"ERROR: Found assigned agent dropdown instead of stage dropdown: '{final_text}'")
+                    self.logger.info(f"ERROR: Found assigned agent dropdown instead of stage dropdown: '{final_text}'")
                 except:
-                    print(f"ERROR: Found assigned agent dropdown instead of stage dropdown")
+                    self.logger.info(f"ERROR: Found assigned agent dropdown instead of stage dropdown")
                 return False
 
             if final_text in ['unassigned', 'assigned']:
                 try:
-                    print(f"ERROR: Found assigned agent dropdown (by text) instead of stage dropdown: '{final_text}'")
+                    self.logger.info(f"ERROR: Found assigned agent dropdown (by text) instead of stage dropdown: '{final_text}'")
                 except:
-                    print(f"ERROR: Found assigned agent dropdown (by text) instead of stage dropdown")
+                    self.logger.info(f"ERROR: Found assigned agent dropdown (by text) instead of stage dropdown")
                 return False
 
             try:
-                print(f"Confirmed stage dropdown: '{final_text}' (data-test: '{final_data_test}')")
+                self.logger.info(f"Confirmed stage dropdown: '{final_text}' (data-test: '{final_data_test}')")
             except:
-                print(f"Confirmed stage dropdown (data-test: '{final_data_test}')")
+                self.logger.info(f"Confirmed stage dropdown (data-test: '{final_data_test}')")
         except Exception as e:
             error_msg = str(e).encode('ascii', 'replace').decode('ascii')
-            print(f"Warning: Could not validate dropdown: {error_msg}")
+            self.logger.info(f"Warning: Could not validate dropdown: {error_msg}")
 
-        print(f"Found stage dropdown, clicking to open...")
+        self.logger.info(f"Found stage dropdown, clicking to open...")
         self.driver_service.safe_click(stage_dropdown)
         self.wis.human_delay(1.5, 2.5)  # Wait for dropdown to open
 
@@ -271,7 +271,7 @@ class HomelightService(BaseReferralService):
                 continue
 
         if not options:
-            print("No stage options found after opening dropdown")
+            self.logger.info("No stage options found after opening dropdown")
             try:
                 self.driver_service.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
             except:
@@ -279,10 +279,10 @@ class HomelightService(BaseReferralService):
             return False
 
         try:
-            print(f"Looking for stage: '{stage_name}' (normalized: '{stage_name_norm}')")
+            self.logger.info(f"Looking for stage: '{stage_name}' (normalized: '{stage_name_norm}')")
         except:
-            print(f"Looking for stage: '{stage_name_norm}'")
-        print(f"Found {len(options)} available options:")
+            self.logger.info(f"Looking for stage: '{stage_name_norm}'")
+        self.logger.info(f"Found {len(options)} available options:")
         
         # Extract key words from stage name for fuzzy matching
         stage_words = set(word.lower() for word in stage_name_norm.split() if len(word) > 2)
@@ -297,9 +297,9 @@ class HomelightService(BaseReferralService):
                 option_text = option_text_raw.encode('ascii', 'replace').decode('ascii').replace('?', '')
                 option_norm = self._normalize_status_text(option_text)
                 try:
-                    print(f"  {i}: '{option_text}' (normalized: '{option_norm}')")
+                    self.logger.info(f"  {i}: '{option_text}' (normalized: '{option_norm}')")
                 except:
-                    print(f"  {i}: (normalized: '{option_norm}')")
+                    self.logger.info(f"  {i}: (normalized: '{option_norm}')")
 
                 # Skip empty/blank options (disabled earlier stages in pipeline)
                 if not option_norm:
@@ -326,20 +326,20 @@ class HomelightService(BaseReferralService):
                     best_match = (option, option_text, match_score)
                     
             except Exception as error:
-                print(f"Error while evaluating stage option {i}: {error}")
+                self.logger.info(f"Error while evaluating stage option {i}: {error}")
                 continue
         
         # If we found a match, use it
         if best_match and best_match_score >= 60:
             option, option_text, score = best_match
-            print(f"Selecting stage option: '{option_text}' (match score: {score})")
+            self.logger.info(f"Selecting stage option: '{option_text}' (match score: {score})")
             self.driver_service.safe_click(option)
             self.wis.human_delay(2, 3)  # Wait for dropdown to close and page to update
             return True
         elif best_match:
             # Try the best match even if score is lower (fallback)
             option, option_text, score = best_match
-            print(f"Using best available match: '{option_text}' (match score: {score})")
+            self.logger.info(f"Using best available match: '{option_text}' (match score: {score})")
             self.driver_service.safe_click(option)
             self.wis.human_delay(2, 3)
             return True
@@ -368,7 +368,7 @@ class HomelightService(BaseReferralService):
                 current_pos = idx
 
         if target_pos >= 0 and current_pos >= 0 and current_pos >= target_pos:
-            print(f"[PIPELINE] Lead is already at '{current_stage_norm}' (position {current_pos}), "
+            self.logger.info(f"[PIPELINE] Lead is already at '{current_stage_norm}' (position {current_pos}), "
                   f"target '{stage_name_norm}' is at position {target_pos} - no regression needed")
             try:
                 self.driver_service.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
@@ -377,8 +377,8 @@ class HomelightService(BaseReferralService):
             # Return "already_synced" string to signal no change needed but not a failure
             return "already_synced"
 
-        print(f"Could not find matching stage option for '{stage_name}'")
-        print(f"Available options were: {[opt.text.strip() for opt in options]}")
+        self.logger.info(f"Could not find matching stage option for '{stage_name}'")
+        self.logger.info(f"Available options were: {[opt.text.strip() for opt in options]}")
         try:
             self.driver_service.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
         except:
@@ -390,11 +390,11 @@ class HomelightService(BaseReferralService):
             buttons = self.driver_service.find_elements(By.TAG_NAME, "button")
             for idx, button in enumerate(buttons[:20]):
                 try:
-                    print(f"Button[{idx}]: text='{button.text.strip()}' aria-label='{button.get_attribute('aria-label')}' role='{button.get_attribute('role')}' data-test='{button.get_attribute('data-test')}'")
+                    self.logger.info(f"Button[{idx}]: text='{button.text.strip()}' aria-label='{button.get_attribute('aria-label')}' role='{button.get_attribute('role')}' data-test='{button.get_attribute('data-test')}'")
                 except Exception:
                     continue
         except Exception as error:
-            print(f"Unable to enumerate buttons: {error}")
+            self.logger.info(f"Unable to enumerate buttons: {error}")
 
     def _fill_additional_fields(self, primary_stage: str) -> bool:
         metadata = getattr(self.lead, 'metadata', {}) or {}
@@ -424,7 +424,7 @@ class HomelightService(BaseReferralService):
             try:
                 el = self.driver_service.find_element(By.CSS_SELECTOR, selector, timeout=3)
                 if el:
-                    print(f"Found note textarea via: {selector}")
+                    self.logger.info(f"Found note textarea via: {selector}")
                     return el
             except:
                 continue
@@ -434,7 +434,7 @@ class HomelightService(BaseReferralService):
         # First check if the note textarea is already available
         note_textarea = self._find_note_textarea()
         if note_textarea:
-            print("Note textarea is already available")
+            self.logger.info("Note textarea is already available")
             return True
 
         # If not, try to find and click an "Add Note" button
@@ -450,13 +450,13 @@ class HomelightService(BaseReferralService):
                 add_note_button = note_buttons[0]
 
         if not add_note_button:
-            print("Could not find a button to add a note, checking for textarea one more time...")
+            self.logger.info("Could not find a button to add a note, checking for textarea one more time...")
             note_textarea = self._find_note_textarea()
             if note_textarea:
-                print("Note textarea found after stage selection")
+                self.logger.info("Note textarea found after stage selection")
                 return True
             # Note form not available - this is OK for stage changes that don't require notes
-            print("No note textarea or Add Note button found - note may not be required for this stage")
+            self.logger.info("No note textarea or Add Note button found - note may not be required for this stage")
             return False
 
         self.driver_service.safe_click(add_note_button)
@@ -477,7 +477,7 @@ class HomelightService(BaseReferralService):
             from datetime import datetime, timezone, timedelta
             import re
 
-            print(f"[ACTIVITY CHECK] Checking for recent activity on page (min interval: {min_sync_interval_hours}h)...")
+            self.logger.info(f"[ACTIVITY CHECK] Checking for recent activity on page (min interval: {min_sync_interval_hours}h)...")
 
             # Wait for page to load
             self.wis.human_delay(2, 3)
@@ -494,21 +494,21 @@ class HomelightService(BaseReferralService):
                 try:
                     activity_section = self.driver_service.find_element(selector_type, selector_value)
                     if activity_section:
-                        print(f"[ACTIVITY CHECK] Found activity section with selector: {selector_value}")
+                        self.logger.info(f"[ACTIVITY CHECK] Found activity section with selector: {selector_value}")
                         break
                 except:
                     continue
 
             if not activity_section:
-                print(f"[ACTIVITY CHECK] Could not find activity section - proceeding with update")
+                self.logger.info(f"[ACTIVITY CHECK] Could not find activity section - proceeding with update")
                 return False
 
             # Get all activity articles
             try:
                 activity_articles = activity_section.find_elements(By.XPATH, ".//article[contains(@class, 'sc-9d82c18d-8')]")
-                print(f"[ACTIVITY CHECK] Found {len(activity_articles)} activity article(s)")
+                self.logger.info(f"[ACTIVITY CHECK] Found {len(activity_articles)} activity article(s)")
             except Exception as e:
-                print(f"[ACTIVITY CHECK] Could not find activity articles: {e}")
+                self.logger.info(f"[ACTIVITY CHECK] Could not find activity articles: {e}")
                 return False
 
             now = datetime.now(timezone.utc)
@@ -539,7 +539,7 @@ class HomelightService(BaseReferralService):
                             day = int(day_str)
                             year = int(year_str)
                             current_date = datetime(year, month, day, tzinfo=timezone.utc)
-                            print(f"[ACTIVITY CHECK] Found date header: {month_str} {day_str}, {year_str}")
+                            self.logger.info(f"[ACTIVITY CHECK] Found date header: {month_str} {day_str}, {year_str}")
                             continue
 
                     # Check for ANY activity (not just HomeLight AI - any activity means it was updated)
@@ -589,48 +589,48 @@ class HomelightService(BaseReferralService):
                                         # Convert to UTC
                                         activity_datetime = activity_datetime.astimezone(timezone.utc)
                                         activity_time = activity_datetime
-                                        print(f"[ACTIVITY CHECK] Found activity: '{article_text[:100]}...' at {time_text} -> {activity_datetime} (UTC)")
+                                        self.logger.info(f"[ACTIVITY CHECK] Found activity: '{article_text[:100]}...' at {time_text} -> {activity_datetime} (UTC)")
                                     
                                     break
                         
                         # If no time found but we have a date, use the date (midnight of that day)
                         if not activity_time and current_date:
                             activity_time = current_date
-                            print(f"[ACTIVITY CHECK] Found activity: '{article_text[:100]}...' on {current_date.date()} (no time)")
+                            self.logger.info(f"[ACTIVITY CHECK] Found activity: '{article_text[:100]}...' on {current_date.date()} (no time)")
                         
                         # Track the most recent activity (ANY activity)
                         if activity_time:
                             if most_recent_datetime is None or activity_time > most_recent_datetime:
                                 most_recent_datetime = activity_time
                                 most_recent_activity_text = article_text[:300]
-                                print(f"[ACTIVITY CHECK] Updated most recent activity: {activity_time} - '{most_recent_activity_text[:100]}'")
+                                self.logger.info(f"[ACTIVITY CHECK] Updated most recent activity: {activity_time} - '{most_recent_activity_text[:100]}'")
 
                 except Exception as e:
-                    print(f"[ACTIVITY CHECK] Error parsing activity article: {e}")
+                    self.logger.info(f"[ACTIVITY CHECK] Error parsing activity article: {e}")
                     continue
 
             if most_recent_datetime is None:
-                print(f"[ACTIVITY CHECK] No recent activity found - proceeding with update")
+                self.logger.info(f"[ACTIVITY CHECK] No recent activity found - proceeding with update")
                 return False
 
             # Check if the most recent activity is within the interval
             hours_ago = (now - most_recent_datetime).total_seconds() / 3600
-            print(f"[ACTIVITY CHECK] Most recent activity found:")
-            print(f"[ACTIVITY CHECK]   Text: {most_recent_activity_text[:150]}")
-            print(f"[ACTIVITY CHECK]   Datetime: {most_recent_datetime}")
-            print(f"[ACTIVITY CHECK]   Hours ago: {hours_ago:.1f}")
-            print(f"[ACTIVITY CHECK]   Cutoff time: {cutoff_time}")
-            print(f"[ACTIVITY CHECK]   Current time: {now}")
+            self.logger.info(f"[ACTIVITY CHECK] Most recent activity found:")
+            self.logger.info(f"[ACTIVITY CHECK]   Text: {most_recent_activity_text[:150]}")
+            self.logger.info(f"[ACTIVITY CHECK]   Datetime: {most_recent_datetime}")
+            self.logger.info(f"[ACTIVITY CHECK]   Hours ago: {hours_ago:.1f}")
+            self.logger.info(f"[ACTIVITY CHECK]   Cutoff time: {cutoff_time}")
+            self.logger.info(f"[ACTIVITY CHECK]   Current time: {now}")
 
             if most_recent_datetime > cutoff_time:
-                print(f"[ACTIVITY CHECK] SKIPPING: Recent activity found ({hours_ago:.1f}h ago) - within {min_sync_interval_hours}h interval")
+                self.logger.info(f"[ACTIVITY CHECK] SKIPPING: Recent activity found ({hours_ago:.1f}h ago) - within {min_sync_interval_hours}h interval")
                 return True
             else:
-                print(f"[ACTIVITY CHECK] NOT SKIPPING: Most recent activity is {hours_ago:.1f}h ago (outside {min_sync_interval_hours}h interval) - proceeding")
+                self.logger.info(f"[ACTIVITY CHECK] NOT SKIPPING: Most recent activity is {hours_ago:.1f}h ago (outside {min_sync_interval_hours}h interval) - proceeding")
                 return False
 
         except Exception as e:
-            print(f"[ACTIVITY CHECK] Error checking activity: {e}")
+            self.logger.info(f"[ACTIVITY CHECK] Error checking activity: {e}")
             import traceback
             traceback.print_exc()
             # If there's an error, don't skip - proceed with update
@@ -648,7 +648,7 @@ class HomelightService(BaseReferralService):
         try:
             note_field = self._find_note_textarea()
             if not note_field:
-                print("Could not locate note field to add sync note")
+                self.logger.info("Could not locate note field to add sync note")
                 return False
 
             # Build note text: base note + optional @update content
@@ -656,7 +656,7 @@ class HomelightService(BaseReferralService):
             if custom_note:
                 # Append @update content to the standard note
                 note_text = f"{note_text}\n\nUpdate: {custom_note}"
-                print(f"[UPDATE] Appending @update note: {custom_note[:50]}...")
+                self.logger.info(f"[UPDATE] Appending @update note: {custom_note[:50]}...")
 
             note_field.click()
             note_field.clear()
@@ -664,7 +664,7 @@ class HomelightService(BaseReferralService):
             self.wis.human_delay(1, 2)
             return True
         except Exception as error:
-            print(f"Could not add sync note: {error}")
+            self.logger.info(f"Could not add sync note: {error}")
             return False
 
     def login_once(self) -> bool:
@@ -672,13 +672,13 @@ class HomelightService(BaseReferralService):
         if self.is_logged_in:
             return True
 
-        print("Initializing driver...")
+        self.logger.info("Initializing driver...")
         if not self.driver_service.initialize_driver():
-            print("Failed to initialize driver")
+            self.logger.info("Failed to initialize driver")
             return False
 
         try:
-            print("Navigating to HomeLight login page...")
+            self.logger.info("Navigating to HomeLight login page...")
             self.driver_service.get_page(self.base_url)
             self.wis.human_delay(2, 5)
 
@@ -686,11 +686,11 @@ class HomelightService(BaseReferralService):
             from selenium.webdriver.support import expected_conditions as EC
             wait = WebDriverWait(self.driver_service.driver, 30)
 
-            print("Finding email field...")
+            self.logger.info("Finding email field...")
             email_field = wait.until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".email-field-input"))
             )
-            print(f"Email field found, typing: {self.email}")
+            self.logger.info(f"Email field found, typing: {self.email}")
             self.wis.simulated_typing(email_field, self.email)
             self.wis.human_delay(1, 2)
 
@@ -712,18 +712,18 @@ class HomelightService(BaseReferralService):
                 try:
                     password_field = self.driver_service.driver.find_element(selector_type, selector_value)
                     if password_field and password_field.is_displayed():
-                        print(f"Found password field on same page with selector: {selector_value}")
+                        self.logger.info(f"Found password field on same page with selector: {selector_value}")
                         break
                 except:
                     continue
             
             # If password field not found, try clicking Continue (separate page flow)
             if not password_field:
-                print("Password field not found on same page, trying separate page flow...")
+                self.logger.info("Password field not found on same page, trying separate page flow...")
                 try:
                     continue_button = self.driver_service.find_element(By.LINK_TEXT, "Continue")
                     continue_button.click()
-                    print("Clicked Continue, waiting for password page...")
+                    self.logger.info("Clicked Continue, waiting for password page...")
                     self.wis.human_delay(3, 5)
                     
                     # Wait for password field to appear
@@ -736,31 +736,31 @@ class HomelightService(BaseReferralService):
                                 password_field = wait.until(
                                     EC.element_to_be_clickable((selector_type, selector_value))
                                 )
-                                print(f"Found password field with selector: {selector_value}")
+                                self.logger.info(f"Found password field with selector: {selector_value}")
                                 break
                         except:
                             continue
                 except Exception as e:
-                    print(f"Could not find Continue button or password field: {e}")
+                    self.logger.info(f"Could not find Continue button or password field: {e}")
             
             if not password_field:
-                print("ERROR: Could not find password field with any selector")
+                self.logger.info("ERROR: Could not find password field with any selector")
                 current_url = self.driver_service.get_current_url()
-                print(f"Current URL: {current_url}")
+                self.logger.info(f"Current URL: {current_url}")
                 return False
             
-            print("Typing password...")
+            self.logger.info("Typing password...")
             self.wis.simulated_typing(password_field, self.password)
             self.wis.human_delay(2, 4)
-            print("Clicking sign in...")
+            self.logger.info("Clicking sign in...")
             self.driver_service.find_element(By.NAME, "commit").click()
 
-            print("Waiting for login completion...")
+            self.logger.info("Waiting for login completion...")
             self.wis.human_delay(8, 12)  # Give even more time for login and page load
 
-            print("Checking current URL...")
+            self.logger.info("Checking current URL...")
             current_url = self.driver_service.get_current_url()
-            print(f"Current URL after login: {current_url}")
+            self.logger.info(f"Current URL after login: {current_url}")
 
             # Wait for login to complete by checking URL change
             max_wait = 30  # Maximum wait time in seconds
@@ -770,55 +770,53 @@ class HomelightService(BaseReferralService):
             while wait_count < max_wait:
                 try:
                     current_url = self.driver_service.get_current_url()
-                    print(f"Waiting for login... Current URL: {current_url}")
+                    self.logger.info(f"Waiting for login... Current URL: {current_url}")
 
                     # Check if we're past the login page
                     if "login" not in current_url.lower() and "signin" not in current_url.lower():
                         login_complete = True
-                        print("Login appears complete - navigating directly to referrals")
+                        self.logger.info("Login appears complete - navigating directly to referrals")
                         break
                 except Exception as e:
-                    print(f"Error checking page status: {e}")
+                    self.logger.info(f"Error checking page status: {e}")
 
                 self.wis.human_delay(2, 3)
                 wait_count += 5
 
             if not login_complete:
-                print("Timeout waiting for login completion")
+                self.logger.info("Timeout waiting for login completion")
                 return False
 
             # Navigate directly to referrals page instead of trying to find link
             try:
-                print("Navigating directly to referrals page...")
+                self.logger.info("Navigating directly to referrals page...")
                 self.driver_service.get_page("https://agent.homelight.com/referrals/page/1")
                 self.wis.human_delay(3, 5)  # Wait for referrals page to load
                 
                 # Verify we're on referrals page
                 current_url = self.driver_service.get_current_url()
                 if "referrals" in current_url.lower():
-                    print(f"Successfully navigated to referrals page: {current_url}")
+                    self.logger.info(f"Successfully navigated to referrals page: {current_url}")
                     self.is_logged_in = True
                     return True
                 else:
-                    print(f"Warning: Expected referrals page but got: {current_url}")
+                    self.logger.info(f"Warning: Expected referrals page but got: {current_url}")
                     # Still mark as logged in if we're not on login page
                     if "login" not in current_url.lower() and "signin" not in current_url.lower():
                         self.is_logged_in = True
                         return True
                     return False
             except Exception as e:
-                print(f"Error navigating to referrals page: {e}")
+                self.logger.info(f"Error navigating to referrals page: {e}")
                 # Still mark as logged in if we got past login
                 current_url = self.driver_service.get_current_url()
                 if "login" not in current_url.lower() and "signin" not in current_url.lower():
                     self.is_logged_in = True
-                    print("Login successful, but couldn't navigate to referrals (will navigate on next operation)")
+                    self.logger.info("Login successful, but couldn't navigate to referrals (will navigate on next operation)")
                     return True
                 return False
         except Exception as e:
-            print(f"There is an error logging into HomeLight: {e}")
-            import traceback
-            print(traceback.format_exc())
+            self.logger.error(f"Error logging into HomeLight: {e}", exc_info=True)
             return False
 
     def logout(self):
@@ -830,7 +828,7 @@ class HomelightService(BaseReferralService):
     def _click_urgent_filter(self) -> bool:
         """Click the Urgent filter button to show only urgent referrals"""
         try:
-            print("[URGENT] Clicking Urgent filter to show urgent referrals...")
+            self.logger.info("[URGENT] Clicking Urgent filter to show urgent referrals...")
 
             # First make sure we're on the referrals page
             self._ensure_on_referrals_page()
@@ -847,7 +845,7 @@ class HomelightService(BaseReferralService):
                 button_classes = urgent_button.get_attribute('class') or ''
                 aria_pressed = urgent_button.get_attribute('aria-pressed') or ''
 
-                print(f"[URGENT] Found Urgent button, clicking...")
+                self.logger.info(f"[URGENT] Found Urgent button, clicking...")
                 urgent_button.click()
                 self.wis.human_delay(2, 3)
 
@@ -862,20 +860,20 @@ class HomelightService(BaseReferralService):
                 except:
                     self.wis.human_delay(2, 3)
 
-                print("[URGENT] Urgent filter applied")
+                self.logger.info("[URGENT] Urgent filter applied")
                 return True
             else:
-                print("[URGENT] Urgent filter button not found")
+                self.logger.info("[URGENT] Urgent filter button not found")
                 return False
 
         except Exception as e:
-            print(f"[URGENT] Error clicking urgent filter: {e}")
+            self.logger.info(f"[URGENT] Error clicking urgent filter: {e}")
             return False
 
     def _clear_urgent_filter(self) -> bool:
         """Clear the urgent filter by clicking 'All' or refreshing the referrals page"""
         try:
-            print("[URGENT] Clearing urgent filter...")
+            self.logger.info("[URGENT] Clearing urgent filter...")
 
             # Try to click "All" filter option
             all_button = self.driver_service.find_element(
@@ -886,7 +884,7 @@ class HomelightService(BaseReferralService):
             if all_button:
                 all_button.click()
                 self.wis.human_delay(1, 2)
-                print("[URGENT] Clicked 'All' filter to clear urgent filter")
+                self.logger.info("[URGENT] Clicked 'All' filter to clear urgent filter")
                 return True
             else:
                 # Fallback: navigate to referrals page directly
@@ -894,11 +892,11 @@ class HomelightService(BaseReferralService):
                 if referrals_link:
                     referrals_link.click()
                     self.wis.human_delay(2, 3)
-                    print("[URGENT] Navigated to referrals to clear filter")
+                    self.logger.info("[URGENT] Navigated to referrals to clear filter")
                     return True
 
         except Exception as e:
-            print(f"[URGENT] Error clearing urgent filter: {e}")
+            self.logger.info(f"[URGENT] Error clearing urgent filter: {e}")
 
         return False
 
@@ -917,22 +915,22 @@ class HomelightService(BaseReferralService):
             Updated results dictionary
         """
         try:
-            print("\n" + "="*60)
-            print("[URGENT SWEEP] Starting urgent referrals sweep...")
-            print("="*60)
+            self.logger.info("\n" + "="*60)
+            self.logger.info("[URGENT SWEEP] Starting urgent referrals sweep...")
+            self.logger.info("="*60)
 
             # Click the urgent filter
             if not self._click_urgent_filter():
-                print("[URGENT SWEEP] Could not access urgent filter, skipping sweep")
+                self.logger.info("[URGENT SWEEP] Could not access urgent filter, skipping sweep")
                 return results
 
             # Get all urgent referrals
             referral_rows = self.driver_service.find_elements(By.CSS_SELECTOR, "a[data-test='referralsList-row']")
             urgent_count = len(referral_rows)
-            print(f"[URGENT SWEEP] Found {urgent_count} urgent referrals to check")
+            self.logger.info(f"[URGENT SWEEP] Found {urgent_count} urgent referrals to check")
 
             if urgent_count == 0:
-                print("[URGENT SWEEP] No urgent referrals found - all clear!")
+                self.logger.info("[URGENT SWEEP] No urgent referrals found - all clear!")
                 self._clear_urgent_filter()
                 return results
 
@@ -955,7 +953,7 @@ class HomelightService(BaseReferralService):
                 try:
                     row_text = row.text.strip()
                     row_lower = row_text.lower()
-                    print(f"\n[URGENT SWEEP] Checking urgent referral {i+1}/{urgent_count}: {row_text[:60]}...")
+                    self.logger.info(f"\n[URGENT SWEEP] Checking urgent referral {i+1}/{urgent_count}: {row_text[:60]}...")
 
                     # Try to match this urgent referral to one of our leads
                     matched_lead = None
@@ -969,11 +967,11 @@ class HomelightService(BaseReferralService):
                         if full_name in row_lower or (first_name in row_lower and last_name in row_lower):
                             matched_lead = lead
                             matched_status = status
-                            print(f"[URGENT SWEEP] Matched to lead: {lead.first_name} {lead.last_name}")
+                            self.logger.info(f"[URGENT SWEEP] Matched to lead: {lead.first_name} {lead.last_name}")
                             break
 
                     if not matched_lead:
-                        print(f"[URGENT SWEEP] No matching lead in our list - skipping")
+                        self.logger.info(f"[URGENT SWEEP] No matching lead in our list - skipping")
                         urgent_not_in_list += 1
                         continue
 
@@ -986,19 +984,19 @@ class HomelightService(BaseReferralService):
                     try:
                         should_skip = self._check_recent_activity_on_page(self.min_sync_interval_hours)
                         if should_skip:
-                            print(f"[URGENT SWEEP] Skipping - recent activity found")
+                            self.logger.info(f"[URGENT SWEEP] Skipping - recent activity found")
                             urgent_skipped += 1
                     except Exception as e:
-                        print(f"[URGENT SWEEP] Error checking activity: {e}")
+                        self.logger.info(f"[URGENT SWEEP] Error checking activity: {e}")
 
                     if not should_skip:
                         # Update with the mapped status
-                        print(f"[URGENT SWEEP] Updating with status: {matched_status}")
+                        self.logger.info(f"[URGENT SWEEP] Updating with status: {matched_status}")
                         self.update_active_lead(matched_lead, matched_status)
                         success = self.update_customers(matched_status)
 
                         if success:
-                            print(f"[URGENT SWEEP] Successfully updated!")
+                            self.logger.info(f"[URGENT SWEEP] Successfully updated!")
                             urgent_updated += 1
 
                             # Update metadata
@@ -1011,7 +1009,7 @@ class HomelightService(BaseReferralService):
                                 lead_service = LeadServiceSingleton.get_instance()
                                 lead_service.update(matched_lead)
                             except Exception as e:
-                                print(f"[URGENT SWEEP] Warning: Could not update metadata: {e}")
+                                self.logger.info(f"[URGENT SWEEP] Warning: Could not update metadata: {e}")
 
                             # Update results - increment successful, potentially decrement failed
                             # Check if this lead was previously marked as failed
@@ -1023,7 +1021,7 @@ class HomelightService(BaseReferralService):
                                     results["failed"] = max(0, results.get("failed", 0) - 1)
                                     break
                         else:
-                            print(f"[URGENT SWEEP] Update failed")
+                            self.logger.info(f"[URGENT SWEEP] Update failed")
 
                     # Navigate back to urgent list
                     self._navigate_back_to_referrals()
@@ -1037,7 +1035,7 @@ class HomelightService(BaseReferralService):
                     referral_rows = self.driver_service.find_elements(By.CSS_SELECTOR, "a[data-test='referralsList-row']")
 
                 except Exception as e:
-                    print(f"[URGENT SWEEP] Error processing urgent referral: {e}")
+                    self.logger.info(f"[URGENT SWEEP] Error processing urgent referral: {e}")
                     try:
                         self._navigate_back_to_referrals()
                         self._click_urgent_filter()
@@ -1049,12 +1047,12 @@ class HomelightService(BaseReferralService):
             # Clear the urgent filter when done
             self._clear_urgent_filter()
 
-            print("\n" + "="*60)
-            print("[URGENT SWEEP] Completed!")
-            print(f"[URGENT SWEEP] Updated: {urgent_updated}")
-            print(f"[URGENT SWEEP] Skipped (recent activity): {urgent_skipped}")
-            print(f"[URGENT SWEEP] Not in our lead list: {urgent_not_in_list}")
-            print("="*60 + "\n")
+            self.logger.info("\n" + "="*60)
+            self.logger.info("[URGENT SWEEP] Completed!")
+            self.logger.info(f"[URGENT SWEEP] Updated: {urgent_updated}")
+            self.logger.info(f"[URGENT SWEEP] Skipped (recent activity): {urgent_skipped}")
+            self.logger.info(f"[URGENT SWEEP] Not in our lead list: {urgent_not_in_list}")
+            self.logger.info("="*60 + "\n")
 
             # Update tracker if provided
             if tracker and sync_id:
@@ -1066,7 +1064,7 @@ class HomelightService(BaseReferralService):
             return results
 
         except Exception as e:
-            print(f"[URGENT SWEEP] Error during urgent sweep: {e}")
+            self.logger.info(f"[URGENT SWEEP] Error during urgent sweep: {e}")
             import traceback
             traceback.print_exc()
             try:
@@ -1081,14 +1079,14 @@ class HomelightService(BaseReferralService):
         Returns True if lead was found and clicked.
         """
         try:
-            print(f"[URGENT] Searching for '{target_name}' in urgent referrals...")
+            self.logger.info(f"[URGENT] Searching for '{target_name}' in urgent referrals...")
 
             # Get all referral rows in the urgent list
             referral_rows = self.driver_service.find_elements(By.CSS_SELECTOR, "a[data-test='referralsList-row']")
-            print(f"[URGENT] Found {len(referral_rows)} urgent referrals")
+            self.logger.info(f"[URGENT] Found {len(referral_rows)} urgent referrals")
 
             if len(referral_rows) == 0:
-                print("[URGENT] No urgent referrals found")
+                self.logger.info("[URGENT] No urgent referrals found")
                 return False
 
             # Parse target name
@@ -1109,7 +1107,7 @@ class HomelightService(BaseReferralService):
 
                     if full_name_match or first_last_match:
                         match_type = "full name" if full_name_match else "first+last name"
-                        print(f"[URGENT] Found match in urgent list (row {i}, {match_type}): '{row_text[:80]}...'")
+                        self.logger.info(f"[URGENT] Found match in urgent list (row {i}, {match_type}): '{row_text[:80]}...'")
                         matching_rows.append((i, row, row_text, full_name_match))
                 except Exception as row_error:
                     continue
@@ -1117,7 +1115,7 @@ class HomelightService(BaseReferralService):
             if matching_rows:
                 # Handle multiple matches similar to regular search
                 if len(matching_rows) > 1 and getattr(self, 'update_all_matches', True):
-                    print(f"[URGENT] Found {len(matching_rows)} matches in urgent list - will update all")
+                    self.logger.info(f"[URGENT] Found {len(matching_rows)} matches in urgent list - will update all")
 
                     processed_texts = getattr(self, '_processed_referral_texts', set())
                     unprocessed = [(i, row, row_text, is_full) for i, row, row_text, is_full in matching_rows
@@ -1129,22 +1127,22 @@ class HomelightService(BaseReferralService):
                             self._processed_referral_texts = set()
                         self._processed_referral_texts.add(unprocessed[0][2][:50])
 
-                        print(f"[URGENT] Clicking first urgent match, {len(self._pending_matches)} more to process")
+                        self.logger.info(f"[URGENT] Clicking first urgent match, {len(self._pending_matches)} more to process")
                         unprocessed[0][1].click()
                         self.wis.human_delay(2, 3)
                         return True
                 else:
                     # Single match or not updating all
-                    print(f"[URGENT] Clicking urgent match (row {matching_rows[0][0]})")
+                    self.logger.info(f"[URGENT] Clicking urgent match (row {matching_rows[0][0]})")
                     matching_rows[0][1].click()
                     self.wis.human_delay(2, 3)
                     return True
             else:
-                print(f"[URGENT] No matches for '{target_name}' in urgent list")
+                self.logger.info(f"[URGENT] No matches for '{target_name}' in urgent list")
                 return False
 
         except Exception as e:
-            print(f"[URGENT] Error searching urgent list: {e}")
+            self.logger.info(f"[URGENT] Error searching urgent list: {e}")
             return False
 
     def _ensure_on_referrals_page(self):
@@ -1157,7 +1155,7 @@ class HomelightService(BaseReferralService):
                 referrals_link.click()
                 self.wis.human_delay(2, 3)
         except Exception as e:
-            print(f"Warning: Could not ensure on referrals page: {e}")
+            self.logger.info(f"Warning: Could not ensure on referrals page: {e}")
 
     def _navigate_back_to_referrals(self):
         """Navigate back to the referrals page after processing a lead"""
@@ -1173,9 +1171,9 @@ class HomelightService(BaseReferralService):
                     search_box.clear()
                     self.wis.human_delay(0.5, 1)
                     search_box.send_keys(Keys.ESCAPE)  # Close any dropdowns
-                    print("[CLEAR] Cleared search box before next search")
+                    self.logger.info("[CLEAR] Cleared search box before next search")
                 except Exception as e:
-                    print(f"[WARNING] Could not clear search box: {e}")
+                    self.logger.info(f"[WARNING] Could not clear search box: {e}")
                     pass
                 return
 
@@ -1206,7 +1204,7 @@ class HomelightService(BaseReferralService):
                 if done_button:
                     try:
                         done_button.click()
-                        print("[NAV] Clicked Done button")
+                        self.logger.info("[NAV] Clicked Done button")
                         self.wis.human_delay(2, 3)
                         # Clear search box after clicking Done
                         try:
@@ -1217,14 +1215,14 @@ class HomelightService(BaseReferralService):
                             self.wis.human_delay(0.3, 0.5)
                             search_box.send_keys(Keys.DELETE)
                             search_box.send_keys(Keys.ESCAPE)
-                            print("[CLEAR] Cleared search box after clicking Done")
+                            self.logger.info("[CLEAR] Cleared search box after clicking Done")
                         except Exception as e:
-                            print(f"[WARNING] Could not clear search box after Done: {e}")
+                            self.logger.info(f"[WARNING] Could not clear search box after Done: {e}")
                         return
                     except Exception as e:
-                        print(f"[WARNING] Could not click Done button: {e}")
+                        self.logger.info(f"[WARNING] Could not click Done button: {e}")
                 else:
-                    print("[NAV] Done button not found or not visible, trying direct navigation")
+                    self.logger.info("[NAV] Done button not found or not visible, trying direct navigation")
 
             # Try to click the Referrals navigation link
             try:
@@ -1237,9 +1235,9 @@ class HomelightService(BaseReferralService):
                     search_box.clear()
                     self.wis.human_delay(0.5, 1)
                     search_box.send_keys(Keys.ESCAPE)
-                    print("[CLEAR] Cleared search box after clicking Referrals")
+                    self.logger.info("[CLEAR] Cleared search box after clicking Referrals")
                 except Exception as e:
-                    print(f"[WARNING] Could not clear search box after Referrals: {e}")
+                    self.logger.info(f"[WARNING] Could not clear search box after Referrals: {e}")
                 return
             except:
                 pass
@@ -1254,35 +1252,35 @@ class HomelightService(BaseReferralService):
                     search_box.clear()
                     self.wis.human_delay(0.5, 1)
                     search_box.send_keys(Keys.ESCAPE)
-                    print("[CLEAR] Cleared search box after navigation")
+                    self.logger.info("[CLEAR] Cleared search box after navigation")
                 except Exception as e:
-                    print(f"[WARNING] Could not clear search box after navigation: {e}")
+                    self.logger.info(f"[WARNING] Could not clear search box after navigation: {e}")
             except Exception as e:
-                print(f"Warning: Could not navigate back to referrals: {e}")
+                self.logger.info(f"Warning: Could not navigate back to referrals: {e}")
 
         except Exception as e:
-            print(f"Warning: Error navigating back to referrals: {e}")
+            self.logger.info(f"Warning: Error navigating back to referrals: {e}")
 
     def update_single_lead(self) -> bool:
         """Update a single lead (assumes already logged in)"""
         try:
             full_name = f"{self.lead.first_name} {self.lead.last_name}"
 
-            print("\n" + "="*60)
-            print("[ROCKET] STARTING HOMELIGHT SYNC")
-            print("="*60)
-            print(f"[CLIPBOARD] Lead: {full_name}")
-            print(f"[LOCATION] Current FUB Status: {getattr(self.lead, 'status', 'N/A')}")
-            print(f"[TARGET] Target HomeLight Stage: {self.status}")
-            print("="*60 + "\n")
+            self.logger.info("\n" + "="*60)
+            self.logger.info("[ROCKET] STARTING HOMELIGHT SYNC")
+            self.logger.info("="*60)
+            self.logger.info(f"[CLIPBOARD] Lead: {full_name}")
+            self.logger.info(f"[LOCATION] Current FUB Status: {getattr(self.lead, 'status', 'N/A')}")
+            self.logger.info(f"[TARGET] Target HomeLight Stage: {self.status}")
+            self.logger.info("="*60 + "\n")
 
             # Make sure we're on the referrals page before searching
             self._ensure_on_referrals_page()
 
-            print(f"[SEARCH] Step 1: Searching for '{full_name}'...")
+            self.logger.info(f"[SEARCH] Step 1: Searching for '{full_name}'...")
             customer_found = self.find_and_click_customer_by_name(full_name)
             if customer_found:
-                print("[SUCCESS] Customer found and opened\n")
+                self.logger.info("[SUCCESS] Customer found and opened\n")
                 
                 # Check if lead should be skipped (metadata and page activity)
                 should_skip = False
@@ -1314,11 +1312,11 @@ class HomelightService(BaseReferralService):
                                     if last_synced > cutoff_time:
                                         should_skip = True
                                         skip_reason = f"Synced {hours_since:.1f}h ago (metadata)"
-                                        print(f"[SKIP] Skipping {full_name} - {skip_reason}")
+                                        self.logger.info(f"[SKIP] Skipping {full_name} - {skip_reason}")
                             except Exception as e:
-                                print(f"[WARNING] Error parsing metadata timestamp: {e}")
+                                self.logger.info(f"[WARNING] Error parsing metadata timestamp: {e}")
                 except Exception as e:
-                    print(f"[WARNING] Error checking metadata: {e}")
+                    self.logger.info(f"[WARNING] Error checking metadata: {e}")
                 
                 # SECOND: If metadata doesn't show recent sync, check page activity
                 if not should_skip:
@@ -1326,22 +1324,22 @@ class HomelightService(BaseReferralService):
                         should_skip = self._check_recent_activity_on_page(self.min_sync_interval_hours)
                         if should_skip:
                             skip_reason = "Recent activity found on page"
-                            print(f"[SKIP] Skipping {full_name} - {skip_reason}")
+                            self.logger.info(f"[SKIP] Skipping {full_name} - {skip_reason}")
                     except Exception as e:
-                        print(f"[WARNING] Error checking activity: {e}")
+                        self.logger.info(f"[WARNING] Error checking activity: {e}")
                 
                 # Skip if either check indicates we should skip
                 if should_skip:
-                    print(f"[SKIP] Lead skipped: {skip_reason}")
+                    self.logger.info(f"[SKIP] Lead skipped: {skip_reason}")
                     self._navigate_back_to_referrals()
                     return False
                 
-                print(f"[PEN] Step 2: Updating stage to '{self.status}'...")
+                self.logger.info(f"[PEN] Step 2: Updating stage to '{self.status}'...")
                 success = self.update_customers(self.status)
                 if success:
-                    print("\n" + "="*60)
-                    print("[SUCCESS] HOMELIGHT SYNC COMPLETED SUCCESSFULLY!")
-                    print("="*60 + "\n")
+                    self.logger.info("\n" + "="*60)
+                    self.logger.info("[SUCCESS] HOMELIGHT SYNC COMPLETED SUCCESSFULLY!")
+                    self.logger.info("="*60 + "\n")
 
                 # Navigate back to referrals page
                 self._navigate_back_to_referrals()
@@ -1349,11 +1347,11 @@ class HomelightService(BaseReferralService):
                 # Check if there are more matching referrals to update (e.g., buyer + seller for same person)
                 pending_matches = getattr(self, '_pending_matches', [])
                 if pending_matches and success:
-                    print(f"\n[MULTI] Processing {len(pending_matches)} additional matching referrals...")
+                    self.logger.info(f"\n[MULTI] Processing {len(pending_matches)} additional matching referrals...")
                     additional_success = 0
 
                     for match_idx, (original_row_idx, row_text) in enumerate(pending_matches):
-                        print(f"\n[MULTI] Processing match {match_idx + 2}/{len(pending_matches) + 1}: {row_text[:50]}...")
+                        self.logger.info(f"\n[MULTI] Processing match {match_idx + 2}/{len(pending_matches) + 1}: {row_text[:50]}...")
 
                         # Search again and find the matching row
                         self._ensure_on_referrals_page()
@@ -1373,30 +1371,30 @@ class HomelightService(BaseReferralService):
                                 should_skip = self._check_recent_activity_on_page(self.min_sync_interval_hours)
                                 if not should_skip:
                                     if self.update_customers(self.status):
-                                        print(f"[MULTI] Successfully updated match {match_idx + 2}")
+                                        self.logger.info(f"[MULTI] Successfully updated match {match_idx + 2}")
                                         additional_success += 1
                                     else:
-                                        print(f"[MULTI] Failed to update match {match_idx + 2}")
+                                        self.logger.info(f"[MULTI] Failed to update match {match_idx + 2}")
                                 else:
-                                    print(f"[MULTI] Skipped match {match_idx + 2} - recent activity (already updated)")
+                                    self.logger.info(f"[MULTI] Skipped match {match_idx + 2} - recent activity (already updated)")
                                     # This match was already updated, so count it as done
                                     additional_success += 1
                             except Exception as e:
-                                print(f"[MULTI] Error processing match {match_idx + 2}: {e}")
+                                self.logger.info(f"[MULTI] Error processing match {match_idx + 2}: {e}")
 
                             self._navigate_back_to_referrals()
                         else:
-                            print(f"[MULTI] Could not find match {match_idx + 2} on re-search")
+                            self.logger.info(f"[MULTI] Could not find match {match_idx + 2} on re-search")
 
                         # Restore update_all_matches setting
                         self.update_all_matches = old_update_all
 
-                    print(f"\n[MULTI] Completed: {additional_success}/{len(pending_matches)} additional referrals updated")
+                    self.logger.info(f"\n[MULTI] Completed: {additional_success}/{len(pending_matches)} additional referrals updated")
 
                 return success
             else:
                 # Customer not found via normal search - try urgent filter as fallback
-                print("[FALLBACK] Customer not found via search, trying urgent filter...")
+                self.logger.info("[FALLBACK] Customer not found via search, trying urgent filter...")
 
                 # Check if we're already in urgent fallback mode to avoid infinite loops
                 if not getattr(self, '_in_urgent_fallback', False):
@@ -1406,24 +1404,24 @@ class HomelightService(BaseReferralService):
                     if self._click_urgent_filter():
                         # Search for the lead in the urgent list
                         if self._search_in_urgent_list(full_name):
-                            print("[URGENT] Found lead in urgent list!")
+                            self.logger.info("[URGENT] Found lead in urgent list!")
 
                             # Check activity and update
                             should_skip = False
                             try:
                                 should_skip = self._check_recent_activity_on_page(self.min_sync_interval_hours)
                                 if should_skip:
-                                    print(f"[URGENT] Skipping {full_name} - recent activity found")
+                                    self.logger.info(f"[URGENT] Skipping {full_name} - recent activity found")
                             except Exception as e:
-                                print(f"[URGENT] Error checking activity: {e}")
+                                self.logger.info(f"[URGENT] Error checking activity: {e}")
 
                             if not should_skip:
-                                print(f"[URGENT] Updating stage to '{self.status}'...")
+                                self.logger.info(f"[URGENT] Updating stage to '{self.status}'...")
                                 success = self.update_customers(self.status)
                                 if success:
-                                    print("\n" + "="*60)
-                                    print("[URGENT] SUCCESS! Lead updated via urgent fallback")
-                                    print("="*60 + "\n")
+                                    self.logger.info("\n" + "="*60)
+                                    self.logger.info("[URGENT] SUCCESS! Lead updated via urgent fallback")
+                                    self.logger.info("="*60 + "\n")
 
                                 # Navigate back and clear filter
                                 self._navigate_back_to_referrals()
@@ -1436,22 +1434,22 @@ class HomelightService(BaseReferralService):
                                 self._in_urgent_fallback = False
                                 return False
                         else:
-                            print("[URGENT] Lead not found in urgent list either")
+                            self.logger.info("[URGENT] Lead not found in urgent list either")
                             self._clear_urgent_filter()
 
                     self._in_urgent_fallback = False
 
-                print("[ERROR] Could not find or click customer")
+                self.logger.info("[ERROR] Could not find or click customer")
                 self.logger.warning(f"Customer {full_name} not found")
                 # Still navigate back to be ready for next lead
                 self._navigate_back_to_referrals()
                 return False
         except Exception as e:
-            print("\n" + "="*60)
-            print("[ERROR] HOMELIGHT SYNC FAILED")
-            print("="*60)
-            print(f"Error: {str(e)}\n")
-            print(f"There is an error updating {full_name}: {e}")
+            self.logger.info("\n" + "="*60)
+            self.logger.info("[ERROR] HOMELIGHT SYNC FAILED")
+            self.logger.info("="*60)
+            self.logger.info(f"Error: {str(e)}\n")
+            self.logger.info(f"There is an error updating {full_name}: {e}")
             # Try to navigate back to referrals page even on error
             try:
                 self._navigate_back_to_referrals()
@@ -1490,17 +1488,17 @@ class HomelightService(BaseReferralService):
 
         # Log the start of the process
         logger.info(f"Starting HomeLight bulk update for {len(leads_data)} leads")
-        print(f"[START] Beginning HomeLight update process for {len(leads_data)} leads")
+        self.logger.info(f"[START] Beginning HomeLight update process for {len(leads_data)} leads")
 
         try:
-            print("[LOCK] Logging into HomeLight...")
+            self.logger.info("[LOCK] Logging into HomeLight...")
             login_start = time.time()
             login_success = self.login_once()
             login_time = time.time() - login_start
 
             if not login_success:
                 error_msg = "Failed to login to HomeLight - check credentials and network connection"
-                print(f"[ERROR] {error_msg}")
+                self.logger.info(f"[ERROR] {error_msg}")
                 logger.error(error_msg)
                 # Mark all leads as failed due to login failure
                 for lead, status in leads_data:
@@ -1514,9 +1512,9 @@ class HomelightService(BaseReferralService):
                     })
                 return results
 
-            print(f"[SUCCESS] Login successful (took {login_time:.1f}s)\n")
+            self.logger.info(f"[SUCCESS] Login successful (took {login_time:.1f}s)\n")
             logger.info(f"Successfully logged into HomeLight in {login_time:.1f} seconds")
-            print(f"[ROCKET] Processing {len(leads_data)} leads...")
+            self.logger.info(f"[ROCKET] Processing {len(leads_data)} leads...")
 
             processed_count = 0
             for lead, target_status in leads_data:
@@ -1530,19 +1528,19 @@ class HomelightService(BaseReferralService):
                     # Process this lead
                     full_name = f"{lead.first_name} {lead.last_name}"
 
-                    print(f"\n[LEAD {processed_count}/{len(leads_data)}] Processing: {full_name}")
-                    print(f"[LOCATION] Current FUB Status: {getattr(lead, 'status', 'N/A')}")
-                    print(f"[TARGET] Target HomeLight Stage: {target_status}")
+                    self.logger.info(f"\n[LEAD {processed_count}/{len(leads_data)}] Processing: {full_name}")
+                    self.logger.info(f"[LOCATION] Current FUB Status: {getattr(lead, 'status', 'N/A')}")
+                    self.logger.info(f"[TARGET] Target HomeLight Stage: {target_status}")
                     logger.info(f"Processing lead {processed_count}/{len(leads_data)}: {full_name} -> {target_status}")
 
                     # Make sure we're on the referrals page before searching
-                    print(f"[SEARCH] Searching for '{full_name}'...")
+                    self.logger.info(f"[SEARCH] Searching for '{full_name}'...")
                     search_start = time.time()
                     customer_found = self.find_and_click_customer_by_name(full_name)
                     search_time = time.time() - search_start
 
                     if customer_found:
-                        print(f"[SUCCESS] Customer found and opened (search took {search_time:.1f}s)")
+                        self.logger.info(f"[SUCCESS] Customer found and opened (search took {search_time:.1f}s)")
                         
                         # Check if lead should be skipped (metadata and page activity)
                         should_skip = False
@@ -1574,11 +1572,11 @@ class HomelightService(BaseReferralService):
                                             if last_synced > cutoff_time:
                                                 should_skip = True
                                                 skip_reason = f"Synced {hours_since:.1f}h ago (metadata)"
-                                                print(f"[SKIP] Skipping {full_name} - {skip_reason}")
+                                                self.logger.info(f"[SKIP] Skipping {full_name} - {skip_reason}")
                                     except Exception as e:
-                                        print(f"[WARNING] Error parsing metadata timestamp: {e}")
+                                        self.logger.info(f"[WARNING] Error parsing metadata timestamp: {e}")
                         except Exception as e:
-                            print(f"[WARNING] Error checking metadata: {e}")
+                            self.logger.info(f"[WARNING] Error checking metadata: {e}")
                         
                         # SECOND: If metadata doesn't show recent sync, check page activity
                         if not should_skip:
@@ -1586,9 +1584,9 @@ class HomelightService(BaseReferralService):
                                 should_skip = self._check_recent_activity_on_page(self.min_sync_interval_hours)
                                 if should_skip:
                                     skip_reason = "Recent activity found on page"
-                                    print(f"[SKIP] Skipping {full_name} - {skip_reason}")
+                                    self.logger.info(f"[SKIP] Skipping {full_name} - {skip_reason}")
                             except Exception as e:
-                                print(f"[WARNING] Error checking activity: {e}")
+                                self.logger.info(f"[WARNING] Error checking activity: {e}")
                         
                         # Skip if either check indicates we should skip
                         if should_skip:
@@ -1615,7 +1613,7 @@ class HomelightService(BaseReferralService):
                                 pass
                             continue
                         
-                        print(f"[PEN] Updating stage to '{target_status}'...")
+                        self.logger.info(f"[PEN] Updating stage to '{target_status}'...")
 
                         # Get comment from @update notes if available
                         lead_comment = comments.get(lead.id)
@@ -1633,11 +1631,11 @@ class HomelightService(BaseReferralService):
                                 )
                                 if update:
                                     lead_comment = update
-                                    print(f"[UPDATE] Auto-extracted @update from FUB: {lead_comment[:50]}...")
+                                    self.logger.info(f"[UPDATE] Auto-extracted @update from FUB: {lead_comment[:50]}...")
                             except Exception as e:
-                                print(f"[WARNING] Could not extract @update note: {e}")
+                                self.logger.info(f"[WARNING] Could not extract @update note: {e}")
                         elif lead_comment:
-                            print(f"[UPDATE] Using @update comment: {lead_comment[:50]}...")
+                            self.logger.info(f"[UPDATE] Using @update comment: {lead_comment[:50]}...")
 
                         update_start = time.time()
                         success = self.update_customers(target_status, custom_note=lead_comment)
@@ -1645,7 +1643,7 @@ class HomelightService(BaseReferralService):
 
                         if success == "already_synced":
                             total_time = time.time() - lead_start_time
-                            print(f"[ALREADY SYNCED] Lead already at or past target stage (took {total_time:.1f}s)")
+                            self.logger.info(f"[ALREADY SYNCED] Lead already at or past target stage (took {total_time:.1f}s)")
                             logger.info(f"Lead {full_name} already at or past target stage '{target_status}'")
 
                             # Update metadata to track check time
@@ -1658,7 +1656,7 @@ class HomelightService(BaseReferralService):
                                 lead_service = LeadServiceSingleton.get_instance()
                                 lead_service.update(lead)
                             except Exception as e:
-                                print(f"[WARNING] Could not update lead sync timestamp: {e}")
+                                self.logger.info(f"[WARNING] Could not update lead sync timestamp: {e}")
 
                             results["successful"] += 1
                             results["details"].append({
@@ -1670,7 +1668,7 @@ class HomelightService(BaseReferralService):
                             })
                         elif success:
                             total_time = time.time() - lead_start_time
-                            print(f"[SUCCESS] Lead updated successfully! (update took {update_time:.1f}s, total {total_time:.1f}s)")
+                            self.logger.info(f"[SUCCESS] Lead updated successfully! (update took {update_time:.1f}s, total {total_time:.1f}s)")
                             logger.info(f"Successfully updated lead {full_name} in {total_time:.1f} seconds")
 
                             # Update lead metadata to track last sync time
@@ -1682,9 +1680,9 @@ class HomelightService(BaseReferralService):
                                 from app.service.lead_service import LeadServiceSingleton
                                 lead_service = LeadServiceSingleton.get_instance()
                                 lead_service.update(lead)
-                                print(f"[TRACK] Recorded sync time for {full_name}")
+                                self.logger.info(f"[TRACK] Recorded sync time for {full_name}")
                             except Exception as e:
-                                print(f"[WARNING] Could not update lead sync timestamp: {e}")
+                                self.logger.info(f"[WARNING] Could not update lead sync timestamp: {e}")
                                 logger.warning(f"Could not update lead sync timestamp for {full_name}: {e}")
 
                             results["successful"] += 1
@@ -1696,7 +1694,7 @@ class HomelightService(BaseReferralService):
                                 "processing_time": round(total_time, 2)
                             })
                         else:
-                            print("[ERROR] Failed to update lead - status change unsuccessful")
+                            self.logger.info("[ERROR] Failed to update lead - status change unsuccessful")
                             logger.error(f"Failed to update lead {full_name} - status change unsuccessful")
                             results["failed"] += 1
                             results["details"].append({
@@ -1707,7 +1705,7 @@ class HomelightService(BaseReferralService):
                                 "error": "Status update failed"
                             })
                     else:
-                        print(f"[ERROR] Could not find customer '{full_name}' in HomeLight")
+                        self.logger.info(f"[ERROR] Could not find customer '{full_name}' in HomeLight")
                         logger.warning(f"Customer {full_name} (ID: {lead.fub_person_id}) not found in HomeLight")
                         results["failed"] += 1
                         results["details"].append({
@@ -1719,7 +1717,7 @@ class HomelightService(BaseReferralService):
                         })
 
                     # Navigate back to referrals page for next lead
-                    print("[NAVIGATE] Returning to referrals page...")
+                    self.logger.info("[NAVIGATE] Returning to referrals page...")
                     self._navigate_back_to_referrals()
                     
                     # Ensure search box is cleared before next search
@@ -1729,12 +1727,12 @@ class HomelightService(BaseReferralService):
                         search_box.clear()
                         self.wis.human_delay(0.5, 1)
                         search_box.send_keys(Keys.ESCAPE)  # Close any dropdowns
-                        print("[CLEAR] Cleared search box before next lead search")
+                        self.logger.info("[CLEAR] Cleared search box before next lead search")
                     except Exception as e:
-                        print(f"[WARNING] Could not clear search box before next search: {e}")
+                        self.logger.info(f"[WARNING] Could not clear search box before next search: {e}")
 
                 except Exception as e:
-                    print(f"[ERROR] Error processing lead {lead.fub_person_id}: {e}")
+                    self.logger.info(f"[ERROR] Error processing lead {lead.fub_person_id}: {e}")
                     results["failed"] += 1
                     results["details"].append({
                         "lead_id": lead.id,
@@ -1757,7 +1755,7 @@ class HomelightService(BaseReferralService):
                         pass
 
             # Run urgent sweep to catch any missed leads
-            print("\n[URGENT] Running urgent sweep to catch any missed leads...")
+            self.logger.info("\n[URGENT] Running urgent sweep to catch any missed leads...")
             results = self._process_urgent_sweep(leads_data, results)
 
             total_time = time.time() - login_start
@@ -1767,21 +1765,21 @@ class HomelightService(BaseReferralService):
             skipped_count = results.get('skipped', 0)
             effective_success = results['successful'] + skipped_count
 
-            print("\n" + "="*80)
-            print("[FINISH] HOMELIGHT BULK SYNC COMPLETED!")
-            print(f"[STATS] Total leads processed: {results['total_leads']}")
-            print(f"[SUCCESS] Successfully updated: {results['successful']}")
-            print(f"[SKIP] Already up-to-date (skipped): {skipped_count}")
-            print(f"[ERROR] Failed updates: {results['failed']}")
-            print(f"[TIME] Total time: {total_time:.1f} seconds")
-            print(f"[TIME] Average time per lead: {avg_time_per_lead:.1f} seconds")
-            print(f"[RATE] Effective success rate: {(effective_success/results['total_leads']*100):.1f}% ({effective_success}/{results['total_leads']} leads current)")
-            print("="*80 + "\n")
+            self.logger.info("\n" + "="*80)
+            self.logger.info("[FINISH] HOMELIGHT BULK SYNC COMPLETED!")
+            self.logger.info(f"[STATS] Total leads processed: {results['total_leads']}")
+            self.logger.info(f"[SUCCESS] Successfully updated: {results['successful']}")
+            self.logger.info(f"[SKIP] Already up-to-date (skipped): {skipped_count}")
+            self.logger.info(f"[ERROR] Failed updates: {results['failed']}")
+            self.logger.info(f"[TIME] Total time: {total_time:.1f} seconds")
+            self.logger.info(f"[TIME] Average time per lead: {avg_time_per_lead:.1f} seconds")
+            self.logger.info(f"[RATE] Effective success rate: {(effective_success/results['total_leads']*100):.1f}% ({effective_success}/{results['total_leads']} leads current)")
+            self.logger.info("="*80 + "\n")
 
             logger.info(f"HomeLight bulk sync completed: {results['successful']} updated, {skipped_count} skipped, {results['failed']} failed in {total_time:.1f}s")
 
         except Exception as e:
-            print(f"[ERROR] Critical error during bulk sync: {e}")
+            self.logger.info(f"[ERROR] Critical error during bulk sync: {e}")
             # Mark remaining leads as failed if there's a critical error
             for lead, status in leads_data[len(results["details"]):]:
                 results["failed"] += 1
@@ -1888,11 +1886,11 @@ class HomelightService(BaseReferralService):
                             
                             last_synced = None
                             has_metadata = lead.metadata and isinstance(lead.metadata, dict)
-                            print(f"[SKIP CHECK] {full_name}: has_metadata={has_metadata}")
+                            self.logger.info(f"[SKIP CHECK] {full_name}: has_metadata={has_metadata}")
                             
                             if has_metadata:
                                 last_synced_str = lead.metadata.get("homelight_last_updated")
-                                print(f"[SKIP CHECK] {full_name}: last_synced_str={last_synced_str}")
+                                self.logger.info(f"[SKIP CHECK] {full_name}: last_synced_str={last_synced_str}")
                                 if last_synced_str:
                                     try:
                                         if isinstance(last_synced_str, str):
@@ -1903,21 +1901,21 @@ class HomelightService(BaseReferralService):
                                             last_synced = last_synced.replace(tzinfo=timezone.utc)
                                         
                                         hours_since = (now - last_synced).total_seconds() / 3600
-                                        print(f"[SKIP CHECK] {full_name}: last_synced={last_synced}, hours_since={hours_since:.1f}, cutoff_hours={self.min_sync_interval_hours}")
+                                        self.logger.info(f"[SKIP CHECK] {full_name}: last_synced={last_synced}, hours_since={hours_since:.1f}, cutoff_hours={self.min_sync_interval_hours}")
                                         
                                         if last_synced > cutoff_time:
                                             should_skip_metadata = True
-                                            print(f"[SKIP] Skipping {full_name} - synced {hours_since:.1f}h ago (metadata check)")
+                                            self.logger.info(f"[SKIP] Skipping {full_name} - synced {hours_since:.1f}h ago (metadata check)")
                                         else:
-                                            print(f"[SKIP CHECK] {full_name}: Not skipping - last synced {hours_since:.1f}h ago (outside {self.min_sync_interval_hours}h window)")
+                                            self.logger.info(f"[SKIP CHECK] {full_name}: Not skipping - last synced {hours_since:.1f}h ago (outside {self.min_sync_interval_hours}h window)")
                                     except Exception as e:
-                                        print(f"[SKIP CHECK] Error parsing metadata timestamp: {e}")
+                                        self.logger.info(f"[SKIP CHECK] Error parsing metadata timestamp: {e}")
                                         import traceback
                                         traceback.print_exc()
                             else:
-                                print(f"[SKIP CHECK] {full_name}: No metadata, will check page activity")
+                                self.logger.info(f"[SKIP CHECK] {full_name}: No metadata, will check page activity")
                         except Exception as e:
-                            print(f"[WARNING] Error checking metadata: {e}")
+                            self.logger.info(f"[WARNING] Error checking metadata: {e}")
                             import traceback
                             traceback.print_exc()
                         
@@ -1925,15 +1923,15 @@ class HomelightService(BaseReferralService):
                         should_skip_activity = False
                         if not should_skip_metadata:
                             try:
-                                print(f"[SKIP CHECK] {full_name}: Checking page activity...")
+                                self.logger.info(f"[SKIP CHECK] {full_name}: Checking page activity...")
                                 should_skip_activity = self._check_recent_activity_on_page(self.min_sync_interval_hours)
-                                print(f"[SKIP CHECK] {full_name}: Activity check result: {should_skip_activity}")
+                                self.logger.info(f"[SKIP CHECK] {full_name}: Activity check result: {should_skip_activity}")
                                 if should_skip_activity:
-                                    print(f"[SKIP] Skipping {full_name} - recent activity found on page (activity check)")
+                                    self.logger.info(f"[SKIP] Skipping {full_name} - recent activity found on page (activity check)")
                                 else:
-                                    print(f"[SKIP CHECK] {full_name}: No recent activity found, proceeding with update")
+                                    self.logger.info(f"[SKIP CHECK] {full_name}: No recent activity found, proceeding with update")
                             except Exception as e:
-                                print(f"[WARNING] Error checking activity: {e}")
+                                self.logger.info(f"[WARNING] Error checking activity: {e}")
                                 import traceback
                                 traceback.print_exc()
                         
@@ -1941,7 +1939,7 @@ class HomelightService(BaseReferralService):
                         if should_skip_metadata or should_skip_activity:
                             skip_reason = "Recently synced (metadata)" if should_skip_metadata else "Recent activity on page"
                             results["skipped"] = results.get("skipped", 0) + 1
-                            print(f"[SKIP] Skipping {full_name} - {skip_reason}")
+                            self.logger.info(f"[SKIP] Skipping {full_name} - {skip_reason}")
                             tracker.update_progress(
                                 sync_id,
                                 skipped=results["skipped"],
@@ -1970,17 +1968,17 @@ class HomelightService(BaseReferralService):
                             continue
 
                         # Only proceed with update if not skipped
-                        print(f"[UPDATE] Starting update for {full_name} with status: {target_status}")
+                        self.logger.info(f"[UPDATE] Starting update for {full_name} with status: {target_status}")
 
                         # Get comment from @update notes if available
                         lead_comment = comments.get(lead.id)
                         if lead_comment:
-                            print(f"[UPDATE] Using @update comment: {lead_comment[:50]}...")
+                            self.logger.info(f"[UPDATE] Using @update comment: {lead_comment[:50]}...")
 
                         try:
                             success = self.update_customers(target_status, custom_note=lead_comment)
                         except Exception as e:
-                            print(f"[ERROR] Exception during update_customers for {full_name}: {e}")
+                            self.logger.info(f"[ERROR] Exception during update_customers for {full_name}: {e}")
                             import traceback
                             traceback.print_exc()
                             success = False
@@ -2004,9 +2002,9 @@ class HomelightService(BaseReferralService):
                                 search_box.send_keys(Keys.DELETE)
                                 self.wis.human_delay(0.3, 0.5)
                                 search_box.send_keys(Keys.ESCAPE)
-                                print("[CLEAR] Cleared search box after update")
+                                self.logger.info("[CLEAR] Cleared search box after update")
                             except Exception as e:
-                                print(f"[WARNING] Could not clear search box: {e}")
+                                self.logger.info(f"[WARNING] Could not clear search box: {e}")
                             
                             # Update lead metadata
                             try:
@@ -2017,10 +2015,10 @@ class HomelightService(BaseReferralService):
                                 from app.service.lead_service import LeadServiceSingleton
                                 lead_service = LeadServiceSingleton.get_instance()
                                 lead_service.update(lead)
-                                print(f"[TRACK] Recorded sync time for {full_name}")
+                                self.logger.info(f"[TRACK] Recorded sync time for {full_name}")
                             except Exception as e:
                                 logger.warning(f"Could not update lead sync timestamp: {e}")
-                                print(f"[WARNING] Could not update lead sync timestamp: {e}")
+                                self.logger.info(f"[WARNING] Could not update lead sync timestamp: {e}")
                             
                             results["successful"] += 1
                             tracker.update_progress(
@@ -2131,16 +2129,16 @@ class HomelightService(BaseReferralService):
     def homelight_run(self) -> bool:
         """Legacy method for backwards compatibility"""
         try:
-            print("[LOCK] Logging into HomeLight...")
+            self.logger.info("[LOCK] Logging into HomeLight...")
             if self.login_once():
-                print("[SUCCESS] Login successful\n")
+                self.logger.info("[SUCCESS] Login successful\n")
                 return self.update_single_lead()
             else:
-                print("[ERROR] Login failed")
+                self.logger.info("[ERROR] Login failed")
                 self.logger.error("Login failed")
                 return False
         except Exception as e:
-            print(f"There is an error in HomeLight: {e}")
+            self.logger.info(f"There is an error in HomeLight: {e}")
             return False
         finally:
             self.logout()
@@ -2169,7 +2167,7 @@ class HomelightService(BaseReferralService):
             return last_synced > cutoff
 
         except Exception as e:
-            print(f"[WARNING] Error checking sync status: {e}")
+            self.logger.info(f"[WARNING] Error checking sync status: {e}")
             return False
 
     def _get_hours_since_sync(self, lead: Lead) -> Optional[float]:
@@ -2203,14 +2201,14 @@ class HomelightService(BaseReferralService):
             from datetime import timezone
             lead.metadata["homelight_last_updated"] = datetime.now(timezone.utc).isoformat()
             self.lead_service.update(lead)
-            print(f"[TRACK] Recorded sync time for {lead.first_name} {lead.last_name}")
+            self.logger.info(f"[TRACK] Recorded sync time for {lead.first_name} {lead.last_name}")
 
         except Exception as e:
-            print(f"[WARNING] Failed to update lead sync timestamp: {e}")
+            self.logger.info(f"[WARNING] Failed to update lead sync timestamp: {e}")
 
     def find_and_click_customer_by_name(self, target_name: str) -> bool:
         try:
-            print(f"Finding and logging customer: {target_name}")
+            self.logger.info(f"Finding and logging customer: {target_name}")
             # First, ensure we have a stable page by waiting a bit longer
             self.wis.human_delay(2, 4)
 
@@ -2238,7 +2236,7 @@ class HomelightService(BaseReferralService):
             try:
                 search_bar = self.driver_service.find_element(By.CSS_SELECTOR, 'input[placeholder="Search"]')
             except:
-                print("Warning: Could not find search bar")
+                self.logger.info("Warning: Could not find search bar")
                 return False
             
             # Clear search box - multiple methods for reliability
@@ -2262,35 +2260,35 @@ class HomelightService(BaseReferralService):
                 # Verify it's actually empty
                 current_value = search_bar.get_attribute('value') or ''
                 if current_value:
-                    print(f"Warning: Search box still has value after clearing: '{current_value}'")
+                    self.logger.info(f"Warning: Search box still has value after clearing: '{current_value}'")
                     # Force clear again
                     self.driver_service.driver.execute_script("arguments[0].value = '';", search_bar)
             except Exception as clear_error:
-                print(f"Error clearing search box: {clear_error}")
+                self.logger.info(f"Error clearing search box: {clear_error}")
                 search_bar.clear()
             
             # Type the search term (full name first)
-            print(f"Typing search term: '{search_term}'")
+            self.logger.info(f"Typing search term: '{search_term}'")
             self.wis.simulated_typing(search_bar, search_term)
             
             # Verify what was actually typed
             typed_value = search_bar.get_attribute('value') or ''
-            print(f"Search box value after typing: '{typed_value}'")
+            self.logger.info(f"Search box value after typing: '{typed_value}'")
             
             if typed_value != search_term:
-                print(f"WARNING: Typed value '{typed_value}' doesn't match search term '{search_term}'")
+                self.logger.info(f"WARNING: Typed value '{typed_value}' doesn't match search term '{search_term}'")
                 # Try to fix it
                 try:
                     self.driver_service.driver.execute_script("arguments[0].value = arguments[1];", search_bar, search_term)
                     typed_value = search_bar.get_attribute('value') or ''
-                    print(f"Fixed search box value: '{typed_value}'")
+                    self.logger.info(f"Fixed search box value: '{typed_value}'")
                 except:
                     pass
             
             search_bar.send_keys(Keys.ENTER)
             
             # Wait for search results to load - wait for rows to appear
-            print("Waiting for search results to load...")
+            self.logger.info("Waiting for search results to load...")
             try:
                 from selenium.webdriver.support.ui import WebDriverWait
                 from selenium.webdriver.support import expected_conditions as EC
@@ -2310,11 +2308,11 @@ class HomelightService(BaseReferralService):
 
             # Look for customer rows
             try:
-                print(f"Searching for referral rows containing '{target_name}'...")
+                self.logger.info(f"Searching for referral rows containing '{target_name}'...")
 
                 # Use the most direct approach: find all referral rows and check their text
                 referral_rows = self.driver_service.find_elements(By.CSS_SELECTOR, "a[data-test='referralsList-row']")
-                print(f"Found {len(referral_rows)} referral rows")
+                self.logger.info(f"Found {len(referral_rows)} referral rows")
 
                 matching_rows = []
                 # Split target name for better matching
@@ -2326,7 +2324,7 @@ class HomelightService(BaseReferralService):
                     try:
                         row_text = row.text.strip()
                         row_lower = row_text.lower()
-                        print(f"Checking row {i}: '{row_text[:100]}...'")
+                        self.logger.info(f"Checking row {i}: '{row_text[:100]}...'")
 
                         # More precise matching: check for full name match first
                         full_name_match = target_name.lower() in row_lower
@@ -2339,19 +2337,19 @@ class HomelightService(BaseReferralService):
                         
                         if full_name_match or first_last_match:
                             match_type = "full name" if full_name_match else "first+last name"
-                            print(f"Found matching customer row {i} ({match_type}): '{row_text[:100]}...'")
+                            self.logger.info(f"Found matching customer row {i} ({match_type}): '{row_text[:100]}...'")
                             matching_rows.append((i, row, row_text, full_name_match))
                     except Exception as row_error:
-                        print(f"Error checking row {i}: {row_error}")
+                        self.logger.info(f"Error checking row {i}: {row_error}")
                         continue
 
                 # If multiple matches found
                 if len(matching_rows) > 1:
-                    print(f"Found {len(matching_rows)} matching rows")
+                    self.logger.info(f"Found {len(matching_rows)} matching rows")
 
                     # Check if we should update ALL matches (e.g., both buyer and seller referrals)
                     if getattr(self, 'update_all_matches', True):
-                        print(f"[MULTI] Will update ALL {len(matching_rows)} matching referrals for this lead")
+                        self.logger.info(f"[MULTI] Will update ALL {len(matching_rows)} matching referrals for this lead")
 
                         # Check if we should skip any already-processed referrals
                         processed_texts = getattr(self, '_processed_referral_texts', set())
@@ -2369,15 +2367,15 @@ class HomelightService(BaseReferralService):
                                 self._processed_referral_texts = set()
                             self._processed_referral_texts.add(unprocessed_matches[0][2][:50])
 
-                            print(f"[MULTI] Clicking match (row {unprocessed_matches[0][0]}), {len(self._pending_matches)} more to process after")
+                            self.logger.info(f"[MULTI] Clicking match (row {unprocessed_matches[0][0]}), {len(self._pending_matches)} more to process after")
                             unprocessed_matches[0][1].click()
                             customer_found = True
                         else:
-                            print(f"[MULTI] All matches already processed, skipping")
+                            self.logger.info(f"[MULTI] All matches already processed, skipping")
                             customer_found = False
                     else:
                         # Original behavior: pick the best match
-                        print(f"Found {len(matching_rows)} matching rows - trying to pick the best match")
+                        self.logger.info(f"Found {len(matching_rows)} matching rows - trying to pick the best match")
 
                         # Try to match by buyer/seller type if available in lead tags
                         lead_tags = getattr(self.lead, 'tags', []) or []
@@ -2419,30 +2417,30 @@ class HomelightService(BaseReferralService):
 
                         if best_match:
                             i, row, row_text = best_match
-                            print(f"Selected best match (row {i}, score: {best_match_score}): '{row_text[:100]}...'")
+                            self.logger.info(f"Selected best match (row {i}, score: {best_match_score}): '{row_text[:100]}...'")
                             row.click()
                             customer_found = True
                         else:
                             # If no best match, prefer the one with full name match
                             full_match = next((m for m in matching_rows if m[3]), None)
                             if full_match:
-                                print(f"Using full name match (row {full_match[0]})")
+                                self.logger.info(f"Using full name match (row {full_match[0]})")
                                 full_match[1].click()
                                 customer_found = True
                             else:
-                                print(f"Using first match (no clear best match)")
+                                self.logger.info(f"Using first match (no clear best match)")
                                 matching_rows[0][1].click()
                                 customer_found = True
                 elif len(matching_rows) == 1:
                     # Single match - use it
-                    print(f"Single match found - clicking row {matching_rows[0][0]}")
+                    self.logger.info(f"Single match found - clicking row {matching_rows[0][0]}")
                     matching_rows[0][1].click()
                     customer_found = True
                 else:
                     # No matches with full name - only try first name if we truly have zero results
                     if len(referral_rows) == 0 and len(target_name.split()) > 1:
                         first_name = target_name.split()[0]
-                        print(f"No matches with full name '{target_name}' and no results found, trying first name '{first_name}'...")
+                        self.logger.info(f"No matches with full name '{target_name}' and no results found, trying first name '{first_name}'...")
                         
                         # Clear and search with first name
                         try:
@@ -2471,7 +2469,7 @@ class HomelightService(BaseReferralService):
                             
                             # Search again
                             referral_rows = self.driver_service.find_elements(By.CSS_SELECTOR, "a[data-test='referralsList-row']")
-                            print(f"Found {len(referral_rows)} referral rows with first name search")
+                            self.logger.info(f"Found {len(referral_rows)} referral rows with first name search")
                             
                             # Use same matching logic as before
                             name_parts = target_name.split()
@@ -2485,33 +2483,33 @@ class HomelightService(BaseReferralService):
                                     
                                     # Check for full name or first+last match
                                     if target_name.lower() in row_lower or (first_name_lower in row_lower and last_name_lower in row_lower):
-                                        print(f"Found matching customer row {i} with first name search: '{row_text[:100]}...'")
+                                        self.logger.info(f"Found matching customer row {i} with first name search: '{row_text[:100]}...'")
                                         row.click()
                                         customer_found = True
                                         break
                                 except Exception as row_error:
                                     continue
                         except Exception as first_name_error:
-                            print(f"Error trying first name search: {first_name_error}")
+                            self.logger.info(f"Error trying first name search: {first_name_error}")
                     else:
-                        print(f"No matching rows found for '{target_name}' (but {len(referral_rows)} total rows exist)")
+                        self.logger.info(f"No matching rows found for '{target_name}' (but {len(referral_rows)} total rows exist)")
 
             except Exception as search_error:
-                print(f"Error during search: {search_error}")
+                self.logger.info(f"Error during search: {search_error}")
                 import traceback
                 traceback.print_exc()
 
             # If no customer found, there's likely an issue with the search or page structure
             if not customer_found:
-                print(f"Failed to find customer '{target_name}' after searching. This may indicate:")
-                print("1. The search didn't work properly")
-                print("2. The page structure has changed")
-                print("3. The customer name doesn't exist in the results")
-                print("4. The referral row selector needs updating")
+                self.logger.info(f"Failed to find customer '{target_name}' after searching. This may indicate:")
+                self.logger.info("1. The search didn't work properly")
+                self.logger.info("2. The page structure has changed")
+                self.logger.info("3. The customer name doesn't exist in the results")
+                self.logger.info("4. The referral row selector needs updating")
 
             if not customer_found:
                 # Last resort: click the first customer-like element
-                print("Could not find customer by name, trying first clickable element...")
+                self.logger.info("Could not find customer by name, trying first clickable element...")
                 customer_elements = self.driver_service.find_elements(By.CSS_SELECTOR, "div[cursor='pointer'], div.cursor-pointer")
                 if customer_elements:
                     # Skip navigation elements and click what looks like a customer
@@ -2522,7 +2520,7 @@ class HomelightService(BaseReferralService):
                             if (len(text.split()) >= 2 and  # At least 2 words
                                 not any(nav_word in text for nav_word in ['menu', 'nav', 'header', 'sidebar']) and
                                 any(indicator in text for indicator in ['seller', 'buyer', 'road', 'street', 'avenue', 'drive', 'ca', 'california', 'tx', 'texas', 'fl', 'florida'])):
-                                print(f"Clicking customer element {i}: '{text[:50]}...'")
+                                self.logger.info(f"Clicking customer element {i}: '{text[:50]}...'")
                                 element.click()
                                 customer_found = True
                                 break
@@ -2533,11 +2531,11 @@ class HomelightService(BaseReferralService):
                     if not customer_found and len(customer_elements) > 2:
                         try:
                             text = customer_elements[2].text[:50]
-                            print(f"Clicking first fallback element: '{text}...'")
+                            self.logger.info(f"Clicking first fallback element: '{text}...'")
                             customer_elements[2].click()
                             customer_found = True
                         except Exception as fallback_error:
-                            print(f"Fallback click failed: {fallback_error}")
+                            self.logger.info(f"Fallback click failed: {fallback_error}")
 
             if not customer_found:
                 raise Exception("No suitable customer element found to click")
@@ -2546,7 +2544,7 @@ class HomelightService(BaseReferralService):
             return True
 
         except Exception as e:
-            print(f"Error clicking customer: {e}")
+            self.logger.info(f"Error clicking customer: {e}")
             return False
 
     def update_customers(self, status_to_select: str, custom_note: str = None) -> bool:
@@ -2560,10 +2558,10 @@ class HomelightService(BaseReferralService):
         try:
             primary_stage, sub_stage = self._parse_target_status(status_to_select)
             if not primary_stage:
-                print("No stage provided to update in HomeLight")
+                self.logger.info("No stage provided to update in HomeLight")
                 return False
 
-            print(f"Syncing HomeLight stage to: {primary_stage}{f' / {sub_stage}' if sub_stage else ''}")
+            self.logger.info(f"Syncing HomeLight stage to: {primary_stage}{f' / {sub_stage}' if sub_stage else ''}")
 
             # Store custom_note for use in _add_sync_note
             self._custom_note = custom_note
@@ -2573,27 +2571,27 @@ class HomelightService(BaseReferralService):
 
             stage_result = self._select_stage_option(primary_stage)
             if stage_result == "already_synced":
-                print(f"Lead is already at or past target stage '{primary_stage}' - skipping stage change")
+                self.logger.info(f"Lead is already at or past target stage '{primary_stage}' - skipping stage change")
                 return "already_synced"
             if not stage_result:
-                print(f"Failed to select stage '{primary_stage}'")
+                self.logger.info(f"Failed to select stage '{primary_stage}'")
                 return False
 
             if not self._fill_additional_fields(primary_stage):
-                print(f"Missing required data to complete stage '{primary_stage}'")
+                self.logger.info(f"Missing required data to complete stage '{primary_stage}'")
                 return False
 
             # Attempt to add a factual sync note based on FUB data
             note_form_available = self._open_add_note_form()
             if note_form_available:
-                print("Adding sync note based on FUB data...")
+                self.logger.info("Adding sync note based on FUB data...")
                 if not self._add_sync_note(primary_stage, sub_stage, custom_note=self._custom_note):
-                    print("Failed to add sync note - continuing to submit stage change anyway")
+                    self.logger.info("Failed to add sync note - continuing to submit stage change anyway")
             else:
-                print("Note form not available for this stage - proceeding with stage update only")
+                self.logger.info("Note form not available for this stage - proceeding with stage update only")
 
             # After changing the stage, look for "Update Stage" button (since we changed the stage)
-            print("Confirming stage update...")
+            self.logger.info("Confirming stage update...")
             update_stage_button = None
             try:
                 update_stage_button = self.driver_service.find_element(By.XPATH, "//button[contains(text(), 'Update Stage')]")
@@ -2602,11 +2600,11 @@ class HomelightService(BaseReferralService):
             
             if update_stage_button:
                 update_stage_button.click()
-                print("Clicked Update Stage button")
+                self.logger.info("Clicked Update Stage button")
                 self.wis.human_delay(3, 4)  # Wait longer for update to complete
             else:
                 # Fallback: look for "Add note" or "Add Another Note" button (for same stage updates)
-                print("Update Stage button not found, trying Add note button...")
+                self.logger.info("Update Stage button not found, trying Add note button...")
                 add_note_button = None
                 try:
                     add_note_button = self.driver_service.find_element(By.XPATH, "//button[contains(text(), 'Add Another Note')]")
@@ -2627,7 +2625,7 @@ class HomelightService(BaseReferralService):
                 
                 if add_note_button:
                     add_note_button.click()
-                    print("Clicked Add note/Add Another Note button")
+                    self.logger.info("Clicked Add note/Add Another Note button")
                     self.wis.human_delay(2, 3)  # Wait for note form to appear or save
 
                     # For same-stage updates, might need to click Add note again to save
@@ -2644,7 +2642,7 @@ class HomelightService(BaseReferralService):
                                 save_btn = self.driver_service.find_element(*btn_selector)
                                 if save_btn and save_btn.is_displayed():
                                     save_btn.click()
-                                    print("Clicked save/submit button")
+                                    self.logger.info("Clicked save/submit button")
                                     self.wis.human_delay(2, 3)
                                     break
                             except:
@@ -2652,17 +2650,15 @@ class HomelightService(BaseReferralService):
                     except:
                         pass
                 else:
-                    print("Could not find Update Stage or Add note/Add Another Note button")
+                    self.logger.info("Could not find Update Stage or Add note/Add Another Note button")
                     return False
             
             # Wait a bit more for any UI updates or success messages
             self.wis.human_delay(1, 2)
-            print("Stage sync completed")
+            self.logger.info("Stage sync completed")
             return True
         except Exception as e:
-            print(f"ERROR updating HomeLight stage: {e}")
-            import traceback
-            print(traceback.format_exc())
+            self.logger.error(f"Error updating HomeLight stage: {e}", exc_info=True)
             return False
 
     def _fill_meeting_scheduled_fields(self, metadata: Dict[str, Any]) -> bool:

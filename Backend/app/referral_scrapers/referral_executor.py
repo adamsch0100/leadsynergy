@@ -76,7 +76,7 @@ class ReferralExecutor:
     def execute(self) -> bool:
         # Check if we should ignore this status
         if self.should_ignore_status():
-            print(f"Status requires manual handling for {self.lead.source} - skipping automation")
+            self.logger.info(f"Status requires manual handling for {self.lead.source} - skipping automation")
             return False
 
         # Get the mapped stage for the platform
@@ -127,7 +127,7 @@ class ReferralExecutor:
                 lead=self.lead,
                 organization_id=self.organization_id
             )
-            print("Estately service is now on")
+            self.logger.info("Estately service is now on")
             return False
         elif self.lead.source == "AgentPronto" or self.lead.source == "Agent Pronto":
             from app.referral_scrapers.agent_pronto.agent_pronto_service import AgentProntoService

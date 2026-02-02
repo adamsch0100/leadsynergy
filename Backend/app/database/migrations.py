@@ -1083,6 +1083,91 @@ MIGRATIONS = [
         ]
     },
     {
+        'version': '20250130_add_support_notification_setting',
+        'description': 'Add support notification emails setting to ai_agent_settings',
+        'sql_statements': [
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS support_notification_emails JSONB DEFAULT '[]';
+            """,
+            """
+            COMMENT ON COLUMN ai_agent_settings.support_notification_emails IS
+                'List of email addresses to notify when new support tickets are created. e.g. ["adam@saahomes.com"]';
+            """,
+            """
+            NOTIFY pgrst, 'reload schema';
+            """,
+        ]
+    },
+    {
+        'version': '20250130_add_support_ticket_tables',
+        'description': 'Add support_tickets and ticket_notes tables for help/ticket system',
+        'sql_statements': [
+            # Support tickets table
+            """
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id SERIAL PRIMARY KEY,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                subject VARCHAR(255) NOT NULL,
+                description TEXT NOT NULL,
+                status VARCHAR(20) DEFAULT 'open',
+                priority VARCHAR(20) DEFAULT 'normal',
+                category VARCHAR(50),
+                assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                closed_at TIMESTAMPTZ,
+                CONSTRAINT support_tickets_status_check
+                    CHECK (status IN ('open', 'in_progress', 'waiting', 'closed')),
+                CONSTRAINT support_tickets_priority_check
+                    CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+                CONSTRAINT support_tickets_category_check
+                    CHECK (category IS NULL OR category IN ('billing', 'technical', 'feature_request', 'account', 'other'))
+            );
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id);",
+            "CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status);",
+            "CREATE INDEX IF NOT EXISTS idx_support_tickets_assigned_to ON support_tickets(assigned_to);",
+            "CREATE INDEX IF NOT EXISTS idx_support_tickets_created ON support_tickets(created_at DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_support_tickets_priority ON support_tickets(priority);",
+            # Ticket notes table
+            """
+            CREATE TABLE IF NOT EXISTS ticket_notes (
+                id SERIAL PRIMARY KEY,
+                ticket_id INTEGER NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                content TEXT NOT NULL,
+                is_internal BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ticket_notes_ticket ON ticket_notes(ticket_id);",
+            "CREATE INDEX IF NOT EXISTS idx_ticket_notes_user ON ticket_notes(user_id);",
+            "CREATE INDEX IF NOT EXISTS idx_ticket_notes_created ON ticket_notes(created_at);",
+            # Trigger for auto-updating updated_at on support_tickets
+            """
+            CREATE OR REPLACE FUNCTION update_support_ticket_timestamp()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = NOW();
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """,
+            """
+            DROP TRIGGER IF EXISTS support_tickets_updated_at ON support_tickets;
+            CREATE TRIGGER support_tickets_updated_at
+                BEFORE UPDATE ON support_tickets
+                FOR EACH ROW
+                EXECUTE FUNCTION update_support_ticket_timestamp();
+            """,
+            # Reload PostgREST schema cache
+            """
+            NOTIFY pgrst, 'reload schema';
+            """,
+        ]
+    },
+    {
         'version': '20250129_add_sequence_and_timing_settings',
         'description': 'Add sequence toggles, timing, and NBA settings columns to ai_agent_settings',
         'sql_statements': [
@@ -1147,6 +1232,46 @@ MIGRATIONS = [
             CREATE INDEX IF NOT EXISTS idx_ai_scheduled_followups_pending
                 ON ai_scheduled_followups(scheduled_at, status)
                 WHERE status = 'pending';
+            """,
+        ]
+    },
+    {
+        'version': '20250202_add_setup_requests',
+        'description': 'Add setup_requests table for admin-assisted onboarding and platforms_description to user_profiles',
+        'sql_statements': [
+            # Add platforms_description column to user_profiles
+            """
+            ALTER TABLE user_profiles
+                ADD COLUMN IF NOT EXISTS platforms_description TEXT;
+            """,
+            # Create setup_requests table for admin review of new customer onboarding
+            """
+            CREATE TABLE IF NOT EXISTS setup_requests (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+                organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
+                user_email TEXT,
+                user_name TEXT,
+                platforms_description TEXT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                admin_notes TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """,
+            # Index for filtering by status
+            """
+            CREATE INDEX IF NOT EXISTS idx_setup_requests_status
+                ON setup_requests(status, created_at DESC);
+            """,
+            # Unique constraint: one request per user
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_setup_requests_user_unique
+                ON setup_requests(user_id);
+            """,
+            # Reload PostgREST schema cache
+            """
+            NOTIFY pgrst, 'reload schema';
             """,
         ]
     }

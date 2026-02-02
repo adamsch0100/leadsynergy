@@ -133,33 +133,33 @@ class ReferralExchangeService(BaseReferralService):
 
     def referral_exchange_run(self) -> bool:
         try:
-            print(
+            self.logger.info(
                 f"Starting ReferralExchange process for {self.lead_name} with status: {self.status}"
             )
 
             # Login
             if not self.login():
-                print("Login failed")
+                self.logger.info("Login failed")
                 return False
 
             # Find and select the customer
             if not self.find_and_click_customer_by_name(self.lead_name, self.status):
-                print(f"Could not find customer: {self.lead_name}")
+                self.logger.info(f"Could not find customer: {self.lead_name}")
                 return False
 
             # Update the customer status (uses self.status if None)
             if not self.update_customers():
-                print(f"Could not update status for {self.lead_name}")
+                self.logger.info(f"Could not update status for {self.lead_name}")
                 return False
 
-            print(f"Successfully updated status for {self.lead_name}")
+            self.logger.info(f"Successfully updated status for {self.lead_name}")
             return True
 
         except Exception as e:
-            print(f"Error in ReferralExchange service: {str(e)}")
+            self.logger.info(f"Error in ReferralExchange service: {str(e)}")
             return False
         finally:
-            self.close
+            self.close()
 
     def login(self) -> bool:
         try:
@@ -171,41 +171,41 @@ class ReferralExchangeService(BaseReferralService):
                 if not self.password:
                     missing.append("password")
                 error_msg = f"Missing credentials: {', '.join(missing)}. Please configure credentials in Lead Sources settings."
-                print(f"Login failed: {error_msg}")
+                self.logger.info(f"Login failed: {error_msg}")
                 self.logger.error(f"Login failed: {error_msg}")
                 return False
 
-            print(f"[LOGIN] Navigating to {LOGIN_URL}...")
+            self.logger.info(f"[LOGIN] Navigating to {LOGIN_URL}...")
             self.driver_service.get_page(LOGIN_URL)
             wis.human_delay(3, 5)
 
-            print(f"[LOGIN] Looking for email field...")
+            self.logger.info(f"[LOGIN] Looking for email field...")
             # Enter email
             email_field = self.driver_service.find_element(By.ID, "email")
             if not email_field:
-                print("[LOGIN] Could not find email field by ID='email'")
+                self.logger.info("[LOGIN] Could not find email field by ID='email'")
                 return False
             wis.human_delay(1, 2)
-            print(f"[LOGIN] Entering email: {self.email[:3]}***")
+            self.logger.info(f"[LOGIN] Entering email: {self.email[:3]}***")
             wis.simulated_typing(email_field, self.email)
 
-            print(f"[LOGIN] Looking for password field...")
+            self.logger.info(f"[LOGIN] Looking for password field...")
             # Enter password
             password_field = self.driver_service.find_element(By.ID, "password")
             if not password_field:
-                print("[LOGIN] Could not find password field by ID='password'")
+                self.logger.info("[LOGIN] Could not find password field by ID='password'")
                 return False
             wis.human_delay(1, 2)
-            print(f"[LOGIN] Entering password...")
+            self.logger.info(f"[LOGIN] Entering password...")
             wis.simulated_typing(password_field, self.password)
 
-            print(f"[LOGIN] Looking for submit button...")
+            self.logger.info(f"[LOGIN] Looking for submit button...")
             # Click login button
             login_button = self.driver_service.find_element(By.ID, "submit")
             if not login_button:
-                print("[LOGIN] Could not find submit button by ID='submit'")
+                self.logger.info("[LOGIN] Could not find submit button by ID='submit'")
                 return False
-            print(f"[LOGIN] Clicking submit button...")
+            self.logger.info(f"[LOGIN] Clicking submit button...")
             self.driver_service.safe_click(login_button)
             wis.human_delay(2, 3)
 
@@ -215,17 +215,17 @@ class ReferralExchangeService(BaseReferralService):
                 if error_elem:
                     error_text = error_elem[0].text.strip()
                     if error_text:
-                        print(f"[LOGIN] Page shows error: {error_text}")
+                        self.logger.info(f"[LOGIN] Page shows error: {error_text}")
                         return False
             except Exception:
                 pass
 
-            print("[LOGIN] Login successful")
+            self.logger.info("[LOGIN] Login successful")
             self.is_logged_in = True
             return True
 
         except Exception as e:
-            print(f"[LOGIN] Login failed with exception: {str(e)}")
+            self.logger.info(f"[LOGIN] Login failed with exception: {str(e)}")
             self.logger.error(f"Login failed: {str(e)}")
             import traceback
             traceback.print_exc()
@@ -273,15 +273,15 @@ class ReferralExchangeService(BaseReferralService):
                         (By.XPATH, f"//h1[contains(text(), 'Update Status')]")
                     )
                 )
-                print("Found status update modal with header")
+                self.logger.info("Found status update modal with header")
             except TimeoutException:
-                print("Looking for status options container...")
+                self.logger.info("Looking for status options container...")
                 self.driver_service.wait.until(
                     EC.presence_of_element_located(
                         (By.CSS_SELECTOR, ".action-options, .options-reason")
                     )
                 )
-                print("Found a status options container")
+                self.logger.info("Found a status options container")
 
             # Click main status option
             try:
@@ -294,7 +294,7 @@ class ReferralExchangeService(BaseReferralService):
                             )
                         )
                     )
-                    print("Found status option by specific class and text")
+                    self.logger.info("Found status option by specific class and text")
                 except TimeoutException:
                     try:
                         status_option = self.driver_service.wait.until(
@@ -305,18 +305,18 @@ class ReferralExchangeService(BaseReferralService):
                                 )
                             )
                         )
-                        print("Found status option by text and parent")
+                        self.logger.info("Found status option by text and parent")
                     except TimeoutException:
                         # List all available options
                         options = self.driver_service.find_elements(
                             By.CSS_SELECTOR,
                             ".action-options button, .options-reason button",
                         )
-                        print(f"Found {len(options)} total status options")
+                        self.logger.info(f"Found {len(options)} total status options")
                         for i, option in enumerate(options):
                             try:
                                 text = option.text.strip()
-                                print(f"Option {i + 1}: '{text}'")
+                                self.logger.info(f"Option {i + 1}: '{text}'")
                                 if (
                                     text.lower()
                                     == main_option.lower()  # Exact match (case insensitive)
@@ -326,7 +326,7 @@ class ReferralExchangeService(BaseReferralService):
                                     in main_option.lower()  # Reverse partial match
                                 ):
                                     status_option = option
-                                    print(
+                                    self.logger.info(
                                         f"Selected option: {i + 1}: '{text}' - Matches main_option: '{main_option}'"
                                     )
                                     break
@@ -336,10 +336,10 @@ class ReferralExchangeService(BaseReferralService):
                     self.driver_service.execute_script(
                         "arguments[0].click();", status_option
                     )
-                    # print("Clicked 'We are in contact' using JS")
-                print(f"Found status option: {main_option}")
+                    # self.logger.info("Clicked 'We are in contact' using JS")
+                self.logger.info(f"Found status option: {main_option}")
             except TimeoutException:
-                print(f"Trying alternative xpath for {main_option}")
+                self.logger.info(f"Trying alternative xpath for {main_option}")
                 status_option = self.driver_service.wait.until(
                     EC.element_to_be_clickable(
                         (By.XPATH, f"//*[contains(text(), '{main_option}')]")
@@ -353,25 +353,25 @@ class ReferralExchangeService(BaseReferralService):
             # Select sub-option if needed
             if sub_option:
                 try:
-                    print(f"Attempting to find sub-option that contains: '{sub_option}'")
+                    self.logger.info(f"Attempting to find sub-option that contains: '{sub_option}'")
 
                     # Get all available buttons first
                     buttons = self.driver_service.find_elements(By.CSS_SELECTOR, "button.action-radio-group")
-                    print(f"Found {len(buttons)} action-radio-group buttons")
+                    self.logger.info(f"Found {len(buttons)} action-radio-group buttons")
                     
                     # Find the right button by text content
                     sub_option_button = None
                     for i, btn in enumerate(buttons):
                         try:
                             text = btn.text.strip()
-                            print(f"Option {i + 1}: '{text}'")
+                            self.logger.info(f"Option {i + 1}: '{text}'")
                             # Use a more reliable way to check for partial text match
                             sub_pattern = sub_option.lower().replace(" ", "")
                             text_normalized = text.lower().replace(" ", "")
                             
                             if sub_pattern in text_normalized:
                                 sub_option_button = btn
-                                print(f"Selected matching button: '{text}'")
+                                self.logger.info(f"Selected matching button: '{text}'")
                                 break
                             
                             # If the first approach fails, try a word-by-word match
@@ -383,10 +383,10 @@ class ReferralExchangeService(BaseReferralService):
                                 matches = sum(1 for word in sub_words if word in text_words)
                                 if matches >= min(3, len(sub_words)):
                                     sub_option_button = btn
-                                    print(f"Selected button by word match: '{text}'")
+                                    self.logger.info(f"Selected button by word match: '{text}'")
                                     break
                         except Exception as btn_e:
-                            print(f"Error reading button {i+1} text: {str(btn_e)}")
+                            self.logger.info(f"Error reading button {i+1} text: {str(btn_e)}")
                             continue
                     
                     # If still no match, just use the first button if "helping" is in it
@@ -394,12 +394,12 @@ class ReferralExchangeService(BaseReferralService):
                         for btn in buttons:
                             if "helping" in btn.text.lower():
                                 sub_option_button = btn
-                                print(f"Using first button with 'helping': '{btn.text}'")
+                                self.logger.info(f"Using first button with 'helping': '{btn.text}'")
                                 break
                     
                     # If we have a button, try to click it
                     if sub_option_button:
-                        print(f"Attempting to click button: '{sub_option_button.text}'")
+                        self.logger.info(f"Attempting to click button: '{sub_option_button.text}'")
                         
                         # Scroll into view first
                         self.driver_service.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sub_option_button)
@@ -407,16 +407,16 @@ class ReferralExchangeService(BaseReferralService):
                         
                         # Try direct click first
                         sub_option_button.click()
-                        print("Clicked with standard click")
+                        self.logger.info("Clicked with standard click")
                         
                         # Wait to ensure click took effect
                         wis.human_delay(2, 3)
                     else:
-                        print("No matching button found by any method")
+                        self.logger.info("No matching button found by any method")
                         raise Exception("Could not find any suitable button to click")
                     
                 except Exception as e:
-                    print(f"Error selecting sub-option: {str(e)}")
+                    self.logger.info(f"Error selecting sub-option: {str(e)}")
                     return False
 
                 wis.human_delay(1, 2)
@@ -424,7 +424,7 @@ class ReferralExchangeService(BaseReferralService):
             # Fill in comment if provided
             if comment:
                 try:
-                    print(f"[UPDATE] Attempting to add comment: '{comment[:50]}...'")
+                    self.logger.info(f"[UPDATE] Attempting to add comment: '{comment[:50]}...'")
                     # Try multiple selectors for the comment/note textarea
                     comment_selectors = [
                         (By.CSS_SELECTOR, "textarea[name='comment']"),
@@ -447,7 +447,7 @@ class ReferralExchangeService(BaseReferralService):
                             for elem in elements:
                                 if elem.is_displayed() and elem.is_enabled():
                                     comment_field = elem
-                                    print(f"[UPDATE] Found comment field with selector: {selector_value}")
+                                    self.logger.info(f"[UPDATE] Found comment field with selector: {selector_value}")
                                     break
                             if comment_field:
                                 break
@@ -459,13 +459,13 @@ class ReferralExchangeService(BaseReferralService):
                         comment_field.clear()
                         wis.human_delay(0.5, 1)
                         wis.simulated_typing(comment_field, comment)
-                        print(f"[UPDATE] Added comment successfully")
+                        self.logger.info(f"[UPDATE] Added comment successfully")
                         wis.human_delay(1, 2)
                     else:
-                        print("[UPDATE] No comment field found in modal")
+                        self.logger.info("[UPDATE] No comment field found in modal")
 
                 except Exception as e:
-                    print(f"[UPDATE] Error adding comment: {str(e)}")
+                    self.logger.info(f"[UPDATE] Error adding comment: {str(e)}")
                     # Continue even if comment fails - status update is more important
 
             # Find and click the Update button
@@ -477,7 +477,7 @@ class ReferralExchangeService(BaseReferralService):
             return True
 
         except Exception as e:
-            print(f"Error updating status: {str(e)}")
+            self.logger.info(f"Error updating status: {str(e)}")
             return False
 
     def find_and_click_customer_by_name(self, target_name: str, status: Any) -> bool:
@@ -510,7 +510,7 @@ class ReferralExchangeService(BaseReferralService):
                     EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".leads-row"))
                 )
             except TimeoutException:
-                print(f"No search results found for '{first_name}'")
+                self.logger.info(f"No search results found for '{first_name}'")
                 return False
 
             # Try to find exact match first
@@ -521,7 +521,7 @@ class ReferralExchangeService(BaseReferralService):
                 )
                 self.driver_service.safe_click(lead_link)
                 wis.human_delay(2, 3)
-                print(f"Found exact match for '{target_name}'")
+                self.logger.info(f"Found exact match for '{target_name}'")
                 return True
             except:
                 pass
@@ -537,7 +537,7 @@ class ReferralExchangeService(BaseReferralService):
                     )
                     self.driver_service.safe_click(lead_link)
                     wis.human_delay(2, 3)
-                    print(f"Found abbreviated match '{abbreviated_pattern}' for '{target_name}'")
+                    self.logger.info(f"Found abbreviated match '{abbreviated_pattern}' for '{target_name}'")
                     return True
                 except:
                     pass
@@ -549,16 +549,16 @@ class ReferralExchangeService(BaseReferralService):
                 if lead_links:
                     self.driver_service.safe_click(lead_links[0])
                     wis.human_delay(2, 3)
-                    print(f"Clicked first result containing '{first_name}'")
+                    self.logger.info(f"Clicked first result containing '{first_name}'")
                     return True
             except:
                 pass
 
-            print(f"Could not find customer matching '{target_name}'")
+            self.logger.info(f"Could not find customer matching '{target_name}'")
             return False
 
         except Exception as e:
-            print(f"There is an error: {str(e)}")
+            self.logger.info(f"There is an error: {str(e)}")
             return False
 
     def close(self) -> None:
@@ -578,7 +578,7 @@ class ReferralExchangeService(BaseReferralService):
             wis.human_delay(2, 3)
             return True
         except Exception as e:
-            print(f"Error navigating to referrals: {e}")
+            self.logger.info(f"Error navigating to referrals: {e}")
             return False
 
     def _clear_search(self):
@@ -615,7 +615,7 @@ class ReferralExchangeService(BaseReferralService):
                     if last_synced > cutoff_time:
                         return True, f"Synced {hours_since:.1f}h ago"
         except Exception as e:
-            print(f"Error checking skip status: {e}")
+            self.logger.info(f"Error checking skip status: {e}")
 
         return False, ""
 
@@ -648,18 +648,18 @@ class ReferralExchangeService(BaseReferralService):
         }
 
         logger.info(f"Starting ReferralExchange bulk update for {len(leads_data)} leads")
-        print(f"\n[START] Beginning ReferralExchange update process for {len(leads_data)} leads")
+        self.logger.info(f"\n[START] Beginning ReferralExchange update process for {len(leads_data)} leads")
 
         try:
             # Login once
-            print("[LOCK] Logging into ReferralExchange...")
+            self.logger.info("[LOCK] Logging into ReferralExchange...")
             login_start = time.time()
             login_success = self.login()
             login_time = time.time() - login_start
 
             if not login_success:
                 error_msg = "Failed to login to ReferralExchange"
-                print(f"[ERROR] {error_msg}")
+                self.logger.info(f"[ERROR] {error_msg}")
                 for lead, status in leads_data:
                     results["failed"] += 1
                     results["details"].append({
@@ -671,19 +671,19 @@ class ReferralExchangeService(BaseReferralService):
                     })
                 return results
 
-            print(f"[SUCCESS] Login successful (took {login_time:.1f}s)\n")
+            self.logger.info(f"[SUCCESS] Login successful (took {login_time:.1f}s)\n")
             self.is_logged_in = True
 
             # Process each lead
             for idx, (lead, target_status) in enumerate(leads_data):
                 lead_name = f"{lead.first_name} {lead.last_name}"
-                print(f"\n[LEAD {idx+1}/{len(leads_data)}] Processing: {lead_name}")
+                self.logger.info(f"\n[LEAD {idx+1}/{len(leads_data)}] Processing: {lead_name}")
 
                 try:
                     # Check if should skip
                     should_skip, skip_reason = self._check_should_skip(lead)
                     if should_skip:
-                        print(f"[SKIP] {lead_name} - {skip_reason}")
+                        self.logger.info(f"[SKIP] {lead_name} - {skip_reason}")
                         results["skipped"] += 1
                         results["details"].append({
                             "lead_id": lead.id,
@@ -718,14 +718,14 @@ class ReferralExchangeService(BaseReferralService):
                                 )
                                 if update:
                                     lead_comment = update
-                                    print(f"[UPDATE] Auto-extracted @update from FUB for {lead_name}: {lead_comment[:50]}...")
+                                    self.logger.info(f"[UPDATE] Auto-extracted @update from FUB for {lead_name}: {lead_comment[:50]}...")
                             except Exception as e:
-                                print(f"[WARNING] Could not extract @update note: {e}")
+                                self.logger.info(f"[WARNING] Could not extract @update note: {e}")
                         elif lead_comment:
-                            print(f"[UPDATE] Using @update comment for {lead_name}: {lead_comment[:50]}...")
+                            self.logger.info(f"[UPDATE] Using @update comment for {lead_name}: {lead_comment[:50]}...")
 
                         if self.update_customers(comment=lead_comment):
-                            print(f"[SUCCESS] Updated {lead_name}")
+                            self.logger.info(f"[SUCCESS] Updated {lead_name}")
                             results["successful"] += 1
 
                             # Update metadata
@@ -737,7 +737,7 @@ class ReferralExchangeService(BaseReferralService):
                                 lead_service = LeadServiceSingleton.get_instance()
                                 lead_service.update(lead)
                             except Exception as e:
-                                print(f"[WARNING] Could not update metadata: {e}")
+                                self.logger.info(f"[WARNING] Could not update metadata: {e}")
 
                             results["details"].append({
                                 "lead_id": lead.id,
@@ -746,7 +746,7 @@ class ReferralExchangeService(BaseReferralService):
                                 "status": "success"
                             })
                         else:
-                            print(f"[ERROR] Failed to update status for {lead_name}")
+                            self.logger.info(f"[ERROR] Failed to update status for {lead_name}")
                             results["failed"] += 1
                             results["details"].append({
                                 "lead_id": lead.id,
@@ -756,7 +756,7 @@ class ReferralExchangeService(BaseReferralService):
                                 "error": "Status update failed"
                             })
                     else:
-                        print(f"[ERROR] Could not find {lead_name}")
+                        self.logger.info(f"[ERROR] Could not find {lead_name}")
                         results["failed"] += 1
                         results["details"].append({
                             "lead_id": lead.id,
@@ -767,7 +767,7 @@ class ReferralExchangeService(BaseReferralService):
                         })
 
                 except Exception as e:
-                    print(f"[ERROR] Error processing {lead_name}: {e}")
+                    self.logger.info(f"[ERROR] Error processing {lead_name}: {e}")
                     results["failed"] += 1
                     results["details"].append({
                         "lead_id": lead.id,
@@ -778,24 +778,24 @@ class ReferralExchangeService(BaseReferralService):
                     })
 
             # Run Need Action sweep at the end
-            print("\n[NEED ACTION] Running Need Action sweep...")
+            self.logger.info("\n[NEED ACTION] Running Need Action sweep...")
             results = self._process_need_action_sweep(leads_data, results)
 
             # Print summary
             skipped_count = results.get('skipped', 0)
             effective_success = results['successful'] + skipped_count
 
-            print("\n" + "="*60)
-            print("[FINISH] REFERRALEXCHANGE BULK SYNC COMPLETED!")
-            print(f"[STATS] Total leads: {results['total_leads']}")
-            print(f"[SUCCESS] Updated: {results['successful']}")
-            print(f"[SKIP] Skipped (up-to-date): {skipped_count}")
-            print(f"[ERROR] Failed: {results['failed']}")
-            print(f"[RATE] Effective success: {(effective_success/results['total_leads']*100):.1f}%")
-            print("="*60 + "\n")
+            self.logger.info("\n" + "="*60)
+            self.logger.info("[FINISH] REFERRALEXCHANGE BULK SYNC COMPLETED!")
+            self.logger.info(f"[STATS] Total leads: {results['total_leads']}")
+            self.logger.info(f"[SUCCESS] Updated: {results['successful']}")
+            self.logger.info(f"[SKIP] Skipped (up-to-date): {skipped_count}")
+            self.logger.info(f"[ERROR] Failed: {results['failed']}")
+            self.logger.info(f"[RATE] Effective success: {(effective_success/results['total_leads']*100):.1f}%")
+            self.logger.info("="*60 + "\n")
 
         except Exception as e:
-            print(f"[ERROR] Critical error: {e}")
+            self.logger.info(f"[ERROR] Critical error: {e}")
             import traceback
             traceback.print_exc()
         finally:
@@ -806,7 +806,7 @@ class ReferralExchangeService(BaseReferralService):
     def _click_need_action_filter(self) -> bool:
         """Click the Needs Action filter to show leads requiring attention"""
         try:
-            print("[NEEDS ACTION] Looking for Needs Action filter...")
+            self.logger.info("[NEEDS ACTION] Looking for Needs Action filter...")
 
             # Based on user-provided HTML:
             # <button type="button" class="filter-button">
@@ -832,19 +832,19 @@ class ReferralExchangeService(BaseReferralService):
                     element = self.driver_service.find_element(selector_type, selector_value)
                     if element:
                         element_text = element.text.strip()
-                        print(f"[NEEDS ACTION] Found element with text: '{element_text[:50]}...'")
+                        self.logger.info(f"[NEEDS ACTION] Found element with text: '{element_text[:50]}...'")
 
                         # For .needs_action class selector, we don't need text match
                         is_needs_action_class = "needs_action" in selector_value or "needs-action" in selector_value
                         text_matches = "Needs Action" in element_text or "needs action" in element_text.lower()
 
                         if is_needs_action_class or text_matches:
-                            print(f"[NEEDS ACTION] Clicking filter...")
+                            self.logger.info(f"[NEEDS ACTION] Clicking filter...")
                             # Try to click the parent button if this is a div inside a button
                             try:
                                 parent_button = element.find_element(By.XPATH, "./ancestor::button")
                                 if parent_button:
-                                    print("[NEEDS ACTION] Clicking parent button instead")
+                                    self.logger.info("[NEEDS ACTION] Clicking parent button instead")
                                     self.driver_service.safe_click(parent_button)
                                 else:
                                     self.driver_service.safe_click(element)
@@ -853,14 +853,14 @@ class ReferralExchangeService(BaseReferralService):
                             wis.human_delay(2, 3)
                             return True
                 except Exception as e:
-                    print(f"[NEEDS ACTION] Selector {selector_value} failed: {str(e)[:50]}")
+                    self.logger.info(f"[NEEDS ACTION] Selector {selector_value} failed: {str(e)[:50]}")
                     continue
 
-            print("[NEEDS ACTION] Could not find Needs Action filter")
+            self.logger.info("[NEEDS ACTION] Could not find Needs Action filter")
             return False
 
         except Exception as e:
-            print(f"[NEEDS ACTION] Error: {e}")
+            self.logger.info(f"[NEEDS ACTION] Error: {e}")
             return False
 
     def _process_need_action_sweep(self, leads_data: List[Tuple[Lead, Any]], results: Dict[str, Any]) -> Dict[str, Any]:
@@ -881,10 +881,10 @@ class ReferralExchangeService(BaseReferralService):
             Updated results dictionary
         """
         try:
-            print("\n" + "="*60)
-            print("[NEED ACTION] Starting Need Action sweep with FUB integration...")
-            print("[NEED ACTION] Will use FUB data when available, fallback to default otherwise")
-            print("="*60)
+            self.logger.info("\n" + "="*60)
+            self.logger.info("[NEED ACTION] Starting Need Action sweep with FUB integration...")
+            self.logger.info("[NEED ACTION] Will use FUB data when available, fallback to default otherwise")
+            self.logger.info("="*60)
 
             # Import FUB data helper
             from app.referral_scrapers.utils.fub_data_helper import get_fub_data_helper
@@ -900,7 +900,7 @@ class ReferralExchangeService(BaseReferralService):
 
             # Try to click Need Action filter
             if not self._click_need_action_filter():
-                print("[NEED ACTION] Skipping sweep - could not find filter")
+                self.logger.info("[NEED ACTION] Skipping sweep - could not find filter")
                 return results
 
             # Wait for results to load
@@ -910,10 +910,10 @@ class ReferralExchangeService(BaseReferralService):
             try:
                 lead_rows = self.driver_service.driver.find_elements(By.CSS_SELECTOR, ".leads-row")
                 need_action_count = len(lead_rows)
-                print(f"[NEED ACTION] Found {need_action_count} leads in Need Action")
+                self.logger.info(f"[NEED ACTION] Found {need_action_count} leads in Need Action")
 
                 if need_action_count == 0:
-                    print("[NEED ACTION] No leads in Need Action - all clear!")
+                    self.logger.info("[NEED ACTION] No leads in Need Action - all clear!")
                     return results
 
                 need_action_updated = 0
@@ -933,7 +933,7 @@ class ReferralExchangeService(BaseReferralService):
                         row_lines = row_text.split('\n')
                         display_name = row_lines[0].strip() if row_lines else row_text[:30]
 
-                        print(f"\n[NEED ACTION] Processing {i+1}/{need_action_count}: {display_name}")
+                        self.logger.info(f"\n[NEED ACTION] Processing {i+1}/{need_action_count}: {display_name}")
 
                         # Try to look up lead in database
                         db_lead = fub_helper.lookup_lead_by_name(display_name, "ReferralExchange")
@@ -962,19 +962,19 @@ class ReferralExchangeService(BaseReferralService):
                                         status_to_use = [fub_status, ""]
                                 elif isinstance(fub_status, (list, tuple)):
                                     status_to_use = list(fub_status)
-                                print(f"[NEED ACTION] Using FUB mapped status: {status_to_use}")
+                                self.logger.info(f"[NEED ACTION] Using FUB mapped status: {status_to_use}")
                                 used_fub = True
                                 need_action_fub_used += 1
                             else:
-                                print(f"[NEED ACTION] No FUB mapping, using default: {status_to_use}")
+                                self.logger.info(f"[NEED ACTION] No FUB mapping, using default: {status_to_use}")
                                 need_action_default_used += 1
 
                             comment_to_use = fub_comment
                             if comment_to_use:
-                                print(f"[NEED ACTION] Will add comment from FUB: '{comment_to_use[:50]}...'")
+                                self.logger.info(f"[NEED ACTION] Will add comment from FUB: '{comment_to_use[:50]}...'")
                         else:
                             if not db_lead:
-                                print(f"[NEED ACTION] Lead not found in database, using default status")
+                                self.logger.info(f"[NEED ACTION] Lead not found in database, using default status")
                             need_action_default_used += 1
 
                         # Click and update
@@ -985,7 +985,7 @@ class ReferralExchangeService(BaseReferralService):
                             self.status = status_to_use
                             if self.update_customers(comment=comment_to_use):
                                 status_display = f"{status_to_use[0]}" + (f" -> {status_to_use[1]}" if len(status_to_use) > 1 and status_to_use[1] else "")
-                                print(f"[NEED ACTION] SUCCESS! Updated to '{status_display}'")
+                                self.logger.info(f"[NEED ACTION] SUCCESS! Updated to '{status_display}'")
                                 need_action_updated += 1
 
                                 # Save last known status to metadata if we have the lead
@@ -996,7 +996,7 @@ class ReferralExchangeService(BaseReferralService):
                                         status=status_to_use
                                     )
                             else:
-                                print(f"[NEED ACTION] FAILED to update")
+                                self.logger.info(f"[NEED ACTION] FAILED to update")
 
                             # Navigate back
                             self._navigate_to_referrals()
@@ -1004,27 +1004,27 @@ class ReferralExchangeService(BaseReferralService):
                             wis.human_delay(1, 2)
 
                         except Exception as e:
-                            print(f"[NEED ACTION] Error updating: {e}")
+                            self.logger.info(f"[NEED ACTION] Error updating: {e}")
                             self._navigate_to_referrals()
                             self._click_need_action_filter()
 
                     except Exception as e:
-                        print(f"[NEED ACTION] Error processing row: {e}")
+                        self.logger.info(f"[NEED ACTION] Error processing row: {e}")
                         continue
 
-                print("\n" + "="*60)
-                print("[NEED ACTION] Sweep completed!")
-                print(f"[NEED ACTION] Updated: {need_action_updated}/{need_action_count}")
-                print(f"[NEED ACTION] Used FUB data: {need_action_fub_used}, Used default: {need_action_default_used}")
-                print("="*60)
+                self.logger.info("\n" + "="*60)
+                self.logger.info("[NEED ACTION] Sweep completed!")
+                self.logger.info(f"[NEED ACTION] Updated: {need_action_updated}/{need_action_count}")
+                self.logger.info(f"[NEED ACTION] Used FUB data: {need_action_fub_used}, Used default: {need_action_default_used}")
+                self.logger.info("="*60)
 
             except Exception as e:
-                print(f"[NEED ACTION] Error getting lead rows: {e}")
+                self.logger.info(f"[NEED ACTION] Error getting lead rows: {e}")
 
             return results
 
         except Exception as e:
-            print(f"[NEED ACTION] Error during sweep: {e}")
+            self.logger.info(f"[NEED ACTION] Error during sweep: {e}")
             import traceback
             traceback.print_exc()
             return results
@@ -1074,7 +1074,7 @@ class ReferralExchangeService(BaseReferralService):
             return None
 
         except Exception as e:
-            print(f"[DB SEARCH] Error: {e}")
+            self.logger.info(f"[DB SEARCH] Error: {e}")
             return None
 
     def run_standalone_need_action_sweep(self) -> Dict[str, Any]:
@@ -1101,10 +1101,10 @@ class ReferralExchangeService(BaseReferralService):
         }
 
         try:
-            print("\n" + "="*60)
-            print("[STANDALONE SWEEP] Starting Need Action sweep with FUB integration...")
-            print("[STANDALONE SWEEP] Will use FUB data when available, fallback to default otherwise")
-            print("="*60)
+            self.logger.info("\n" + "="*60)
+            self.logger.info("[STANDALONE SWEEP] Starting Need Action sweep with FUB integration...")
+            self.logger.info("[STANDALONE SWEEP] Will use FUB data when available, fallback to default otherwise")
+            self.logger.info("="*60)
 
             # Import FUB data helper
             from app.referral_scrapers.utils.fub_data_helper import get_fub_data_helper
@@ -1115,11 +1115,11 @@ class ReferralExchangeService(BaseReferralService):
             source_settings = settings_service.get_by_source_name("ReferralExchange")
 
             # Login
-            print("[STANDALONE SWEEP] Logging in...")
+            self.logger.info("[STANDALONE SWEEP] Logging in...")
             if not self.login():
-                print("[STANDALONE SWEEP] Login failed!")
+                self.logger.info("[STANDALONE SWEEP] Login failed!")
                 return results
-            print("[STANDALONE SWEEP] Login successful!")
+            self.logger.info("[STANDALONE SWEEP] Login successful!")
 
             # Navigate to referrals page
             self._navigate_to_referrals()
@@ -1127,7 +1127,7 @@ class ReferralExchangeService(BaseReferralService):
 
             # Click Need Action filter
             if not self._click_need_action_filter():
-                print("[STANDALONE SWEEP] Could not find Need Action filter")
+                self.logger.info("[STANDALONE SWEEP] Could not find Need Action filter")
                 return results
 
             wis.human_delay(2, 3)
@@ -1135,10 +1135,10 @@ class ReferralExchangeService(BaseReferralService):
             # Get all leads in Need Action
             lead_rows = self.driver_service.driver.find_elements(By.CSS_SELECTOR, ".leads-row")
             results["total_checked"] = len(lead_rows)
-            print(f"[STANDALONE SWEEP] Found {len(lead_rows)} leads in Need Action")
+            self.logger.info(f"[STANDALONE SWEEP] Found {len(lead_rows)} leads in Need Action")
 
             if len(lead_rows) == 0:
-                print("[STANDALONE SWEEP] No leads in Need Action - all clear!")
+                self.logger.info("[STANDALONE SWEEP] No leads in Need Action - all clear!")
                 return results
 
             # Process each lead with FUB integration
@@ -1154,7 +1154,7 @@ class ReferralExchangeService(BaseReferralService):
                     row_lines = row_text.split('\n')
                     display_name = row_lines[0].strip() if row_lines else row_text[:30]
 
-                    print(f"\n[{i+1}/{results['total_checked']}] Processing: {display_name}")
+                    self.logger.info(f"\n[{i+1}/{results['total_checked']}] Processing: {display_name}")
 
                     # Try to look up lead in database
                     db_lead = fub_helper.lookup_lead_by_name(display_name, "ReferralExchange")
@@ -1182,18 +1182,18 @@ class ReferralExchangeService(BaseReferralService):
                                     status_to_use = [fub_status, ""]
                             elif isinstance(fub_status, (list, tuple)):
                                 status_to_use = list(fub_status)
-                            print(f"  Using FUB mapped status: {status_to_use}")
+                            self.logger.info(f"  Using FUB mapped status: {status_to_use}")
                             results["fub_used"] += 1
                         else:
-                            print(f"  No FUB mapping, using default: {status_to_use}")
+                            self.logger.info(f"  No FUB mapping, using default: {status_to_use}")
                             results["default_used"] += 1
 
                         comment_to_use = fub_comment
                         if comment_to_use:
-                            print(f"  Will add comment from FUB: '{comment_to_use[:50]}...'")
+                            self.logger.info(f"  Will add comment from FUB: '{comment_to_use[:50]}...'")
                     else:
                         if not db_lead:
-                            print(f"  Lead not found in database, using default status")
+                            self.logger.info(f"  Lead not found in database, using default status")
                         results["default_used"] += 1
 
                     # Click the lead row to open details
@@ -1204,7 +1204,7 @@ class ReferralExchangeService(BaseReferralService):
                     self.status = status_to_use
                     if self.update_customers(comment=comment_to_use):
                         status_display = f"{status_to_use[0]}" + (f" -> {status_to_use[1]}" if len(status_to_use) > 1 and status_to_use[1] else "")
-                        print(f"  SUCCESS! Updated to '{status_display}'")
+                        self.logger.info(f"  SUCCESS! Updated to '{status_display}'")
                         results["updated"] += 1
                         results["updated_leads"].append(display_name)
 
@@ -1216,7 +1216,7 @@ class ReferralExchangeService(BaseReferralService):
                                 status=status_to_use
                             )
                     else:
-                        print(f"  FAILED to update status")
+                        self.logger.info(f"  FAILED to update status")
                         results["errors"] += 1
 
                     # Navigate back to Need Action list
@@ -1225,26 +1225,26 @@ class ReferralExchangeService(BaseReferralService):
                     wis.human_delay(1, 2)
 
                 except Exception as e:
-                    print(f"  ERROR: {e}")
+                    self.logger.info(f"  ERROR: {e}")
                     results["errors"] += 1
                     self._navigate_to_referrals()
                     self._click_need_action_filter()
                     wis.human_delay(1, 2)
 
             # Summary
-            print("\n" + "="*60)
-            print("[STANDALONE SWEEP] COMPLETED!")
-            print(f"  Total in Need Action: {results['total_checked']}")
-            print(f"  Successfully updated: {results['updated']}")
-            print(f"  Used FUB data: {results['fub_used']}")
-            print(f"  Used default: {results['default_used']}")
-            print(f"  Errors: {results['errors']}")
+            self.logger.info("\n" + "="*60)
+            self.logger.info("[STANDALONE SWEEP] COMPLETED!")
+            self.logger.info(f"  Total in Need Action: {results['total_checked']}")
+            self.logger.info(f"  Successfully updated: {results['updated']}")
+            self.logger.info(f"  Used FUB data: {results['fub_used']}")
+            self.logger.info(f"  Used default: {results['default_used']}")
+            self.logger.info(f"  Errors: {results['errors']}")
             if results["updated_leads"]:
-                print(f"  Updated leads: {', '.join(results['updated_leads'])}")
-            print("="*60)
+                self.logger.info(f"  Updated leads: {', '.join(results['updated_leads'])}")
+            self.logger.info("="*60)
 
         except Exception as e:
-            print(f"[STANDALONE SWEEP] Error: {e}")
+            self.logger.info(f"[STANDALONE SWEEP] Error: {e}")
             import traceback
             traceback.print_exc()
         finally:

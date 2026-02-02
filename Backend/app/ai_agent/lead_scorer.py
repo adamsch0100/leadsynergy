@@ -344,11 +344,13 @@ class LeadScorer:
 
         Signals can include:
         - reply_count: Number of replies from lead
+        - message_count: Total messages sent by lead
         - questions_asked: Number of questions lead asked
         - positive_sentiment: Boolean or count
         - link_clicks: Number of links clicked
         - email_opens: Number of emails opened
         - response_speed: How fast they reply (seconds)
+        - longest_message_chars: Length of their longest message
         """
         score = 0
 
@@ -359,9 +361,16 @@ class LeadScorer:
         elif reply_count >= 1:
             score += 5
 
+        # High message count = deeply engaged
+        message_count = signals.get("message_count", 0)
+        if message_count > 5:
+            score += 5
+        elif message_count > 2:
+            score += 2
+
         # Questions show interest
         questions = signals.get("questions_asked", 0)
-        if questions >= 2:
+        if questions > 2:
             score += 5
         elif questions >= 1:
             score += 3
@@ -370,12 +379,60 @@ class LeadScorer:
         if signals.get("positive_sentiment"):
             score += 3
 
-        # Fast response time (under 5 minutes)
+        # Fast response time — under 60s is very engaged, under 5 min is good
         response_speed = signals.get("response_speed")
-        if response_speed and response_speed < 300:
-            score += 2
+        if response_speed is not None:
+            if response_speed < 60:
+                score += 5  # Replied within 1 minute — very hot
+            elif response_speed < 300:
+                score += 2  # Replied within 5 minutes — engaged
+
+        # Long messages indicate serious consideration
+        longest_message = signals.get("longest_message_chars", 0)
+        if longest_message > 200:
+            score += 3  # Wrote a detailed message — invested
+        elif longest_message > 100:
+            score += 1
 
         return min(score, self.MAX_ENGAGEMENT)
+
+    def calculate_score_decay(
+        self,
+        current_score: int,
+        days_since_last_response: int,
+    ) -> Tuple[int, int]:
+        """
+        Apply score decay for inactive leads.
+
+        Leads lose 5 points per 30 days of inactivity. This prevents stale
+        leads from artificially inflating hot/warm counts and ensures
+        active leads are prioritized.
+
+        Args:
+            current_score: Current lead score (0-100)
+            days_since_last_response: Days since lead's last response
+
+        Returns:
+            Tuple of (new_score, decay_applied)
+        """
+        if days_since_last_response < 30:
+            return current_score, 0
+
+        # -5 points per 30-day period of inactivity
+        decay_periods = days_since_last_response // 30
+        decay = decay_periods * 5
+
+        # Cap decay so score doesn't go below 5 (preserve some history)
+        new_score = max(5, current_score - decay)
+        actual_decay = current_score - new_score
+
+        if actual_decay > 0:
+            logger.info(
+                f"Score decay: {current_score} -> {new_score} "
+                f"(-{actual_decay} for {days_since_last_response} days inactive)"
+            )
+
+        return new_score, actual_decay
 
     def get_score_explanation(self, score: LeadScore) -> str:
         """Generate human-readable explanation of score."""

@@ -62,8 +62,8 @@ except Exception as e:
 print("\n=== TESTING LOGIN ===")
 try:
     response = supabase.auth.sign_in_with_password({
-        "email": "adam@saahomes.com",
-        "password": "Vitzer0100!"
+        "email": os.getenv("ADMIN_EMAIL", ""),
+        "password": os.getenv("ADMIN_PASSWORD", "")
     })
     print(f"  Login SUCCESS!")
     print(f"    User ID: {response.user.id}")

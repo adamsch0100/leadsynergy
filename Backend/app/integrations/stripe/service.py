@@ -263,7 +263,7 @@ def _handle_checkout_completed(event):
             "subscription_status": subscription_status,
             "subscription_plan": plan,
             "stripe_customer_id": customer_id,
-            "subscription_end_date": end_date.isoformat(),
+            "subsciption_end_date": end_date.isoformat(),  # Note: DB column has typo
             "updated_at": datetime.now().isoformat(),
         }
 
@@ -383,13 +383,13 @@ def _handle_invoice_paid(event):
         # Calculate new subscription end date
         end_date = datetime.fromtimestamp(subscription.current_period_end).isoformat()
 
-        # Update organization subcscription status in Supabase
+        # Update organization subscription status in Supabase
         result = (
             supabase.table("organizations")
             .update(
                 {
                     "subscription_status": "active",
-                    "subcscription_end_date": end_date,
+                    "subsciption_end_date": end_date,  # Note: DB column has typo
                     "updated_at": datetime.now().isoformat(),
                 }
             )
@@ -458,8 +458,13 @@ def _handle_payment_failed(event):
             return jsonify({"error": "Organization not found"}), 404
 
         logger.info(
-            f"Marked subcscription as past_due for organization {organization_id}"
+            f"Marked subscription as past_due for organization {organization_id}"
         )
+
+        # Send dunning notification to admin
+        attempt_count = invoice.get("attempt_count", 1) if isinstance(invoice, dict) else 1
+        _send_dunning_notification(organization_id, attempt_count)
+
         return jsonify({"status": "success"})
     except Exception as e:
         logger.error(f"Error handling payment failure: {str(e)}")
@@ -513,3 +518,89 @@ def _determine_plan_from_price(price_id):
 def _is_enhancement_plan(plan_id):
     """Check if a plan ID is an enhancement subscription."""
     return plan_id.startswith("enhance-")
+
+
+def create_customer_portal_session():
+    """Create a Stripe Customer Portal session for managing subscription and billing."""
+    try:
+        data = request.json
+        organization_id = data.get("organizationId")
+
+        if not organization_id:
+            return jsonify({"ok": False, "error": "Organization ID is required"}), 400
+
+        # Look up the Stripe customer ID for this organization
+        result = (
+            supabase.table("organizations")
+            .select("stripe_customer_id")
+            .eq("id", organization_id)
+            .single()
+            .execute()
+        )
+
+        if not result.data or not result.data.get("stripe_customer_id"):
+            logger.error(f"No Stripe customer found for organization {organization_id}")
+            return jsonify({"ok": False, "error": "No billing account found. Please contact support."}), 404
+
+        customer_id = result.data["stripe_customer_id"]
+
+        # Create portal session
+        portal_session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=f"{os.environ.get('FRONTEND_URL')}/admin/billing",
+        )
+
+        logger.info(f"Created portal session for org {organization_id}, customer {customer_id}")
+        return jsonify({"ok": True, "url": portal_session.url})
+
+    except Exception as e:
+        logger.error(f"Error creating customer portal session: {str(e)}")
+        return jsonify({"ok": False, "error": "Failed to create billing portal session"}), 500
+
+
+def _send_dunning_notification(organization_id: str, attempt_count: int = 1):
+    """Send notification to organization admin when payment fails."""
+    try:
+        # Get organization details and primary user email
+        org_result = (
+            supabase.table("organizations")
+            .select("name")
+            .eq("id", organization_id)
+            .single()
+            .execute()
+        )
+
+        user_result = (
+            supabase.table("organization_users")
+            .select("user_id")
+            .eq("organization_id", organization_id)
+            .eq("role", "admin")
+            .limit(1)
+            .execute()
+        )
+
+        if not user_result.data:
+            logger.warning(f"No admin user found for org {organization_id}, skipping dunning notification")
+            return
+
+        user_id = user_result.data[0]["user_id"]
+        org_name = org_result.data.get("name", "your organization") if org_result.data else "your organization"
+
+        # Create a support ticket / notification for the failed payment
+        supabase.table("notifications").insert({
+            "user_id": user_id,
+            "organization_id": organization_id,
+            "type": "payment_failed",
+            "title": "Payment Failed" if attempt_count == 1 else f"Payment Failed (Attempt {attempt_count})",
+            "message": (
+                f"We were unable to process the subscription payment for {org_name}. "
+                f"Please update your payment method to avoid service interruption. "
+                f"You can update your billing information from the Billing page."
+            ),
+            "is_read": False,
+        }).execute()
+
+        logger.info(f"Dunning notification sent to user {user_id} for org {organization_id} (attempt {attempt_count})")
+
+    except Exception as e:
+        logger.error(f"Error sending dunning notification: {str(e)}")

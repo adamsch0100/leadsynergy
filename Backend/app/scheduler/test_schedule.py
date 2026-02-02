@@ -1,3 +1,4 @@
+import os
 import signal
 
 from tasks_old import update_referral_sources
@@ -18,7 +19,7 @@ from apscheduler.triggers.cron import CronTrigger
 app = Flask(__name__)
 
 # Configure Redis connection (adjust host/port as needed)
-redis_conn = Redis(password="Lancelot@123", host='localhost', port=6379)
+redis_conn = Redis(password=os.getenv('REDIS_PASSWORD', ''), host='localhost', port=6379)
 # Create an RQ named 'updates'
 q = Queue('updates', connection=redis_conn)
 

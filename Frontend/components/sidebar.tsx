@@ -1,7 +1,6 @@
 "use client"
 
-import type React from "react"
-import { useState } from "react"
+import React, { useState, useEffect } from "react"
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -13,17 +12,20 @@ import {
   ChevronDown,
   Home,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   MessageSquare,
   Settings,
   Settings2,
   Shuffle,
   LinkIcon as Source,
+  Ticket,
   Users,
   CreditCard,
   User2,
   UserCheck,
   UserX,
+  ClipboardList,
 } from "lucide-react"
 import {
   Sidebar,
@@ -64,6 +66,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { NotificationsMenu } from "@/components/ui/notifications-menu"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { HelpWidget } from "@/components/help-widget"
 
 interface SidebarWrapperProps {
   children: React.ReactNode
@@ -92,6 +95,7 @@ export function SidebarWrapper({ children, role }: SidebarWrapperProps) {
             <div className="container mx-auto py-6">{children}</div>
           </main>
         </div>
+        <HelpWidget />
       </div>
     </SidebarProvider>
   )
@@ -99,9 +103,36 @@ export function SidebarWrapper({ children, role }: SidebarWrapperProps) {
 
 function UserDropdown({ role }: { role: "admin" | "agent" }) {
   const router = useRouter()
+  const [user, setUser] = useState<{ email?: string; name?: string } | null>(null)
 
-  const handleLogout = () => {
-    // In a real app, perform logout actions (clear session, etc.)
+  // Load user data from Supabase on mount
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        const { createClient } = await import("@/lib/supabase/client")
+        const supabase = createClient()
+        const { data: { user: authUser } } = await supabase.auth.getUser()
+        if (authUser) {
+          setUser({
+            email: authUser.email,
+            name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || undefined,
+          })
+        }
+      } catch {
+        // Silently fail — will show fallback text
+      }
+    }
+    loadUser()
+  }, [])
+
+  const handleLogout = async () => {
+    try {
+      const { createClient } = await import("@/lib/supabase/client")
+      const supabase = createClient()
+      await supabase.auth.signOut()
+    } catch {
+      // Continue to redirect even if signOut fails
+    }
     router.push("/login")
   }
 
@@ -114,16 +145,18 @@ function UserDropdown({ role }: { role: "admin" | "agent" }) {
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="relative h-10 w-10 rounded-full">
           <Avatar className="h-10 w-10">
-            <AvatarFallback>{role === "admin" ? "AD" : "AG"}</AvatarFallback>
+            <AvatarFallback>
+              {user?.name ? user.name.charAt(0).toUpperCase() : (user?.email ? user.email.charAt(0).toUpperCase() : "U")}
+            </AvatarFallback>
           </Avatar>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-56" align="end" forceMount>
         <DropdownMenuLabel>
           <div className="flex flex-col space-y-1">
-            <p className="text-sm font-medium leading-none">{role === "admin" ? "Admin User" : "Agent User"}</p>
+            <p className="text-sm font-medium leading-none">{user?.name || (role === "admin" ? "Admin" : "Agent")}</p>
             <p className="text-xs leading-none text-muted-foreground">
-              {role === "admin" ? "admin@leadsynergy.io" : "agent@leadsynergy.io"}
+              {user?.email || ""}
             </p>
           </div>
         </DropdownMenuLabel>
@@ -228,9 +261,19 @@ function AppSidebar({ role }: { role: "admin" | "agent" }) {
       icon: Bell,
     },
     {
+      title: "Support Tickets",
+      href: "/admin/support-tickets",
+      icon: Ticket,
+    },
+    {
       title: "Lead Sources",
       href: "/admin/lead-sources",
       icon: Source,
+    },
+    {
+      title: "Setup Requests",
+      href: "/admin/setup-requests",
+      icon: ClipboardList,
     },
     {
       title: "Team Management",
@@ -279,6 +322,11 @@ function AppSidebar({ role }: { role: "admin" | "agent" }) {
       title: "Profile Settings",
       href: "/agent/profile",
       icon: User2,
+    },
+    {
+      title: "Help & Support",
+      href: "/agent/help",
+      icon: LifeBuoy,
     },
   ]
 

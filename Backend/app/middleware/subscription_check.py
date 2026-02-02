@@ -4,9 +4,10 @@ Subscription Check Middleware - Enforces active subscription for paid features.
 
 import logging
 from functools import wraps
-from flask import request, jsonify
+from flask import request, jsonify, g
 
 from app.database.supabase_client import SupabaseClientSingleton
+from app.middleware.auth import _extract_user_id_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ def require_active_subscription(f):
     """
     @wraps(f)
     def decorated(*args, **kwargs):
-        user_id = request.headers.get('X-User-ID')
+        user_id = _extract_user_id_from_request() or getattr(g, 'user_id', None)
 
         if not user_id:
             return jsonify({

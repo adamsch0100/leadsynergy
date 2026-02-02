@@ -174,7 +174,7 @@ class AgentSettings:
     personality: str = "friendly_casual"  # friendly_casual, professional, energetic
 
     # Response settings
-    response_delay_seconds: int = 30  # Delay to feel more human
+    response_delay_seconds: int = 10  # Speed-to-lead: faster response = higher conversion
     max_sms_length: int = 1000  # Max SMS chars (configurable from frontend)
     max_email_length: int = 5000  # Max email chars (configurable from frontend)
 

@@ -60,8 +60,11 @@ fub_client = FUBApiClient()
 # AI Agent Service (lazy loaded)
 _agent_service = None
 
-# Playwright SMS Service (lazy loaded)
+# Playwright SMS Service (lazy loaded, used only for reading privacy-redacted messages)
 _playwright_sms_service = None
+
+# FUB Native SMS Service (API-based, preferred for sending - <1s vs 90s+ with Playwright)
+from app.messaging.fub_sms_service import FUBSMSService
 
 def get_agent_service():
     """Lazy load the AI agent service."""
@@ -183,7 +186,7 @@ def run_async_task(coroutine):
         finally:
             try:
                 loop.close()
-            except:
+            except Exception:
                 pass
 
     thread = threading.Thread(target=run_in_thread, args=(loop, coroutine))
@@ -295,9 +298,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             return
 
         text_msg = text_messages[0]
-        logger.debug(f"[DEBUG] Text message data: {text_msg}")
-        print(f"[DEBUG] Text message keys: {text_msg.keys()}", flush=True)
-        print(f"[DEBUG] Text message data: {text_msg}", flush=True)
+        logger.debug(f"Text message received, keys: {list(text_msg.keys())}")
 
         person_id = text_msg.get('personId')
         is_incoming = text_msg.get('isIncoming', False)
@@ -549,27 +550,15 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 fub_person_id=person_id,
                 organization_id=organization_id,
             )
-            # Send confirmation via browser automation
-            from app.messaging.playwright_sms_service import PlaywrightSMSService
-            from app.ai_agent.settings_service import get_fub_browser_credentials
-
-            credentials = await get_fub_browser_credentials(
-                supabase_client=supabase,
-                user_id=user_id,
-                organization_id=organization_id,
-            )
-
-            if credentials:
-                if _playwright_sms_service is None:
-                    _playwright_sms_service = PlaywrightSMSService()
-
-                agent_id = credentials.get("agent_id", user_id or "default")
-                await _playwright_sms_service.send_sms(
-                    agent_id=agent_id,
+            # Send confirmation via FUB native API
+            try:
+                fub_sms = FUBSMSService(api_key=fub_api_key)
+                await fub_sms.send_text_message_async(
                     person_id=person_id,
                     message="You've been re-subscribed! We're happy to have you back. How can we help?",
-                    credentials=credentials,
                 )
+            except Exception as e:
+                logger.error(f"Failed to send opt-in confirmation to person {person_id}: {e}")
             return
 
         # Check for opt-out keywords
@@ -580,27 +569,28 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 organization_id=organization_id,
                 reason="STOP keyword received",
             )
-            # Send confirmation via browser automation
-            from app.messaging.playwright_sms_service import PlaywrightSMSService
-            from app.ai_agent.settings_service import get_fub_browser_credentials
-
-            credentials = await get_fub_browser_credentials(
-                supabase_client=supabase,
-                user_id=user_id,
-                organization_id=organization_id,
-            )
-
-            if credentials:
-                if _playwright_sms_service is None:
-                    _playwright_sms_service = PlaywrightSMSService()
-
-                agent_id = credentials.get("agent_id", user_id or "default")
-                await _playwright_sms_service.send_sms(
-                    agent_id=agent_id,
+            # Send confirmation via FUB native API
+            try:
+                fub_sms = FUBSMSService(api_key=fub_api_key)
+                await fub_sms.send_text_message_async(
                     person_id=person_id,
                     message="You've been unsubscribed and won't receive any more messages from us. Reply START to opt back in.",
-                    credentials=credentials,
                 )
+            except Exception as e:
+                logger.error(f"Failed to send opt-out confirmation to person {person_id}: {e}")
+
+            # Track A/B test outcome — opt-out is a negative outcome
+            try:
+                from app.ai_agent.template_engine import get_template_engine
+                ab_engine = get_template_engine(supabase_client=supabase)
+                # Use person_id as conversation lookup since we may not have conversation_id here
+                ab_engine.record_ab_test_outcome(
+                    conversation_id=str(person_id),
+                    led_to_optout=True,
+                )
+            except Exception:
+                pass  # A/B tracking is non-critical
+
             return
 
         # Check compliance before responding
@@ -676,6 +666,16 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             message_content=message_content,
         )
 
+        # Track A/B test response — if we sent a template variant, record that the lead responded
+        try:
+            from app.ai_agent.template_engine import get_template_engine
+            ab_engine = get_template_engine(supabase_client=supabase)
+            ab_engine.record_ab_test_response(
+                conversation_id=context.conversation_id,
+            )
+        except Exception:
+            pass  # A/B tracking is non-critical, don't block message processing
+
         # ============================================
         # CRITICAL: Cancel pending automation when lead responds
         # ============================================
@@ -689,21 +689,14 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             )
             logger.info(f"Cancelled pending automation for engaged lead {person_id}")
         except Exception as cancel_error:
-            logger.warning(f"Could not cancel sequences for lead {person_id}: {cancel_error}")
-            # Continue processing even if cancellation fails
+            logger.error(f"CRITICAL: Could not cancel sequences for lead {person_id}: {cancel_error} - lead may receive duplicate messages")
+            # Continue processing - but log at ERROR level since duplicate messages are possible
 
         # Process through full AI Agent Service
-        import sys
-        print(f"[DEBUG] Calling AI Agent Service for person {person_id}...", flush=True)
-        sys.stderr.write(f"[DEBUG-ERR] Calling AI Agent Service for person {person_id}...\n")
-        sys.stderr.flush()
-        logger.info(f"Calling AI Agent Service for person {person_id}...")
+        logger.info(f"Processing message for person {person_id} through AI Agent Service...")
 
         agent_service = get_agent_service()
-        print(f"[DEBUG] Agent service obtained, processing message...", flush=True)
-        sys.stderr.write(f"[DEBUG-ERR] Agent service obtained\n")
-        sys.stderr.flush()
-        logger.info(f"Agent service ready, processing message: {message_content[:50]}...")
+        logger.info(f"Agent service ready, processing: {message_content[:50]}...")
 
         try:
             agent_response = await agent_service.process_message(
@@ -716,23 +709,18 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 user_id=user_id,
                 organization_id=organization_id,
             )
-            print(f"[DEBUG] AI processing complete, response: {agent_response}", flush=True)
+            logger.info(f"AI processing complete for person {person_id}")
         except Exception as ai_error:
-            print(f"[DEBUG] AI processing FAILED: {ai_error}", flush=True)
-            sys.stderr.write(f"[DEBUG-ERR] AI processing FAILED: {ai_error}\n")
-            sys.stderr.flush()
+            logger.error(f"AI processing FAILED for person {person_id}: {ai_error}")
             import traceback
-            traceback.print_exc()
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
-        print(f"[DEBUG] Checking if response exists...", flush=True)
         if agent_response and agent_response.response_text:
-            print(f"[DEBUG] Response exists! Preparing to send SMS...", flush=True)
             logger.info(f"AI generated response for person {person_id}: {agent_response.response_text[:100]}...")
 
             # Check if we need to queue for later (outside hours)
             if queue_for_later and queued_delivery_time:
-                print(f"[DEBUG] Queueing message for later delivery at {queued_delivery_time}...", flush=True)
                 logger.info(f"Queueing response for person {person_id} - scheduled for {queued_delivery_time}")
 
                 queue_result = await queue_message_for_delivery(
@@ -769,42 +757,18 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                     logger.error(f"Failed to queue message for person {person_id}: {queue_result.get('error')}")
                 return  # Exit after queueing
 
-            # Send response via Playwright browser automation
-            # FUB API doesn't have texting access - must use browser
-            print(f"[DEBUG] Sending SMS via Playwright to person {person_id}...", flush=True)
-
-            # Get FUB browser credentials (already resolved earlier, but may need to get again)
-            from app.ai_agent.settings_service import get_fub_browser_credentials
-            from app.messaging.playwright_sms_service import PlaywrightSMSService
-
-            credentials = await get_fub_browser_credentials(
-                supabase_client=supabase,
-                user_id=user_id,
-                organization_id=organization_id,
-            )
-
-            if not credentials:
-                print(f"[DEBUG] No FUB browser credentials found - cannot send SMS", flush=True)
-                logger.error(f"No FUB browser credentials for user {user_id} - cannot send SMS")
-                return
-
-            # Use the global playwright service (already initialized if we read messages)
-            # Note: global declaration is at the top of the function
-            if _playwright_sms_service is None:
-                _playwright_sms_service = PlaywrightSMSService()
-
-            agent_id = credentials.get("agent_id", user_id or "default")
+            # Send response via FUB Native Texting API
+            # Native API is faster (<1s) and more reliable than Playwright browser automation
+            logger.info(f"Sending SMS via FUB API to person {person_id}...")
 
             try:
-                result = await _playwright_sms_service.send_sms(
-                    agent_id=agent_id,
+                fub_sms = FUBSMSService(api_key=fub_api_key)
+                result = await fub_sms.send_text_message_async(
                     person_id=person_id,
                     message=agent_response.response_text,
-                    credentials=credentials,
                 )
-                print(f"[DEBUG] SMS send result: {result}", flush=True)
             except Exception as sms_err:
-                print(f"[DEBUG] SMS send FAILED: {sms_err}", flush=True)
+                logger.error(f"SMS send FAILED for person {person_id}: {sms_err}")
                 import traceback
                 traceback.print_exc()
                 raise
@@ -862,6 +826,19 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                     extracted_data=agent_response.extracted_info or {},
                     intent_detected=agent_response.detected_intent if agent_response.detected_intent else None,
                 )
+
+                # Track A/B test outcomes — appointment or opt-out
+                try:
+                    detected = (agent_response.detected_intent or "").lower()
+                    if "appointment" in detected or "schedule" in detected or "time_selection" in detected:
+                        from app.ai_agent.template_engine import get_template_engine
+                        ab_engine = get_template_engine(supabase_client=supabase)
+                        ab_engine.record_ab_test_outcome(
+                            conversation_id=context.conversation_id,
+                            led_to_appointment=True,
+                        )
+                except Exception:
+                    pass  # A/B tracking is non-critical
             else:
                 logger.error(f"SMS send FAILED for person {person_id}: {result.get('error', 'unknown error')}")
 
@@ -1011,12 +988,12 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
         elif 'bedroom' in field_name or 'bed' in field_name:
             try:
                 bedrooms = int(field_value)
-            except:
+            except (ValueError, TypeError):
                 pass
         elif 'bathroom' in field_name or 'bath' in field_name:
             try:
                 bathrooms = int(field_value)
-            except:
+            except (ValueError, TypeError):
                 pass
 
     # Calculate days since created
@@ -1026,7 +1003,7 @@ async def build_lead_profile_from_fub(person_data: Dict[str, Any], organization_
             from dateutil.parser import parse as parse_date
             created_dt = parse_date(created)
             days_in_system = (datetime.now(created_dt.tzinfo) - created_dt).days
-        except:
+        except (ValueError, TypeError, ImportError):
             pass
 
     # Get agent info
@@ -1299,7 +1276,7 @@ def parse_currency(value: Any) -> Optional[int]:
         clean = re.sub(r'[$,\s]', '', value)
         try:
             return int(float(clean))
-        except:
+        except (ValueError, TypeError):
             pass
     return None
 
@@ -1624,7 +1601,7 @@ async def schedule_welcome_sequence(context, settings: Dict[str, Any]):
 
         # Schedule messages
         now = datetime.utcnow()
-        delay_seconds = settings.get('response_delay_seconds', 30)
+        delay_seconds = settings.get('response_delay_seconds', 10)
 
         messages_to_schedule = [
             {
@@ -1796,7 +1773,7 @@ async def get_ai_agent_settings(organization_id: str, user_id: str) -> Optional[
         return {
             "is_enabled": True,
             "auto_enable_new_leads": False,
-            "response_delay_seconds": 30,
+            "response_delay_seconds": 10,
             "working_hours_start": "08:00",
             "working_hours_end": "20:00",
             "timezone": "America/New_York",

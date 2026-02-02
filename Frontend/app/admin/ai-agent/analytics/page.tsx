@@ -552,7 +552,7 @@ export default function AIAnalyticsPage() {
                           >
                             <span className="truncate">{item.lead_name || `Person #${item.fub_person_id}`}</span>
                             <Badge variant="outline" className="text-xs shrink-0 ml-2 capitalize">
-                              {item.action_type.replace(/_/g, ' ')}
+                              {(item.action_type || 'pending').replace(/_/g, ' ')}
                             </Badge>
                           </div>
                         ))}
@@ -627,7 +627,7 @@ export default function AIAnalyticsPage() {
                                 {task.lead_name}
                               </p>
                               <Badge variant="outline" className="text-xs shrink-0">
-                                {task.channel.toUpperCase()}
+                                {(task.channel || 'sms').toUpperCase()}
                               </Badge>
                               {task.sequence_day > 0 && (
                                 <Badge variant="secondary" className="text-xs shrink-0">
@@ -1012,7 +1012,7 @@ export default function AIAnalyticsPage() {
                   {intents.map((intent) => (
                     <div key={intent.intent} className="space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="capitalize">{intent.intent.replace(/_/g, ' ')}</span>
+                        <span className="capitalize">{(intent.intent || 'unknown').replace(/_/g, ' ')}</span>
                         <span className="text-muted-foreground">
                           {intent.count} ({intent.percentage?.toFixed(1)}%)
                         </span>

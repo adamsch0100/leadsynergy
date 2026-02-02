@@ -1,29 +1,21 @@
-import datetime
-import os
-from datetime import timedelta
+"""
+Supabase authentication utility module.
 
+Provides a helper for creating authenticated Supabase clients.
+All credentials must come from environment variables.
+"""
+
+import os
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
 load_dotenv()
 
-URL = os.getenv("SUPABASE_URL")
-KEY = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_JWT_SECRET")
-supabase = create_client(supabase_url=URL, supabase_key=KEY)
 
-random_email: str = "adam@saahomes.com"
-random_password: str = "Vitzer0100!"
-original_email = "kenzakishiro123@gmail.com"
-original_password = "Lansilotskey@123"
-# response = supabase.auth.sign_up(
-#     {
-#         "email": "kenzakishiro123@gmail.com",
-#         "password": "Lansilotskey@123",
-#     }
-# )
-response = supabase.auth.sign_in_with_password({
-    "email": original_email,
-    "password": original_password
-})
-
-print(response.model_dump_json())
+def get_supabase_client() -> Client:
+    """Create and return a Supabase client using environment variables."""
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_JWT_SECRET")
+    if not url or not key:
+        raise ValueError("SUPABASE_URL and SUPABASE_SECRET_KEY must be set in environment variables")
+    return create_client(supabase_url=url, supabase_key=key)

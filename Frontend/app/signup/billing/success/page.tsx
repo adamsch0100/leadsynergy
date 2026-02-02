@@ -1,12 +1,11 @@
 "use client";
 
-import { useDebugValue, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { completeSignup } from "@/app/auth/actions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Check, Loader } from "lucide-react";
-import { error } from "console";
 
 export default function CheckoutSuccessPage() {
   const searchParams = useSearchParams();
@@ -46,13 +45,13 @@ export default function CheckoutSuccessPage() {
   }, [searchParams]);
 
   return (
-    <div className="flex min-h screen items-center justify-center p-4">
+    <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardContent className="pt-6">
           {status === "processing" && (
             <div className="text-center py-8">
               <Loader className="h-12 w-12 animate-spin mx-auto mb-4" />
-              <h2 className="text-2xl font-bol">Finalizing your account...</h2>
+              <h2 className="text-2xl font-bold">Finalizing your account...</h2>
               <p className="text-muted-foreground mt-2">
                 Please wait while we set up your account
               </p>
@@ -65,9 +64,9 @@ export default function CheckoutSuccessPage() {
               </div>
               <h2 className="text-2xl font-bold">Success!</h2>
               <p className="text-muted-foreground mt-2 mb-6">
-                Your account has been created successfully
+                Your account has been created. Let&apos;s finish setting up your integrations.
               </p>
-              <Button onClick={() => router.push("/login")}>Sign In</Button>
+              <Button onClick={() => router.push("/onboarding")}>Continue Setup</Button>
             </div>
           )}
           {status === "error" && (

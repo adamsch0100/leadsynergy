@@ -1,3 +1,4 @@
+import os
 import time
 
 from selenium.common import TimeoutException
@@ -21,8 +22,8 @@ from selenium.webdriver.chrome.options import Options
 import time
 from app.referral_scrapers.utils.web_interaction_simulator import WebInteractionSimulator as wis
 
-USERNAME = "online@saahomes.com"
-PASSWORD = "SAA$quad#1Rank"
+USERNAME = os.getenv("HOMELIGHT_EMAIL", "")
+PASSWORD = os.getenv("HOMELIGHT_PASSWORD", "")
 LOGIN_URL = "https://www.homelight.com/client/sign-in"
 DASHBOARD_URL = "https://agent.homelight.com/referrals/page/1"
 wis = wis()

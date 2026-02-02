@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { ArrowLeft, Mail, MessageSquare, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,22 +21,111 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import type { User } from "@supabase/supabase-js";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+const REASON_TO_CATEGORY: Record<string, string> = {
+  sales: "other",
+  support: "technical",
+  billing: "billing",
+  demo: "other",
+  partnership: "other",
+  other: "other",
+};
+
+const REASON_LABELS: Record<string, string> = {
+  sales: "Sales Inquiry",
+  support: "Technical Support",
+  billing: "Billing Question",
+  demo: "Demo Request",
+  partnership: "Partnership",
+  other: "Other",
+};
 
 export default function ContactPage() {
   const router = useRouter();
+  const [user, setUser] = useState<User | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ticketId, setTicketId] = useState<number | null>(null);
+
+  // Form state
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    const loadUser = async () => {
+      const supabase = createClient();
+      const { data } = await supabase.auth.getUser();
+      setUser(data.user ?? null);
+    };
+    loadUser();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setError(null);
 
-    // Simulate form submission
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    if (!user) {
+      // Not logged in - show success anyway (no backend to send to)
+      setIsSubmitting(false);
+      setSubmitted(true);
+      return;
+    }
 
-    setIsSubmitting(false);
-    setSubmitted(true);
+    try {
+      const subject = `${REASON_LABELS[reason] || reason}: ${firstName} ${lastName}`;
+      const description = [
+        message,
+        "",
+        `---`,
+        `Name: ${firstName} ${lastName}`,
+        `Email: ${email}`,
+        phone ? `Phone: ${phone}` : null,
+        `Reason: ${REASON_LABELS[reason] || reason}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const res = await fetch(`${API_BASE_URL}/api/support/tickets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-ID": user.id,
+        },
+        body: JSON.stringify({
+          subject,
+          description,
+          priority: "normal",
+          category: REASON_TO_CATEGORY[reason] || "other",
+        }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setTicketId(data.ticket?.id || null);
+        setSubmitted(true);
+      } else {
+        setError(data.error || "Failed to submit your request. Please try again.");
+      }
+    } catch (err) {
+      console.error("Error submitting ticket:", err);
+      setError("Unable to connect to our servers. Please try again later.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (submitted) {
@@ -48,13 +137,25 @@ export default function ContactPage() {
               <MessageSquare className="h-8 w-8 text-green-600 dark:text-green-400" />
             </div>
             <h1 className="text-3xl font-bold mb-4">Message Sent!</h1>
-            <p className="text-muted-foreground mb-8">
+            <p className="text-muted-foreground mb-2">
               Thank you for reaching out. Our team will get back to you within 24
               hours.
             </p>
-            <Button asChild>
-              <Link href="/">Return Home</Link>
-            </Button>
+            {ticketId && (
+              <p className="text-sm text-muted-foreground mb-4">
+                Your ticket number is <span className="font-mono font-medium">#{ticketId}</span>
+              </p>
+            )}
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              {user && ticketId && (
+                <Button asChild variant="outline">
+                  <Link href="/agent/help">Track Your Ticket</Link>
+                </Button>
+              )}
+              <Button asChild>
+                <Link href="/">Return Home</Link>
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -95,10 +196,10 @@ export default function ContactPage() {
               </CardHeader>
               <CardContent>
                 <a
-                  href="mailto:support@leadsynergy.io"
+                  href="mailto:support@leadsynergy.com"
                   className="text-primary hover:underline"
                 >
-                  support@leadsynergy.io
+                  support@leadsynergy.com
                 </a>
                 <p className="text-sm text-muted-foreground mt-1">
                   Response within 24 hours
@@ -115,7 +216,7 @@ export default function ContactPage() {
               </CardHeader>
               <CardContent>
                 <p className="text-muted-foreground">
-                  Available for Professional and Business plan customers.
+                  Available for Pro and Enterprise plan customers.
                 </p>
               </CardContent>
             </Card>
@@ -144,15 +245,34 @@ export default function ContactPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {error && (
+                <Alert variant="destructive" className="mb-6">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="firstName">First Name</Label>
-                    <Input id="firstName" placeholder="John" required />
+                    <Input
+                      id="firstName"
+                      placeholder="John"
+                      required
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="lastName">Last Name</Label>
-                    <Input id="lastName" placeholder="Doe" required />
+                    <Input
+                      id="lastName"
+                      placeholder="Doe"
+                      required
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                    />
                   </div>
                 </div>
 
@@ -163,6 +283,8 @@ export default function ContactPage() {
                     type="email"
                     placeholder="john@example.com"
                     required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                   />
                 </div>
 
@@ -172,12 +294,14 @@ export default function ContactPage() {
                     id="phone"
                     type="tel"
                     placeholder="(555) 123-4567"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="reason">Reason for Contact</Label>
-                  <Select required>
+                  <Select required value={reason} onValueChange={setReason}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select a reason" />
                     </SelectTrigger>
@@ -199,6 +323,8 @@ export default function ContactPage() {
                     placeholder="Tell us how we can help..."
                     rows={5}
                     required
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
                   />
                 </div>
 

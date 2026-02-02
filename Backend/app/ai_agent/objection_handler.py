@@ -236,6 +236,13 @@ class ObjectionScriptLibrary:
                 "Smart to sort that out first! Getting pre-approved makes everything easier. I can connect you with a few lenders who are really good - no pressure, just options!",
                 "Totally makes sense! Financing is huge. Want me to send you some info on the process? And I know some great lenders if you need recommendations!",
             ],
+            ResponseStrategy.INFORMATION_OFFER: [
+                "A lot of buyers start the process before they're fully pre-approved! Would it help if I sent some info on what lenders look for?",
+                "There are some great programs out there - FHA, VA, down payment assistance. Want me to send you a quick overview of options?",
+            ],
+            ResponseStrategy.FUTURE_FOCUS: [
+                "Smart to get your ducks in a row! Once you're pre-approved, I can start sending you homes that fit your budget. Want me to check back in a couple weeks?",
+            ],
         },
 
         ObjectionType.WAITING: {
@@ -246,6 +253,72 @@ class ObjectionScriptLibrary:
             ResponseStrategy.FUTURE_FOCUS: [
                 "No problem! When do you think that will be sorted out? I can check back in then!",
                 "Makes sense! Let me know when things are clearer on your end. Happy to help when you're ready!",
+            ],
+        },
+
+        ObjectionType.LOYALTY: {
+            ResponseStrategy.ACKNOWLEDGE_RESPECT: [
+                "That's awesome that you have a good relationship with your agent! Loyalty says a lot about you. If you ever need a second opinion on anything, I'm here!",
+                "Love hearing that! A good agent relationship is everything. If things ever change or you need help in a different area, don't hesitate to reach out!",
+                "Totally respect that! Having an agent you trust is huge. I'm here as a resource if you ever need anything - no strings attached!",
+            ],
+            ResponseStrategy.VALUE_ADD: [
+                "Completely understand! Just so you know, I specialize in this area and I'm always happy to share market insights - even if you're working with someone else!",
+                "No worries at all! I know the local market really well, so if you ever want a fresh perspective on pricing or neighborhoods, I'm just a text away!",
+            ],
+        },
+
+        ObjectionType.DONT_TRUST: {
+            ResponseStrategy.EMPATHY_CONNECT: [
+                "I totally get it - there are definitely some pushy agents out there. I promise I'm not one of them! I'm here to help, not to pressure you into anything.",
+                "I hear you, and honestly, that's fair. Real estate can feel overwhelming. I'm just here to answer questions and share info - zero pressure!",
+                "Completely understand the hesitation. The best thing I can do is just be straight with you and let my actions speak for themselves. No tricks, just help!",
+            ],
+            ResponseStrategy.VALUE_ADD: [
+                "I get it! How about this - no commitment, no pressure. If you have any questions about the market or the process, I'm happy to just be a resource for you.",
+                "Tell you what - I'll just send you some useful info about the area. No strings attached. If you find it helpful, great. If not, no hard feelings!",
+            ],
+            ResponseStrategy.ACKNOWLEDGE_RESPECT: [
+                "Appreciate you being honest with me! That actually helps me serve you better. I'll keep things simple and straightforward - just real info, no sales pitch.",
+            ],
+        },
+
+        ObjectionType.TOO_FAR: {
+            ResponseStrategy.SOFT_PIVOT: [
+                "I hear you on the distance! Have you considered any closer neighborhoods? I know some great areas that might give you what you're looking for without the commute.",
+                "That's a valid concern! What areas would work better for you? I can look at options that are more convenient.",
+                "Distance is definitely a factor! What's your ideal commute time? I might know some spots you haven't considered yet.",
+            ],
+            ResponseStrategy.INFORMATION_OFFER: [
+                "Totally get it! If it helps, I can put together some options in areas closer to you. What neighborhoods or zip codes work best?",
+                "Makes sense! I cover a pretty wide area - let me know your preferred location and I'll see what's available there.",
+            ],
+        },
+
+        ObjectionType.WRONG_SIZE: {
+            ResponseStrategy.SOFT_PIVOT: [
+                "Got it! What size/type of home are you looking for? I can filter my search to match exactly what you need.",
+                "No problem! What would be the right fit for you - bedrooms, bathrooms, square footage? I'll narrow things down!",
+                "Totally understand! Let me know what you're looking for specifically and I'll send you options that actually match.",
+            ],
+            ResponseStrategy.INFORMATION_OFFER: [
+                "That's good to know! Are you looking for something bigger, smaller, or a different layout? I want to make sure I'm sending you the right stuff.",
+                "Fair enough! What's your must-have list look like? I'll make sure everything I send is on target.",
+            ],
+        },
+
+        ObjectionType.NEED_FAMILY: {
+            ResponseStrategy.ACKNOWLEDGE_RESPECT: [
+                "Of course! Family decisions are the most important ones. Take all the time you need to talk it through!",
+                "Totally makes sense - big decisions like this should be a family thing. No rush at all!",
+                "Absolutely! Want me to send some info they can look at too? Sometimes having the details in front of everyone helps the conversation.",
+            ],
+            ResponseStrategy.FUTURE_FOCUS: [
+                "Take your time! When do you think you'll have a chance to chat with them? I can follow up after that.",
+                "No problem! Would it help if I checked back in a few days after you've had a chance to talk it over?",
+            ],
+            ResponseStrategy.VALUE_ADD: [
+                "That's smart! If it helps, I can put together a quick summary of what we've talked about so you have something to share with your family.",
             ],
         },
     }

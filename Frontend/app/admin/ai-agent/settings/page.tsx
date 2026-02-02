@@ -102,7 +102,7 @@ const DEFAULT_SETTINGS: AISettings = {
   working_hours_start: "08:00",
   working_hours_end: "20:00",
   timezone: "America/New_York",
-  response_delay_seconds: 30,
+  response_delay_seconds: 10,
   max_response_length: 160,
   auto_handoff_score: 80,
   max_ai_messages_per_lead: 10,
@@ -162,6 +162,8 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUB
 export default function AISettingsPage() {
   const [settings, setSettings] = useState<AISettings>(DEFAULT_SETTINGS)
   const [user, setUser] = useState<User | null>(null)
+  const [userRole, setUserRole] = useState<string>("agent")
+  const isAdmin = userRole === 'admin' || userRole === 'broker'
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
@@ -226,6 +228,9 @@ export default function AISettingsPage() {
           custom_scripts: data.settings.custom_scripts || {},
           ai_respond_to_phone_numbers: data.settings.ai_respond_to_phone_numbers || [],
         })
+        if (data.role) {
+          setUserRole(data.role)
+        }
       }
     } catch (err) {
       console.error('Failed to fetch AI settings:', err)
@@ -551,7 +556,7 @@ export default function AISettingsPage() {
 
   if (isLoading) {
     return (
-      <SidebarWrapper role="admin">
+      <SidebarWrapper role={isAdmin ? "admin" : "agent"}>
         <div className="flex items-center justify-center min-h-[400px]">
           <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
@@ -560,7 +565,7 @@ export default function AISettingsPage() {
   }
 
   return (
-    <SidebarWrapper role="admin">
+    <SidebarWrapper role={isAdmin ? "admin" : "agent"}>
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -725,7 +730,8 @@ export default function AISettingsPage() {
               </CardContent>
             </Card>
 
-            {/* AI Model Selection Card */}
+            {/* AI Model Selection Card (Admin Only) */}
+            {isAdmin && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -790,6 +796,7 @@ export default function AISettingsPage() {
                 </div>
               </CardContent>
             </Card>
+            )}
           </div>
         </TabsContent>
 

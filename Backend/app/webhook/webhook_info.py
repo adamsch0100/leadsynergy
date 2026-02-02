@@ -8,7 +8,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 sys.path.insert(0, project_root)
 from app.utils.constants import Credentials
 
-api_key = "fka_0jmnNSMPqcxPauaVA0IFDc7MknCsaKMl0o"  # Replace with your actual API key
+api_key = os.getenv("FUB_API_KEY", "")
 
 # System Names
 tag_system_name = "Referral-Link"

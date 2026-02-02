@@ -13,9 +13,9 @@ class WindowsWorker(SimpleWorker):
 
 # Redis connection
 redis_conn = redis.Redis(
-    host='localhost',
-    port=6379,
-    password='Lancelot@123'
+    host=os.getenv('REDIS_HOST', 'localhost'),
+    port=int(os.getenv('REDIS_PORT', '6379')),
+    password=os.getenv('REDIS_PASSWORD', '')
 )
 
 if __name__ == '__main__':

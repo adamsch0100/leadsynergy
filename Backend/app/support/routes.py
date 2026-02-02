@@ -12,17 +12,130 @@ Admin endpoints:
 - GET /api/support/admin/tickets - List all tickets (admin only)
 - PUT /api/support/admin/tickets/<id>/assign - Assign ticket
 - PUT /api/support/admin/tickets/<id>/status - Update status
+- GET /api/support/admin/stats - Get support stats
+
+Notification settings:
+- GET /api/support/admin/notification-settings - Get notification emails
+- PUT /api/support/admin/notification-settings - Update notification emails
 """
 
 from flask import request, jsonify
 import logging
+import re
+import threading
 from datetime import datetime
+from html import escape as html_escape
 
 from app.support import support_bp
 from app.database.supabase_client import SupabaseClientSingleton
 from app.models.support_ticket import SupportTicket, TicketNote
 
 logger = logging.getLogger(__name__)
+
+
+def _get_notification_emails(user_id: str) -> list:
+    """Get configured notification emails for support tickets."""
+    try:
+        supabase = SupabaseClientSingleton.get_instance()
+        result = supabase.table('ai_agent_settings').select('support_notification_emails').eq('user_id', user_id).single().execute()
+        if result.data:
+            return result.data.get('support_notification_emails') or []
+    except Exception:
+        pass
+    return []
+
+
+def _get_all_admin_notification_emails() -> list:
+    """Get notification emails from all admin users' settings."""
+    try:
+        supabase = SupabaseClientSingleton.get_instance()
+        # Get all admin/broker users (users table uses 'role' column, not 'is_admin')
+        admin_result = supabase.table('users').select('id').in_('role', ['admin', 'broker']).execute()
+        admin_ids = [u['id'] for u in (admin_result.data or [])]
+
+        emails = set()
+        for admin_id in admin_ids:
+            admin_emails = _get_notification_emails(admin_id)
+            emails.update(admin_emails)
+        return list(emails)
+    except Exception as e:
+        logger.error(f"Error getting admin notification emails: {e}")
+        return []
+
+
+def _send_ticket_notification(ticket_id: int, subject: str, description: str, priority: str, category: str, user_id: str):
+    """Send email notification for a new ticket (runs in background thread)."""
+    try:
+        from app.email.email_service import EmailServiceSingleton
+
+        notification_emails = _get_all_admin_notification_emails()
+        if not notification_emails:
+            logger.info("No notification emails configured for support tickets")
+            return
+
+        email_service = EmailServiceSingleton.get_instance()
+
+        # Build a richer notification for admins
+        category_display = (category or 'general').replace('_', ' ').title()
+        priority_display = (priority or 'normal').title()
+
+        # Escape user-provided values to prevent HTML injection
+        safe_subject = html_escape(subject)
+        safe_description = html_escape(description[:1000])
+        safe_category = html_escape(category_display)
+        safe_priority = html_escape(priority_display)
+
+        priority_bg = '#fecaca' if priority == 'urgent' else '#fed7aa' if priority == 'high' else '#e5e7eb'
+
+        admin_html = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%); padding: 30px; border-radius: 8px 8px 0 0; text-align: center;">
+                <h1 style="margin: 0; color: #fff; font-size: 24px;">New Support Ticket #{ticket_id}</h1>
+            </div>
+            <div style="background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                    <tr>
+                        <td style="padding: 8px 0; color: #6b7280; width: 120px;">Subject:</td>
+                        <td style="padding: 8px 0; font-weight: 600; color: #111827;">{safe_subject}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: #6b7280;">Priority:</td>
+                        <td style="padding: 8px 0;"><span style="background: {priority_bg}; padding: 2px 10px; border-radius: 12px; font-size: 13px; font-weight: 600;">{safe_priority}</span></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: #6b7280;">Category:</td>
+                        <td style="padding: 8px 0;">{safe_category}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: #6b7280;">User ID:</td>
+                        <td style="padding: 8px 0; font-family: monospace; font-size: 13px;">{user_id[:12]}...</td>
+                    </tr>
+                </table>
+                <div style="background: #f9fafb; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+                    <p style="margin: 0 0 8px; font-size: 13px; color: #6b7280; font-weight: 600;">Description:</p>
+                    <p style="margin: 0; color: #374151; white-space: pre-wrap; font-size: 14px; line-height: 1.6;">{safe_description}</p>
+                </div>
+                <p style="margin: 0; font-size: 13px; color: #9ca3af; text-align: center;">
+                    LeadSynergy Support Notification
+                </p>
+            </div>
+        </div>
+        """
+
+        for email_addr in notification_emails:
+            try:
+                email_service.send_email(
+                    to_email=email_addr.strip(),
+                    subject=f"[LeadSynergy] New Ticket #{ticket_id}: {subject}",
+                    html_content=admin_html,
+                    text_content=f"New Support Ticket #{ticket_id}\n\nSubject: {subject}\nPriority: {priority_display}\nCategory: {category_display}\n\n{description[:1000]}"
+                )
+                logger.info(f"Ticket notification sent to {email_addr} for ticket #{ticket_id}")
+            except Exception as e:
+                logger.error(f"Failed to send ticket notification to {email_addr}: {e}")
+
+    except Exception as e:
+        logger.error(f"Error in ticket notification: {e}")
 
 
 def get_user_id_from_request():
@@ -36,11 +149,11 @@ def get_user_id_from_request():
 
 
 def check_admin(user_id: str) -> bool:
-    """Check if user is an admin."""
+    """Check if user is an admin or broker."""
     try:
         supabase = SupabaseClientSingleton.get_instance()
-        result = supabase.table('users').select('is_admin').eq('id', user_id).single().execute()
-        return result.data.get('is_admin', False) if result.data else False
+        result = supabase.table('users').select('role').eq('id', user_id).single().execute()
+        return result.data.get('role') in ('admin', 'broker') if result.data else False
     except Exception:
         return False
 
@@ -132,6 +245,16 @@ def create_ticket():
             ticket = SupportTicket.from_dict(result.data[0])
             logger.info(f"Created ticket {ticket.id} for user {user_id}")
 
+            # Send email notification in background thread
+            priority = data.get('priority', SupportTicket.PRIORITY_NORMAL)
+            category = data.get('category', 'other')
+            thread = threading.Thread(
+                target=_send_ticket_notification,
+                args=(ticket.id, subject, description, priority, category, user_id),
+                daemon=True
+            )
+            thread.start()
+
             return jsonify({
                 "success": True,
                 "ticket": ticket.to_dict()
@@ -165,13 +288,14 @@ def get_ticket(ticket_id):
         ticket = SupportTicket.from_dict(ticket_result.data)
 
         # Check if user owns the ticket or is admin
-        if ticket.user_id != user_id and not check_admin(user_id):
+        is_admin = check_admin(user_id)
+        if ticket.user_id != user_id and not is_admin:
             return jsonify({"error": "Access denied"}), 403
 
         # Get notes (exclude internal notes for non-admin)
         notes_query = supabase.table('ticket_notes').select('*').eq('ticket_id', ticket_id)
 
-        if not check_admin(user_id):
+        if not is_admin:
             notes_query = notes_query.eq('is_internal', False)
 
         notes_result = notes_query.order('created_at').execute()
@@ -344,10 +468,10 @@ def assign_ticket(ticket_id):
     try:
         supabase = SupabaseClientSingleton.get_instance()
 
-        # Verify assignee exists and is admin
-        assignee_result = supabase.table('users').select('is_admin').eq('id', assigned_to).single().execute()
+        # Verify assignee exists and is admin/broker
+        assignee_result = supabase.table('users').select('role').eq('id', assigned_to).single().execute()
 
-        if not assignee_result.data or not assignee_result.data.get('is_admin'):
+        if not assignee_result.data or assignee_result.data.get('role') not in ('admin', 'broker'):
             return jsonify({"error": "Assignee must be an admin"}), 400
 
         # Update ticket
@@ -495,4 +619,94 @@ def get_support_stats():
 
     except Exception as e:
         logger.error(f"Error getting support stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
+# Notification Settings Endpoints
+# =============================================================================
+
+@support_bp.route('/admin/notification-settings', methods=['GET'])
+def get_notification_settings():
+    """
+    Get notification email settings for support tickets (admin only).
+    """
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "User ID is required"}), 400
+
+    if not check_admin(user_id):
+        return jsonify({"error": "Admin access required"}), 403
+
+    try:
+        emails = _get_notification_emails(user_id)
+        return jsonify({
+            "success": True,
+            "notification_emails": emails
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting notification settings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@support_bp.route('/admin/notification-settings', methods=['PUT'])
+def update_notification_settings():
+    """
+    Update notification email settings for support tickets (admin only).
+
+    Body:
+        - notification_emails: List of email addresses to notify on new tickets
+    """
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "User ID is required"}), 400
+
+    if not check_admin(user_id):
+        return jsonify({"error": "Admin access required"}), 403
+
+    data = request.get_json()
+    notification_emails = data.get('notification_emails', [])
+
+    # Validate emails are a list of strings
+    if not isinstance(notification_emails, list):
+        return jsonify({"error": "notification_emails must be a list"}), 400
+
+    # Basic email format validation
+    email_regex = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+    for email in notification_emails:
+        if not isinstance(email, str) or not email_regex.match(email.strip()):
+            return jsonify({"error": f"Invalid email address: {email}"}), 400
+
+    # Clean up the emails
+    notification_emails = [e.strip().lower() for e in notification_emails if e.strip()]
+
+    try:
+        supabase = SupabaseClientSingleton.get_instance()
+
+        # Check if settings row exists for this user
+        existing = supabase.table('ai_agent_settings').select('id').eq('user_id', user_id).execute()
+
+        if existing.data:
+            # Update existing
+            supabase.table('ai_agent_settings').update({
+                'support_notification_emails': notification_emails,
+                'updated_at': datetime.utcnow().isoformat()
+            }).eq('user_id', user_id).execute()
+        else:
+            # Create new settings row
+            supabase.table('ai_agent_settings').insert({
+                'user_id': user_id,
+                'support_notification_emails': notification_emails
+            }).execute()
+
+        logger.info(f"Updated notification emails for user {user_id}: {notification_emails}")
+
+        return jsonify({
+            "success": True,
+            "notification_emails": notification_emails
+        })
+
+    except Exception as e:
+        logger.error(f"Error updating notification settings: {e}")
         return jsonify({"error": str(e)}), 500

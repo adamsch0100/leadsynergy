@@ -406,12 +406,21 @@ class FollowUpManager:
             message_type=MessageType.CALL_CHECKIN,
             skip_if_disabled="voice_enabled",
         ),
-        # Step 9: Day 2 - Property value add SMS
+        # Step 9: Day 2, AM - Property value add SMS
         FollowUpStep(
             delay_days=2,
             delay_minutes=0,
             channel="sms",
             message_type=MessageType.VALUE_ADD_LISTING,
+            skip_if_disabled=None,
+        ),
+        # Step 9b: Day 2, PM - Afternoon appointment CTA SMS
+        # Closes the 24h gap between Day 2 and Day 3
+        FollowUpStep(
+            delay_days=2,
+            delay_minutes=420,  # 7 hours after morning = afternoon ~4 PM
+            channel="sms",
+            message_type=MessageType.VALUE_WITH_CTA,
             skip_if_disabled=None,
         ),
         # Step 10: Day 3 - Email market report + time slots
@@ -550,6 +559,91 @@ class FollowUpManager:
             delay_days=45,  # 6 weeks - final gentle touch
             channel="email",
             message_type=MessageType.FINAL_ATTEMPT,
+        ),
+    ]
+
+    # ==========================================================================
+    # REASON-SPECIFIC REVIVAL SEQUENCES
+    # Different approaches for different ghost reasons. Context-aware.
+    # ==========================================================================
+
+    # Lead was mid-qualification when they went silent
+    # Strategy: Pick up where you left off, don't restart from scratch
+    SEQUENCE_RESUME_QUALIFICATION = [
+        FollowUpStep(
+            delay_days=0,
+            channel="sms",
+            message_type=MessageType.RESUME_QUALIFICATION,  # AI-generated, context-aware
+        ),
+        FollowUpStep(
+            delay_days=3,
+            channel="email",
+            message_type=MessageType.EMAIL_VALUE,  # Provide value alongside reminder
+        ),
+        FollowUpStep(
+            delay_days=7,
+            channel="sms",
+            message_type=MessageType.RESUME_GENERAL,  # Softer follow-up
+        ),
+    ]
+
+    # Lead was scheduling an appointment when they went silent
+    # Strategy: Re-offer times, acknowledge they were busy
+    SEQUENCE_RESUME_SCHEDULING = [
+        FollowUpStep(
+            delay_days=0,
+            channel="sms",
+            message_type=MessageType.RESUME_SCHEDULING,  # AI: re-offer fresh times
+        ),
+        FollowUpStep(
+            delay_days=2,
+            channel="sms",
+            message_type=MessageType.VALUE_WITH_CTA,  # Value + CTA
+        ),
+        FollowUpStep(
+            delay_days=5,
+            channel="email",
+            message_type=MessageType.EMAIL_VALUE,
+        ),
+    ]
+
+    # Lead raised an objection and then went silent
+    # Strategy: Address concern with new angle, don't push same pitch
+    SEQUENCE_RESUME_OBJECTION = [
+        FollowUpStep(
+            delay_days=0,
+            channel="sms",
+            message_type=MessageType.RESUME_OBJECTION,  # AI: new angle on their concern
+        ),
+        FollowUpStep(
+            delay_days=5,
+            channel="email",
+            message_type=MessageType.EMAIL_VALUE,  # Value-first, not sales
+        ),
+        FollowUpStep(
+            delay_days=14,
+            channel="sms",
+            message_type=MessageType.STRATEGIC_BREAKUP,  # Graceful exit
+        ),
+    ]
+
+    # Lead said "not ready" or similar — they told us they need time
+    # Strategy: Give them space, then provide value without pressure
+    SEQUENCE_REVIVAL_NOT_READY = [
+        FollowUpStep(
+            delay_days=14,  # Give them 2 weeks of space first
+            channel="sms",
+            message_type=MessageType.NEW_LISTING_ALERT,  # Value: new listing
+        ),
+        FollowUpStep(
+            delay_days=30,
+            channel="email",
+            message_type=MessageType.MARKET_UPDATE,  # Value: market data
+        ),
+        FollowUpStep(
+            delay_days=60,
+            channel="sms",
+            message_type=MessageType.REQUALIFY_CHECK,  # "Has anything changed?"
         ),
     ]
 
@@ -982,23 +1076,150 @@ class FollowUpManager:
         """
         self.supabase = supabase_client
 
-    def get_sequence(self, trigger: FollowUpTrigger) -> List[FollowUpStep]:
+    # Lead sources that are paid referrals — deserve extended sequences
+    PAID_REFERRAL_SOURCES = {
+        "referralexchange", "referral exchange", "referral_exchange",
+        "homelight", "home light", "home_light",
+    }
+    # Portal/search leads — standard sequence
+    PORTAL_SOURCES = {
+        "zillow", "realtor.com", "redfin", "trulia", "homes.com",
+        "realtor", "agentpronto", "agent pronto", "myagentfinder",
+        "my agent finder",
+    }
+
+    def determine_reengagement_trigger(
+        self,
+        conversation_context: Optional[Dict[str, Any]] = None,
+    ) -> FollowUpTrigger:
         """
-        Get the follow-up sequence for a trigger type.
+        Determine the best re-engagement trigger based on conversation history.
+
+        Instead of a generic RE_ENGAGEMENT trigger, analyzes the last
+        conversation state to pick a context-aware revival strategy.
+
+        Args:
+            conversation_context: Dict with conversation state, may include:
+                - last_intent: The lead's last detected intent
+                - last_topic: What was being discussed
+                - last_objection_type: If lead raised an objection
+                - was_scheduling: Whether appointment scheduling was in progress
+                - qualification_stage: Where in qualification flow they dropped
+
+        Returns:
+            The most appropriate FollowUpTrigger
+        """
+        if not conversation_context:
+            return FollowUpTrigger.RE_ENGAGEMENT
+
+        # Was in the middle of scheduling?
+        if conversation_context.get("was_scheduling") or \
+           conversation_context.get("last_intent") in ("appointment_interest", "time_selection"):
+            logger.info("Re-engagement: Lead was scheduling → RESUME_SCHEDULING")
+            return FollowUpTrigger.RESUME_SCHEDULING
+
+        # Had an unresolved objection?
+        if conversation_context.get("last_objection_type") or \
+           conversation_context.get("last_intent", "").startswith("objection_"):
+            logger.info("Re-engagement: Lead had objection → RESUME_OBJECTION")
+            return FollowUpTrigger.RESUME_OBJECTION
+
+        # Was mid-qualification?
+        if conversation_context.get("qualification_stage") or \
+           conversation_context.get("last_intent") in (
+               "timeline_immediate", "timeline_short", "timeline_medium",
+               "budget_specific", "budget_range", "budget_preapproved",
+               "location_preference", "property_type",
+           ):
+            logger.info("Re-engagement: Lead was qualifying → RESUME_QUALIFICATION")
+            return FollowUpTrigger.RESUME_QUALIFICATION
+
+        # Default: generic re-engagement
+        return FollowUpTrigger.RE_ENGAGEMENT
+
+    def get_sequence(
+        self,
+        trigger: FollowUpTrigger,
+        lead_source: Optional[str] = None,
+    ) -> List[FollowUpStep]:
+        """
+        Get the follow-up sequence for a trigger type, optionally adjusted
+        by lead source.
+
+        Source-aware sequence length (for NEW_LEAD trigger):
+        - Paid referral leads (ReferralExchange, HomeLight): Full 7-day + extended
+          Day 10/14 touches. You paid for these referrals — maximize follow-up.
+        - Portal leads (Zillow, Redfin, etc.): Standard 7-day sequence.
+        - Organic/unknown: Conservative 5-day sequence (Days 0-4 only).
 
         Research-backed sequence selection:
-        - NEW_LEAD: Aggressive 5-touch sequence over 7 days (speed matters!)
+        - NEW_LEAD: Aggressive multi-touch sequence (length varies by source)
         - COLD_LEAD: Value-first revival sequence (don't sound desperate)
-        - RE_ENGAGEMENT: Standard sequence for mid-conversation drops
+        - RE_ENGAGEMENT: Revival sequence for mid-conversation drops
         - NO_RESPONSE: Standard sequence
         - EVENT_BASED: Quick 2-touch for property matches/price drops
         """
+        if trigger == FollowUpTrigger.NEW_LEAD and lead_source:
+            source_lower = lead_source.lower().strip()
+
+            if source_lower in self.PAID_REFERRAL_SOURCES:
+                # Paid referrals: Full sequence + extended Day 10 and Day 14 touches
+                extended_steps = [
+                    # Day 10 - "Haven't heard back" value SMS
+                    FollowUpStep(
+                        delay_days=10,
+                        delay_minutes=0,
+                        channel="sms",
+                        message_type=MessageType.VALUE_ADD,
+                        skip_if_disabled=None,
+                    ),
+                    # Day 10 PM - Email with new angle
+                    FollowUpStep(
+                        delay_days=10,
+                        delay_minutes=420,
+                        channel="email",
+                        message_type=MessageType.EMAIL_VALUE,
+                        skip_if_disabled=None,
+                    ),
+                    # Day 14 - Final extended attempt
+                    FollowUpStep(
+                        delay_days=14,
+                        delay_minutes=0,
+                        channel="sms",
+                        message_type=MessageType.STRATEGIC_BREAKUP,
+                        skip_if_disabled=None,
+                    ),
+                ]
+                logger.info(
+                    f"Using EXTENDED 14-day sequence for paid referral source: {lead_source}"
+                )
+                return self.SEQUENCE_NEW_LEAD + extended_steps
+
+            elif source_lower in self.PORTAL_SOURCES:
+                # Portal leads: Full standard 7-day sequence
+                return self.SEQUENCE_NEW_LEAD
+
+            else:
+                # Organic/unknown: Conservative — only through Day 4
+                conservative = [
+                    s for s in self.SEQUENCE_NEW_LEAD
+                    if s.delay_days <= 4
+                ]
+                logger.info(
+                    f"Using conservative 5-day sequence for organic source: {lead_source}"
+                )
+                return conservative
+
         sequences = {
             FollowUpTrigger.NEW_LEAD: self.SEQUENCE_NEW_LEAD,
-            FollowUpTrigger.COLD_LEAD: self.SEQUENCE_REVIVAL,  # Use revival for cold leads
-            FollowUpTrigger.RE_ENGAGEMENT: self.SEQUENCE_REVIVAL,  # Also use revival for re-engagement
+            FollowUpTrigger.COLD_LEAD: self.SEQUENCE_REVIVAL,
+            FollowUpTrigger.RE_ENGAGEMENT: self.SEQUENCE_REVIVAL,
             FollowUpTrigger.NO_RESPONSE: self.SEQUENCE_STANDARD,
-            FollowUpTrigger.EVENT_BASED: self.SEQUENCE_NEW_LEAD[:2],  # Just first 2 steps
+            FollowUpTrigger.EVENT_BASED: self.SEQUENCE_NEW_LEAD[:2],
+            # Smart re-engagement: context-aware sequences
+            FollowUpTrigger.RESUME_QUALIFICATION: self.SEQUENCE_RESUME_QUALIFICATION,
+            FollowUpTrigger.RESUME_SCHEDULING: self.SEQUENCE_RESUME_SCHEDULING,
+            FollowUpTrigger.RESUME_OBJECTION: self.SEQUENCE_RESUME_OBJECTION,
         }
         return sequences.get(trigger, self.SEQUENCE_STANDARD)
 
@@ -1121,12 +1342,14 @@ class FollowUpManager:
         lead_timezone: str = "America/New_York",
         settings: Any = None,  # AIAgentSettings object for channel toggles
         lead_profile: Any = None,  # LeadProfile for intelligent skip logic
+        lead_source: str = None,  # Lead source for sequence length selection
     ) -> Dict[str, Any]:
         """
         Schedule a follow-up sequence for a lead.
 
-        Now includes intelligent qualification skip logic - if we already know
-        the answer to a qualification question, we skip that step.
+        Now includes intelligent qualification skip logic and source-aware
+        sequence length. Paid referral leads get extended 14-day sequences,
+        while organic leads get conservative 5-day sequences.
 
         Args:
             fub_person_id: FUB person ID
@@ -1137,11 +1360,12 @@ class FollowUpManager:
             lead_timezone: Lead's timezone for scheduling
             settings: AIAgentSettings object with channel toggles (optional)
             lead_profile: LeadProfile for intelligent skip logic (optional)
+            lead_source: Lead source name for sequence length selection (optional)
 
         Returns:
             Dict with sequence_id and scheduled follow-ups
         """
-        sequence = self.get_sequence(trigger)
+        sequence = self.get_sequence(trigger, lead_source=lead_source)
         sequence_id = str(uuid.uuid4())
         scheduled_followups = []
         skipped_count = 0
@@ -1526,9 +1750,10 @@ class FollowUpManager:
 
             try:
                 if channel == "sms":
-                    # Send SMS via Playwright browser automation
-                    from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
-                    delivery_result = await send_sms_with_auto_credentials(
+                    # Send SMS via FUB Native Texting API
+                    from app.messaging.fub_sms_service import FUBSMSService
+                    fub_sms = FUBSMSService()
+                    delivery_result = await fub_sms.send_text_message_async(
                         person_id=fub_person_id,
                         message=message_content,
                     )
@@ -1600,25 +1825,79 @@ class FollowUpManager:
         else:
             return step_channel
 
+    # High-engagement time windows (in lead's local time)
+    # Research: Lunch (11am-1pm) and evening (5-7pm) have highest SMS open/response rates
+    HIGH_ENGAGEMENT_WINDOWS = [
+        (11, 13),  # Lunch window: 11 AM - 1 PM
+        (17, 19),  # Evening window: 5 PM - 7 PM
+    ]
+
     def _adjust_for_working_hours(
         self,
         scheduled_time: datetime,
         timezone: str,
+        target_high_engagement: bool = True,
     ) -> datetime:
         """
-        Adjust scheduled time to fall within TCPA-compliant hours (8 AM - 8 PM).
+        Adjust scheduled time to fall within TCPA-compliant hours (8 AM - 8 PM),
+        and optionally target high-engagement windows.
 
-        Uses the module-level get_next_valid_send_time function for consistent
-        TCPA compliance across the application.
+        High-engagement windows (lead local time):
+        - Lunch: 11 AM - 1 PM (highest SMS open rates)
+        - Evening: 5 PM - 7 PM (highest response rates)
+
+        If the scheduled time is within TCPA hours but outside engagement windows,
+        nudge it to the nearest engagement window on the same day.
 
         Args:
             scheduled_time: Originally scheduled time (UTC)
             timezone: Lead's timezone (IANA format)
+            target_high_engagement: Whether to target engagement windows
 
         Returns:
             Adjusted datetime in UTC
         """
-        return get_next_valid_send_time(scheduled_time, timezone)
+        # First ensure TCPA compliance
+        tcpa_safe = get_next_valid_send_time(scheduled_time, timezone)
+
+        if not target_high_engagement:
+            return tcpa_safe
+
+        # Now try to nudge into a high-engagement window
+        try:
+            tz = ZoneInfo(timezone)
+        except Exception:
+            tz = ZoneInfo(DEFAULT_TIMEZONE)
+
+        # Convert to lead's local time
+        if tcpa_safe.tzinfo is None:
+            tcpa_safe_utc = tcpa_safe.replace(tzinfo=ZoneInfo("UTC"))
+        else:
+            tcpa_safe_utc = tcpa_safe
+        local_time = tcpa_safe_utc.astimezone(tz)
+        local_hour = local_time.hour
+
+        # Check if already in a high-engagement window
+        for window_start, window_end in self.HIGH_ENGAGEMENT_WINDOWS:
+            if window_start <= local_hour < window_end:
+                return tcpa_safe  # Already in a good window
+
+        # Find the nearest upcoming engagement window today
+        for window_start, window_end in self.HIGH_ENGAGEMENT_WINDOWS:
+            if local_hour < window_start:
+                # Nudge to start of this window (add some randomness: 0-30 min)
+                import random
+                nudge_minutes = random.randint(0, 30)
+                adjusted = local_time.replace(
+                    hour=window_start, minute=nudge_minutes, second=0, microsecond=0
+                )
+                # Ensure still within TCPA hours
+                if TCPA_QUIET_END_HOUR <= adjusted.hour < TCPA_QUIET_START_HOUR:
+                    return adjusted.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+        # All windows have passed today — use TCPA-safe time as-is
+        # (don't push to next day just for engagement window optimization)
+        return tcpa_safe
 
     async def _save_scheduled_followups(
         self,

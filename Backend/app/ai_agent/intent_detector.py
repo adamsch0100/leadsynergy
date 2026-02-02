@@ -347,6 +347,25 @@ class PatternMatcher:
             (r'\b(bad time|not (a )?good time|busy (right now|lately)|lot going on)\b',
              Intent.OBJECTION_TIMING, 0.8, None),
 
+            # Time selection (when responding to time options)
+            # PRIORITY: Must be matched BEFORE appointment interest and confirmation
+            # "Yes Saturday works!" = TIME_SELECTION, not CONFIRMATION_YES
+            (r'^[1-6][\s!.,]*$', Intent.TIME_SELECTION, 0.95, 'time_slot'),
+            (r'\b(option|number|choice)\s*[1-6]\b', Intent.TIME_SELECTION, 0.9, 'time_slot'),
+            (r'\b(first|second|third|fourth|1st|2nd|3rd|4th)\s*(one|option|time|slot)?\b',
+             Intent.TIME_SELECTION, 0.85, 'time_slot'),
+            # Day/time mentions in response to scheduling questions
+            (r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*(works|is good|is fine|at|morning|afternoon|evening|night)?\b',
+             Intent.TIME_SELECTION, 0.9, 'time_slot'),
+            (r'\b(yes\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+             Intent.TIME_SELECTION, 0.85, 'time_slot'),
+            (r'\b\d{1,2}\s*(am|pm|a\.m\.|p\.m\.)\s*(works|is good|is fine|please)?\b',
+             Intent.TIME_SELECTION, 0.9, 'time_slot'),
+            (r'\b(morning|afternoon|evening)\s*(works|is good|is fine|please)?\b',
+             Intent.TIME_SELECTION, 0.8, 'time_slot'),
+            (r'\b(tomorrow|today|tonight)\s*(works|at|morning|afternoon|evening)?\b',
+             Intent.TIME_SELECTION, 0.85, 'time_slot'),
+
             # Appointment interest
             (r'\b(schedule|book|set up|arrange).*(meeting|call|appointment|time|showing|tour)\b',
              Intent.APPOINTMENT_INTEREST, 0.85, None),
@@ -358,12 +377,6 @@ class PatternMatcher:
             # Appointment decline
             (r'\b(can\'?t (make it|meet)|not available|don\'?t (want|need) to meet)\b',
              Intent.APPOINTMENT_DECLINE, 0.85, None),
-
-            # Time selection (when responding to time options)
-            (r'^[1-6][\s!.,]*$', Intent.TIME_SELECTION, 0.9, 'time_slot'),
-            (r'\b(option|number|choice)\s*[1-6]\b', Intent.TIME_SELECTION, 0.85, 'time_slot'),
-            (r'\b(first|second|third|fourth|1st|2nd|3rd|4th)\s*(one|option|time)?\b',
-             Intent.TIME_SELECTION, 0.8, 'time_slot'),
 
             # Showing request
             (r'\b(want to see|can I see|show me|tour|walk.?through|view)\b.*(house|home|property|place|listing)',
@@ -837,6 +850,20 @@ class IntentDetector:
 
         return normalized
 
+    # Intents that should be boosted when context suggests appointment scheduling
+    SCHEDULING_CONTEXT_BOOST_INTENTS = {
+        Intent.TIME_SELECTION,
+        Intent.APPOINTMENT_INTEREST,
+        Intent.APPOINTMENT_DECLINE,
+        Intent.APPOINTMENT_RESCHEDULE,
+    }
+
+    # Context keys that indicate we just offered appointment times
+    SCHEDULING_CONTEXT_KEYS = {
+        "last_offered_appointment", "awaiting_time_selection",
+        "offered_slots", "appointment_pending",
+    }
+
     def _consolidate_matches(
         self,
         message: str,
@@ -844,7 +871,14 @@ class IntentDetector:
         entities: List[ExtractedEntity],
         context: Optional[Dict[str, Any]],
     ) -> DetectedIntent:
-        """Consolidate pattern matches and entities into final result."""
+        """
+        Consolidate pattern matches and entities into final result.
+
+        Uses context-aware priority boosting: when the conversation context
+        indicates we just offered appointment times, scheduling-related intents
+        get a confidence boost so "Yes Saturday works!" is TIME_SELECTION
+        not CONFIRMATION_YES.
+        """
 
         if not pattern_matches:
             # No patterns matched - try to infer from context
@@ -861,6 +895,17 @@ class IntentDetector:
             for intent, conf, _ in pattern_matches:
                 if intent not in intent_scores or conf > intent_scores[intent]:
                     intent_scores[intent] = conf
+
+            # Context-aware priority boosting
+            if context and self._is_scheduling_context(context):
+                for intent in self.SCHEDULING_CONTEXT_BOOST_INTENTS:
+                    if intent in intent_scores:
+                        # Boost scheduling intents by 0.15 when in scheduling context
+                        intent_scores[intent] = min(1.0, intent_scores[intent] + 0.15)
+                        logger.debug(
+                            f"Context boost: {intent.value} -> {intent_scores[intent]:.2f} "
+                            f"(scheduling context detected)"
+                        )
 
             # Sort by confidence
             sorted_intents = sorted(
@@ -945,6 +990,33 @@ class IntentDetector:
             return "low"
 
         return "normal"
+
+    def _is_scheduling_context(self, context: Dict[str, Any]) -> bool:
+        """
+        Check if the conversation context indicates we're in a scheduling flow.
+
+        This is used for context-aware priority boosting so that messages like
+        "Yes Saturday works!" are correctly identified as TIME_SELECTION instead
+        of CONFIRMATION_YES when we just offered appointment slots.
+        """
+        if not context:
+            return False
+
+        # Check for explicit scheduling context keys
+        for key in self.SCHEDULING_CONTEXT_KEYS:
+            if context.get(key):
+                return True
+
+        # Check last_action or last_message_type indicators
+        last_action = context.get("last_action", "")
+        if last_action in ("offered_appointment", "sent_time_slots", "scheduling"):
+            return True
+
+        last_msg_type = context.get("last_message_type", "")
+        if "appointment" in last_msg_type.lower() or "schedule" in last_msg_type.lower():
+            return True
+
+        return False
 
     def _needs_llm_verification(self, result: DetectedIntent) -> bool:
         """Determine if LLM verification would improve accuracy."""

@@ -126,8 +126,8 @@ class AppointmentScheduler:
     # Default appointment duration in minutes
     DEFAULT_DURATION = 30
 
-    # Maximum slots to offer at once
-    MAX_SLOTS_TO_OFFER = 6
+    # Maximum slots to offer at once (3 reduces choice overload, improves conversion)
+    MAX_SLOTS_TO_OFFER = 3
 
     # Patterns for detecting slot selection
     SLOT_SELECTION_PATTERNS = [
@@ -539,20 +539,20 @@ class AppointmentScheduler:
         slots: List[TimeSlot],
         appointment_type: AppointmentType,
     ) -> str:
-        """Format slots as a friendly message."""
+        """Format slots as a friendly assumptive close message.
+
+        Uses conversational style instead of numbered lists to reduce
+        choice overload and improve booking conversion.
+        """
         type_desc = appointment_type.value.replace("_", " ")
 
-        lines = [f"Awesome, {lead_name}! I'd love to set up a quick {type_desc} with you."]
-        lines.append("")
-        lines.append("Here are some times that work:")
-
-        for i, slot in enumerate(slots, 1):
-            lines.append(f"{i}. {slot}")
-
-        lines.append("")
-        lines.append("Just reply with the number that works best!")
-
-        return "\n".join(lines)
+        if len(slots) == 1:
+            return f"Hey {lead_name}! I've got {slots[0]} open for a quick {type_desc} - does that work for you?"
+        elif len(slots) == 2:
+            return f"Hey {lead_name}! I've got {slots[0]} or {slots[1]} open for a quick {type_desc} - which works better for you?"
+        else:
+            # 3 slots: two-option close with a third as backup
+            return f"Hey {lead_name}! I've got {slots[0]} or {slots[1]} open for a quick {type_desc}. I also have {slots[2]} if that's better. Which works for you?"
 
     def _format_confirmation(self, context: SchedulingContext) -> str:
         """Format appointment confirmation message."""

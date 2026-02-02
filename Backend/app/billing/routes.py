@@ -2,7 +2,7 @@
 Billing API Routes - Credit management, bundle purchases, and transactions.
 """
 
-from flask import request, jsonify
+from flask import request, jsonify, g
 import logging
 import os
 import stripe
@@ -11,6 +11,7 @@ from app.billing import billing_bp
 from app.billing.credit_service import CreditServiceSingleton
 from app.database.supabase_client import SupabaseClientSingleton
 from app.models.credit_bundle import CreditBundle
+from app.middleware.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,12 @@ stripe.api_key = os.environ.get('STRIPE_SECRET_KEY')
 
 
 def get_user_id_from_request():
-    """Extract user ID from request headers or body."""
+    """Extract user ID from auth context (preferred) or request headers (fallback)."""
+    # Prefer verified user_id from auth middleware
+    user_id = getattr(g, 'user_id', None)
+    if user_id:
+        return user_id
+    # Fallback to header for backward compatibility
     user_id = request.headers.get('X-User-ID')
     if not user_id and request.is_json:
         data = request.get_json(silent=True)
@@ -33,6 +39,7 @@ def get_user_id_from_request():
 # =============================================================================
 
 @billing_bp.route('/credits/balance', methods=['GET'])
+@require_auth
 def get_credit_balance():
     """
     Get the current credit balance for a user.
@@ -61,6 +68,7 @@ def get_credit_balance():
 
 
 @billing_bp.route('/credits/can-perform', methods=['POST'])
+@require_auth
 def can_perform_search():
     """
     Check if user has enough credits to perform a search.
@@ -101,6 +109,7 @@ def can_perform_search():
 # =============================================================================
 
 @billing_bp.route('/credits/allocate', methods=['POST'])
+@require_auth
 def allocate_credits():
     """
     Allocate credits from broker to agent.
@@ -247,6 +256,7 @@ def get_bundle(bundle_id):
 # =============================================================================
 
 @billing_bp.route('/purchase-bundle', methods=['POST'])
+@require_auth
 def purchase_bundle():
     """
     Create a Stripe checkout session to purchase a credit bundle.
@@ -480,6 +490,7 @@ def get_transaction_summary():
 # =============================================================================
 
 @billing_bp.route('/admin/bundles', methods=['POST'])
+@require_auth
 def create_bundle():
     """
     Create a new credit bundle (admin only).
@@ -543,6 +554,7 @@ def create_bundle():
 
 
 @billing_bp.route('/admin/bundles/<int:bundle_id>', methods=['PUT'])
+@require_auth
 def update_bundle(bundle_id):
     """Update a credit bundle (admin only)."""
     user_id = get_user_id_from_request()
@@ -591,6 +603,7 @@ def update_bundle(bundle_id):
 
 
 @billing_bp.route('/admin/add-credits', methods=['POST'])
+@require_auth
 def admin_add_credits():
     """
     Manually add credits to a user (admin only).

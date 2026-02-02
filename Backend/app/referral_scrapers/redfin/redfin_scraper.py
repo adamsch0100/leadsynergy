@@ -1,3 +1,4 @@
+import os
 import time
 import random
 from datetime import datetime, timedelta
@@ -18,8 +19,8 @@ def simulated_typing(element, text):
 
 def update_redfin_customers():
     # Redfin login credentials
-    REDFIN_EMAIL = "adam@saahomes.com"
-    REDFIN_PASSWORD = "Vitzer0100!"
+    REDFIN_EMAIL = os.getenv("REDFIN_EMAIL", "")
+    REDFIN_PASSWORD = os.getenv("REDFIN_PASSWORD", "")
 
     # Set up Selenium WebDriver
     options = webdriver.ChromeOptions()

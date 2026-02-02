@@ -400,8 +400,8 @@ export default function HomePage() {
                 Ready to Organize & Enrich Your Leads?
               </h2>
               <p className="mt-4 text-lg text-white/80 max-w-2xl">
-                Join hundreds of real estate professionals who have streamlined their
-                lead management and are closing more deals with enriched data.
+                Streamline your referral lead management and close more deals
+                with automated status syncing and enriched data.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 mt-8">
                 <Button size="lg" variant="secondary" asChild>
@@ -588,49 +588,49 @@ const enrichmentFeatures = [
   },
 ];
 
-// Pricing Plans (Simplified for home page - see /pricing for full details)
+// Pricing Plans — matches BASE_PLANS in lib/plans.ts
 const plans = [
   {
-    name: "Solo Agent",
-    value: "solo",
-    price: "$79",
-    description: "For individual agents",
+    name: "Starter",
+    value: "starter",
+    price: "$29.99",
+    description: "For agents starting with one referral platform",
     features: [
-      "3 referral platforms",
-      "Unlimited lead syncing to FUB",
+      "1 lead source connection",
+      "Unlimited leads synced to FUB",
       "Bi-directional status updates",
-      "25 enhancement credits/month",
+      "Stage mapping",
       "FUB embedded app",
       "Email support",
     ],
   },
   {
-    name: "Team",
-    value: "team",
-    price: "$149",
-    description: "For small teams",
+    name: "Growth",
+    value: "growth",
+    price: "$69.99",
+    description: "For agents managing multiple referral sources",
     popular: true,
     features: [
-      "All 5 referral platforms",
-      "Up to 5 team members",
+      "3 lead source connections",
+      "Custom stage mapping",
       "Commission tracking",
-      "100 enhancement credits/month",
-      "Auto-enhancement",
+      "FUB embedded app",
       "Priority support",
+      "Unlimited team members",
     ],
   },
   {
-    name: "Brokerage",
-    value: "brokerage",
-    price: "$299",
-    description: "For brokerages",
+    name: "Pro",
+    value: "pro",
+    price: "$119.99",
+    description: "For teams using all major referral platforms",
     features: [
-      "All 5 referral platforms",
-      "Up to 15 team members",
-      "300 enhancement credits/month",
-      "Credit allocation",
-      "Team analytics",
+      "5 lead source connections",
+      "Advanced stage mapping",
+      "Advanced commission tracking",
+      "Team analytics dashboard",
       "Priority support",
+      "Unlimited team members",
     ],
   },
 ];

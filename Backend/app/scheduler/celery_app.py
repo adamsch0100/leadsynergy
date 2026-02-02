@@ -2,7 +2,7 @@ from celery import Celery
 from celery.schedules import crontab
 import os
 
-redis_url = os.getenv('REDIS_URL', 'redis://:Lancelot@123@localhost:6379/0')
+redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 celery = Celery(
     'tasks',
     broker=redis_url,

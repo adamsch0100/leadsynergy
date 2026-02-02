@@ -12,13 +12,20 @@ import {
 } from "@/components/ui/card";
 import { useRouter } from "next/navigation";
 import { usePricing } from "@/contexts/pricing-context";
-import { PLANS, PLAN_ORDER, CREDIT_PACKAGES, PlanId, ADDITIONAL_TEAM_MEMBER_PRICE } from "@/lib/plans";
+import {
+  BASE_PLANS,
+  BASE_PLAN_ORDER,
+  BasePlanId,
+  ENHANCEMENT_PLANS,
+  ENHANCEMENT_PLAN_ORDER,
+  CREDIT_PACKAGES,
+} from "@/lib/plans";
 
 export default function PricingPage() {
   const router = useRouter();
   const { selectedPlan, setSelectedPlan } = usePricing();
 
-  const handlePlanClick = (planValue: PlanId) => {
+  const handlePlanClick = (planValue: BasePlanId) => {
     setSelectedPlan(planValue as any);
   };
 
@@ -112,10 +119,10 @@ export default function PricingPage() {
           </div>
         </div>
 
-        {/* Pricing Cards */}
+        {/* Platform Subscription Cards */}
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 max-w-7xl mx-auto">
-          {PLAN_ORDER.map((planId) => {
-            const plan = PLANS[planId];
+          {BASE_PLAN_ORDER.map((planId) => {
+            const plan = BASE_PLANS[planId];
             return (
               <Card
                 key={plan.id}
@@ -142,32 +149,15 @@ export default function PricingPage() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {/* Highlights */}
+                  {/* Platform count highlight */}
                   <div className="bg-primary/5 rounded-lg p-3 mb-4">
-                    {plan.highlights.map((highlight) => (
-                      <div key={highlight} className="flex items-center gap-2 text-sm">
-                        <Check className="h-3 w-3 text-primary" />
-                        <span className="font-medium">{highlight}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Credit Summary */}
-                  <div className="bg-muted/50 rounded-lg p-3 mb-4">
-                    <p className="text-xs font-medium text-muted-foreground mb-2">Monthly Enrichment Credits:</p>
-                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                      <div>
-                        <p className="font-bold text-blue-600">{plan.credits.enhancement}</p>
-                        <p className="text-muted-foreground">Enhance</p>
-                      </div>
-                      <div>
-                        <p className="font-bold text-red-600">{plan.credits.criminal}</p>
-                        <p className="text-muted-foreground">Criminal</p>
-                      </div>
-                      <div>
-                        <p className="font-bold text-green-600">{plan.credits.dnc}</p>
-                        <p className="text-muted-foreground">DNC</p>
-                      </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <Check className="h-3 w-3 text-primary" />
+                      <span className="font-medium">
+                        {plan.platforms === -1
+                          ? "Unlimited lead sources"
+                          : `${plan.platforms} lead source${plan.platforms > 1 ? "s" : ""}`}
+                      </span>
                     </div>
                   </div>
 
@@ -190,12 +180,12 @@ export default function PricingPage() {
                   >
                     <Link
                       href={
-                        plan.id === "enterprise"
+                        plan.contactSales
                           ? "/contact"
                           : `/signup?plan=${plan.id}`
                       }
                     >
-                      {plan.id === "enterprise"
+                      {plan.contactSales
                         ? "Contact Sales"
                         : "Get Started"}
                     </Link>
@@ -205,6 +195,52 @@ export default function PricingPage() {
             );
           })}
         </div>
+
+        {/* Enhancement Subscriptions */}
+        <section className="mt-16">
+          <div className="text-center mb-8">
+            <h2 className="text-2xl font-bold">Data Enrichment Add-ons</h2>
+            <p className="text-muted-foreground mt-2">
+              Monthly credit subscriptions for lead enhancement, background checks, and DNC verification.
+            </p>
+          </div>
+          <div className="grid gap-6 md:grid-cols-3 max-w-5xl mx-auto">
+            {ENHANCEMENT_PLAN_ORDER.map((planId) => {
+              const plan = ENHANCEMENT_PLANS[planId];
+              return (
+                <Card key={plan.id} className="transition-all hover:border-primary">
+                  <CardHeader>
+                    <CardTitle className="text-lg">{plan.name}</CardTitle>
+                    <CardDescription>{plan.description}</CardDescription>
+                    <div className="mt-2">
+                      <span className="text-2xl font-bold">{plan.priceDisplay}</span>
+                      <span className="text-muted-foreground">/{plan.interval}</span>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-muted/50 rounded-lg p-3 mb-4">
+                      <p className="text-xs font-medium text-muted-foreground mb-2">Monthly Credits:</p>
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                        <div>
+                          <p className="font-bold text-blue-600">{plan.credits.enhancement}</p>
+                          <p className="text-muted-foreground">Enhance</p>
+                        </div>
+                        <div>
+                          <p className="font-bold text-red-600">{plan.credits.criminal}</p>
+                          <p className="text-muted-foreground">Criminal</p>
+                        </div>
+                        <div>
+                          <p className="font-bold text-green-600">{plan.credits.dnc}</p>
+                          <p className="text-muted-foreground">DNC</p>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
 
         {/* Add-ons Section - Credits Only */}
         <section className="mt-16">
@@ -276,14 +312,11 @@ export default function PricingPage() {
               </div>
             </div>
 
-            {/* Additional Team Members */}
+            {/* Team Members Note */}
             <div className="bg-muted/30 rounded-lg p-6 border">
-              <h3 className="text-lg font-semibold mb-2">Additional Team Members</h3>
-              <p className="text-muted-foreground text-sm mb-2">
-                Need more seats than your plan includes? Add team members for <strong>${ADDITIONAL_TEAM_MEMBER_PRICE}/month</strong> each.
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Available for Team and Brokerage plans. Enterprise plans include unlimited team members.
+              <h3 className="text-lg font-semibold mb-2">Unlimited Team Members</h3>
+              <p className="text-muted-foreground text-sm">
+                All plans include unlimited team members. Share your subscription across your entire organization at no extra cost.
               </p>
             </div>
           </div>
@@ -305,9 +338,9 @@ export default function PricingPage() {
               <thead>
                 <tr className="border-b bg-muted/50">
                   <th className="text-left py-4 px-4 font-semibold">Feature</th>
-                  <th className="text-center py-4 px-4 font-semibold">Solo Agent</th>
-                  <th className="text-center py-4 px-4 font-semibold bg-primary/5">Team</th>
-                  <th className="text-center py-4 px-4 font-semibold">Brokerage</th>
+                  <th className="text-center py-4 px-4 font-semibold">Starter</th>
+                  <th className="text-center py-4 px-4 font-semibold bg-primary/5">Growth</th>
+                  <th className="text-center py-4 px-4 font-semibold">Pro</th>
                   <th className="text-center py-4 px-4 font-semibold">Enterprise</th>
                 </tr>
               </thead>
@@ -317,10 +350,10 @@ export default function PricingPage() {
                 </tr>
                 <tr>
                   <td className="py-3 px-4">Referral Platforms</td>
-                  <td className="text-center py-3 px-4">3 platforms</td>
-                  <td className="text-center py-3 px-4 bg-primary/5">All 5</td>
-                  <td className="text-center py-3 px-4">All 5</td>
-                  <td className="text-center py-3 px-4">All 5</td>
+                  <td className="text-center py-3 px-4">1 platform</td>
+                  <td className="text-center py-3 px-4 bg-primary/5">3 platforms</td>
+                  <td className="text-center py-3 px-4">5 platforms</td>
+                  <td className="text-center py-3 px-4">Unlimited</td>
                 </tr>
                 <tr>
                   <td className="py-3 px-4">Leads Synced to FUB</td>
@@ -345,9 +378,9 @@ export default function PricingPage() {
                 </tr>
                 <tr>
                   <td className="py-3 px-4">Team Members</td>
-                  <td className="text-center py-3 px-4">1</td>
-                  <td className="text-center py-3 px-4 bg-primary/5">Up to 5</td>
-                  <td className="text-center py-3 px-4">Up to 15</td>
+                  <td className="text-center py-3 px-4">Unlimited</td>
+                  <td className="text-center py-3 px-4 bg-primary/5">Unlimited</td>
+                  <td className="text-center py-3 px-4">Unlimited</td>
                   <td className="text-center py-3 px-4">Unlimited</td>
                 </tr>
                 <tr className="bg-muted/20">

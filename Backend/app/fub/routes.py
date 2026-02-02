@@ -2535,37 +2535,24 @@ def simulate_webhook():
                 "would_send": not dry_run,
             }
 
-            # If not dry run, actually send the message via Playwright
+            # If not dry run, actually send the message via FUB native API
             if not dry_run and response.response_text:
                 logger.info(f"[LIVE] Sending message to lead {fub_person_id}: {response.response_text[:50]}...")
-                from app.messaging.playwright_sms_service import PlaywrightSMSService
-                from app.ai_agent.settings_service import get_fub_browser_credentials
+                from app.messaging.fub_sms_service import FUBSMSService
 
-                # Get credentials
-                creds = loop.run_until_complete(
-                    get_fub_browser_credentials(
-                        supabase_client=SupabaseClientSingleton.get_instance(),
-                        user_id=None,
-                        organization_id=None,
-                    )
-                )
-
-                if creds:
-                    sms_service = PlaywrightSMSService()
-                    agent_id = creds.get("agent_id", "default")
+                try:
+                    sms_service = FUBSMSService()
                     send_result = loop.run_until_complete(
-                        sms_service.send_sms(
-                            agent_id=agent_id,
+                        sms_service.send_text_message_async(
                             person_id=fub_person_id,
                             message=response.response_text,
-                            credentials=creds,
                         )
                     )
                     result["message_sent"] = send_result.get("success", False)
                     result["send_result"] = send_result
-                else:
+                except Exception as send_err:
                     result["message_sent"] = False
-                    result["send_error"] = "No FUB browser credentials configured"
+                    result["send_error"] = str(send_err)
 
             return jsonify(result)
         finally:

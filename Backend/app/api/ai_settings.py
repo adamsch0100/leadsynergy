@@ -7,7 +7,7 @@ Provides REST API for managing AI agent configuration:
 - POST /api/ai-settings/reset - Reset to defaults
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 import asyncio
 import logging
 from datetime import time
@@ -18,10 +18,42 @@ from app.ai_agent.settings_service import (
     get_settings_service,
 )
 from app.database import get_supabase_client
+from app.middleware.auth import require_auth, _extract_user_id_from_request
 
 logger = logging.getLogger(__name__)
 
 ai_settings_bp = Blueprint('ai_settings', __name__)
+
+# Settings fields that only admin/broker users can see and modify.
+# Regular agents/subscribers get these filtered out of API responses.
+ADMIN_ONLY_FIELDS = {
+    'llm_model', 'llm_model_fallback', 'llm_provider',
+    'nba_hot_lead_scan_interval_minutes', 'nba_cold_lead_scan_interval_minutes',
+    'response_delay_min_seconds', 'response_delay_max_seconds',
+    'first_message_delay_min', 'first_message_delay_max',
+    'sequence_voice_enabled', 'sequence_rvm_enabled',
+    'proactive_appointment_enabled', 'qualification_questions_enabled',
+    'custom_scripts', 're_engagement_channels',
+}
+
+
+def get_user_role(user_id: str) -> str:
+    """Look up the user's role from the database. Defaults to 'agent' on failure."""
+    if not user_id:
+        return 'agent'
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("users").select("role").eq("id", user_id).single().execute()
+        if result.data:
+            return result.data.get('role', 'agent') or 'agent'
+    except Exception as e:
+        logger.warning(f"Failed to lookup role for user {user_id}: {e}")
+    return 'agent'
+
+
+def is_admin_role(role: str) -> bool:
+    """Check if a role has admin-level access (admin or broker)."""
+    return role in ('admin', 'broker')
 
 
 def run_async(coro):
@@ -35,11 +67,13 @@ def run_async(coro):
 
 
 def get_user_info(request_obj):
-    """Extract user and organization info from request."""
-    # Try to get user ID from various sources
-    user_id = (
-        request_obj.get_json(silent=True) or {}
-    ).get('user_id') or request_obj.headers.get('X-User-ID')
+    """Extract user and organization info from request (JWT-aware)."""
+    # Prefer verified user ID from JWT, fall back to header/body
+    user_id = _extract_user_id_from_request() or getattr(g, 'user_id', None)
+    if not user_id:
+        user_id = (
+            request_obj.get_json(silent=True) or {}
+        ).get('user_id')
 
     org_id = (
         request_obj.get_json(silent=True) or {}
@@ -49,6 +83,7 @@ def get_user_info(request_obj):
 
 
 @ai_settings_bp.route('', methods=['GET'])
+@require_auth
 def get_settings():
     """
     Get AI agent settings for the current user.
@@ -66,68 +101,80 @@ def get_settings():
     if not user_id and not org_id:
         return jsonify({"error": "User ID or Organization ID is required"}), 400
 
+    # Look up the requesting user's role
+    role = get_user_role(user_id)
+    admin = is_admin_role(role)
+
     try:
         supabase = get_supabase_client()
         service = get_settings_service(supabase)
         settings = run_async(service.get_settings(user_id, org_id))
 
+        settings_dict = {
+            "agent_name": settings.agent_name,
+            "brokerage_name": settings.brokerage_name,
+            "team_members": settings.team_members,
+            "personality_tone": settings.personality_tone,
+            # Response timing
+            "response_delay_seconds": settings.response_delay_seconds,
+            "response_delay_min_seconds": settings.response_delay_min_seconds,
+            "response_delay_max_seconds": settings.response_delay_max_seconds,
+            "first_message_delay_min": settings.first_message_delay_min,
+            "first_message_delay_max": settings.first_message_delay_max,
+            # Message limits
+            "max_sms_length": settings.max_sms_length,
+            "max_email_length": settings.max_email_length,
+            # Working hours
+            "working_hours_start": settings.working_hours_start.strftime('%H:%M'),
+            "working_hours_end": settings.working_hours_end.strftime('%H:%M'),
+            "timezone": settings.timezone,
+            # Automation
+            "auto_handoff_score": settings.auto_handoff_score,
+            "max_ai_messages_per_lead": settings.max_ai_messages_per_lead,
+            "is_enabled": settings.is_enabled,
+            "auto_enable_new_leads": settings.auto_enable_new_leads,
+            "qualification_questions": settings.qualification_questions,
+            "custom_scripts": settings.custom_scripts,
+            # Re-engagement settings
+            "re_engagement_enabled": settings.re_engagement_enabled,
+            "quiet_hours_before_re_engage": settings.quiet_hours_before_re_engage,
+            "re_engagement_max_attempts": settings.re_engagement_max_attempts,
+            "long_term_nurture_after_days": settings.long_term_nurture_after_days,
+            "re_engagement_channels": settings.re_engagement_channels,
+            # Sequence settings
+            "sequence_sms_enabled": settings.sequence_sms_enabled,
+            "sequence_email_enabled": settings.sequence_email_enabled,
+            "sequence_voice_enabled": settings.sequence_voice_enabled,
+            "sequence_rvm_enabled": settings.sequence_rvm_enabled,
+            "day_0_aggression": settings.day_0_aggression,
+            # Behavior flags
+            "proactive_appointment_enabled": settings.proactive_appointment_enabled,
+            "qualification_questions_enabled": settings.qualification_questions_enabled,
+            # Instant response
+            "instant_response_enabled": settings.instant_response_enabled,
+            "instant_response_max_delay_seconds": settings.instant_response_max_delay_seconds,
+            # NBA intervals
+            "nba_hot_lead_scan_interval_minutes": settings.nba_hot_lead_scan_interval_minutes,
+            "nba_cold_lead_scan_interval_minutes": settings.nba_cold_lead_scan_interval_minutes,
+            # LLM Model settings
+            "llm_provider": settings.llm_provider,
+            "llm_model": settings.llm_model,
+            "llm_model_fallback": settings.llm_model_fallback,
+            # Agent notification
+            "notification_fub_person_id": settings.notification_fub_person_id,
+            # Phone number filter
+            "ai_respond_to_phone_numbers": settings.ai_respond_to_phone_numbers,
+        }
+
+        # Filter out admin-only fields for non-admin users
+        if not admin:
+            for field in ADMIN_ONLY_FIELDS:
+                settings_dict.pop(field, None)
+
         return jsonify({
             "success": True,
-            "settings": {
-                "agent_name": settings.agent_name,
-                "brokerage_name": settings.brokerage_name,
-                "team_members": settings.team_members,
-                "personality_tone": settings.personality_tone,
-                # Response timing
-                "response_delay_seconds": settings.response_delay_seconds,
-                "response_delay_min_seconds": settings.response_delay_min_seconds,
-                "response_delay_max_seconds": settings.response_delay_max_seconds,
-                "first_message_delay_min": settings.first_message_delay_min,
-                "first_message_delay_max": settings.first_message_delay_max,
-                # Message limits
-                "max_sms_length": settings.max_sms_length,
-                "max_email_length": settings.max_email_length,
-                # Working hours
-                "working_hours_start": settings.working_hours_start.strftime('%H:%M'),
-                "working_hours_end": settings.working_hours_end.strftime('%H:%M'),
-                "timezone": settings.timezone,
-                # Automation
-                "auto_handoff_score": settings.auto_handoff_score,
-                "max_ai_messages_per_lead": settings.max_ai_messages_per_lead,
-                "is_enabled": settings.is_enabled,
-                "auto_enable_new_leads": settings.auto_enable_new_leads,
-                "qualification_questions": settings.qualification_questions,
-                "custom_scripts": settings.custom_scripts,
-                # Re-engagement settings
-                "re_engagement_enabled": settings.re_engagement_enabled,
-                "quiet_hours_before_re_engage": settings.quiet_hours_before_re_engage,
-                "re_engagement_max_attempts": settings.re_engagement_max_attempts,
-                "long_term_nurture_after_days": settings.long_term_nurture_after_days,
-                "re_engagement_channels": settings.re_engagement_channels,
-                # Sequence settings
-                "sequence_sms_enabled": settings.sequence_sms_enabled,
-                "sequence_email_enabled": settings.sequence_email_enabled,
-                "sequence_voice_enabled": settings.sequence_voice_enabled,
-                "sequence_rvm_enabled": settings.sequence_rvm_enabled,
-                "day_0_aggression": settings.day_0_aggression,
-                # Behavior flags
-                "proactive_appointment_enabled": settings.proactive_appointment_enabled,
-                "qualification_questions_enabled": settings.qualification_questions_enabled,
-                # Instant response
-                "instant_response_enabled": settings.instant_response_enabled,
-                "instant_response_max_delay_seconds": settings.instant_response_max_delay_seconds,
-                # NBA intervals
-                "nba_hot_lead_scan_interval_minutes": settings.nba_hot_lead_scan_interval_minutes,
-                "nba_cold_lead_scan_interval_minutes": settings.nba_cold_lead_scan_interval_minutes,
-                # LLM Model settings
-                "llm_provider": settings.llm_provider,
-                "llm_model": settings.llm_model,
-                "llm_model_fallback": settings.llm_model_fallback,
-                # Agent notification
-                "notification_fub_person_id": settings.notification_fub_person_id,
-                # Phone number filter
-                "ai_respond_to_phone_numbers": settings.ai_respond_to_phone_numbers,
-            }
+            "role": role,
+            "settings": settings_dict,
         })
 
     except Exception as e:
@@ -136,6 +183,7 @@ def get_settings():
 
 
 @ai_settings_bp.route('', methods=['PUT'])
+@require_auth
 def update_settings():
     """
     Update AI agent settings.
@@ -157,6 +205,12 @@ def update_settings():
 
     if not user_id and not org_id:
         return jsonify({"error": "User ID or Organization ID is required"}), 400
+
+    # Strip admin-only fields for non-admin users (silently ignore, don't error)
+    role = get_user_role(user_id)
+    if not is_admin_role(role):
+        for field in ADMIN_ONLY_FIELDS:
+            data.pop(field, None)
 
     try:
         supabase = get_supabase_client()
@@ -287,6 +341,7 @@ def update_settings():
 
 
 @ai_settings_bp.route('/reset', methods=['POST'])
+@require_auth
 def reset_settings():
     """
     Reset AI agent settings to defaults.
@@ -330,6 +385,7 @@ def reset_settings():
 
 
 @ai_settings_bp.route('/enabled', methods=['GET'])
+@require_auth
 def check_enabled():
     """
     Quick check if AI agent is enabled for a user.
@@ -361,6 +417,7 @@ def check_enabled():
 
 
 @ai_settings_bp.route('/toggle', methods=['POST'])
+@require_auth
 def toggle_enabled():
     """
     Toggle AI agent enabled/disabled.

@@ -17,8 +17,8 @@ if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
 # Create admin client (using service role key for admin operations)
 supabase = create_client(SUPABASE_URL, SUPABASE_SECRET_KEY)
 
-email = "adam@saahomes.com"
-new_password = "Vitzer0100!"  # Reset to this password
+email = os.getenv("ADMIN_EMAIL", "")
+new_password = os.getenv("ADMIN_PASSWORD", "")
 
 print("=" * 60)
 print("RESETTING PASSWORD FOR:", email)

@@ -35,11 +35,13 @@ class AIAgentSettings:
 
     # Response timing settings (human-like delays)
     # Priority: instant_response (new leads) > first_message_delay > response_delay (ongoing)
-    response_delay_seconds: int = 30  # Configurable delay for UI
-    response_delay_min_seconds: int = 30  # Min delay for ongoing conversation (reply #2+)
-    response_delay_max_seconds: int = 120  # Max delay for ongoing conversation (2 min)
-    first_message_delay_min: int = 15  # First message to NEW lead — speed to lead matters
-    first_message_delay_max: int = 60  # Max 1 minute for first message (research: 5 min = 21x conversion)
+    # Speed-to-lead research: 5-minute response = 21x higher conversion (MIT study)
+    # With FUB native API (<1s send), these delays are the main bottleneck
+    response_delay_seconds: int = 10  # Configurable delay for UI
+    response_delay_min_seconds: int = 10  # Min delay for ongoing conversation (reply #2+)
+    response_delay_max_seconds: int = 45  # Max delay for ongoing conversation
+    first_message_delay_min: int = 5  # First message to NEW lead — speed to lead is critical
+    first_message_delay_max: int = 15  # Max 15 seconds for first message
     typing_speed_chars_per_second: float = 4.0  # Simulate typing time
     max_sms_length: int = 1000  # Max SMS chars (configurable from frontend)
     max_email_length: int = 5000  # Max email chars (configurable from frontend)
@@ -50,7 +52,7 @@ class AIAgentSettings:
     timezone: str = "America/New_York"
 
     # Automation settings
-    auto_handoff_score: int = 80  # Score threshold for human handoff
+    auto_handoff_score: int = 70  # Score threshold for human handoff (lowered: catch hot leads sooner)
     max_ai_messages_per_lead: int = 15
     max_qualification_questions: int = 8
     auto_schedule_score_threshold: int = 70  # Score to auto-suggest scheduling

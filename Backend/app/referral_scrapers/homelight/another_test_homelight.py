@@ -11,10 +11,11 @@ if __name__ == '__main__':
     from datetime import datetime, timedelta
     import re
 
-    # Hardcoded credentials
+    # Credentials from environment
+    import os
     url = "https://agent.homelight.com"
-    email = "online@saahomes.com"
-    password = "SAA$quad#1Rank"
+    email = os.getenv("HOMELIGHT_EMAIL", "")
+    password = os.getenv("HOMELIGHT_PASSWORD", "")
 
     # Lead interaction settings
     NOTES_BY_STAGE = {
