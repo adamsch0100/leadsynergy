@@ -180,7 +180,6 @@ def send_scheduled_message(
                 person_id=fub_person_id,
                 message=final_message,
                 phone_number=lead_profile.phone,
-                from_user_id=fub_user_id,
             )
         else:
             # Email sending would go here
