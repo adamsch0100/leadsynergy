@@ -1,3 +1,7 @@
+"""
+Celery application configuration for LeadSynergy.
+Handles async task processing for AI agent messaging and lead sync.
+"""
 from celery import Celery
 from celery.schedules import crontab
 import os
