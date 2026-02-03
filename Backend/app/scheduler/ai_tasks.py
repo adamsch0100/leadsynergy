@@ -70,29 +70,26 @@ def send_scheduled_message(
         organization_id = msg_record.data.get("organization_id")
         user_id = msg_record.data.get("user_id")
 
-        # Get user's FUB API key
-        user_record = supabase.table("users").select("fub_api_key").eq(
-            "id", user_id
+        # Get lead info from local database (more reliable than FUB API)
+        lead_record = supabase.table("leads").select("*").eq(
+            "fub_person_id", fub_person_id
         ).single().execute()
-        fub_api_key = user_record.data.get("fub_api_key")
 
-        if not fub_api_key:
-            logger.error(f"No FUB API key found for user {user_id}")
-            _mark_message_failed(supabase, message_id, "No FUB API key configured")
-            return {"success": False, "error": "No FUB API key configured"}
-
-        # Get lead info from FUB with user's API key
-        from app.database.fub_api_client import FUBApiClient
-        fub = FUBApiClient(api_key=fub_api_key)
-        person_data = fub.get_person(fub_person_id)
-
-        if not person_data:
-            logger.error(f"Person {fub_person_id} not found in FUB")
-            _mark_message_failed(supabase, message_id, "Person not found")
+        if not lead_record.data:
+            logger.error(f"Person {fub_person_id} not found in database")
+            _mark_message_failed(supabase, message_id, "Person not found in database")
             return {"success": False, "error": "Person not found"}
 
-        # Build lead profile
-        lead_profile = LeadProfile.from_fub_data(person_data)
+        # Build lead profile from database data
+        lead_profile = LeadProfile(
+            fub_person_id=fub_person_id,
+            first_name=lead_record.data.get("first_name", ""),
+            last_name=lead_record.data.get("last_name", ""),
+            phone=lead_record.data.get("phone", ""),
+            email=lead_record.data.get("email", ""),
+            source=lead_record.data.get("source", ""),
+            stage=lead_record.data.get("stage", ""),
+        )
 
         # Check compliance
         if channel == "sms":
