@@ -69,11 +69,12 @@ def send_scheduled_message(
         organization_id = msg_record.data.get("organization_id")
         user_id = msg_record.data.get("user_id")
 
-        # Get user's FUB API key for sending SMS
-        user_record = supabase.table("users").select("fub_api_key").eq(
+        # Get user's FUB API key and user ID for sending SMS
+        user_record = supabase.table("users").select("fub_api_key, fub_user_id").eq(
             "id", user_id
         ).single().execute()
         fub_api_key = user_record.data.get("fub_api_key")
+        fub_user_id = user_record.data.get("fub_user_id")
 
         if not fub_api_key:
             logger.error(f"No FUB API key found for user {user_id}")
@@ -179,6 +180,7 @@ def send_scheduled_message(
                 person_id=fub_person_id,
                 message=final_message,
                 phone_number=lead_profile.phone,
+                from_user_id=fub_user_id,
             )
         else:
             # Email sending would go here
