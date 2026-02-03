@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FUB Iframe Test Harness</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a2e;
+            font-family: Arial, sans-serif;
+        }
+        h1 {
+            color: white;
+            margin-bottom: 10px;
+        }
+        .info {
+            color: #aaa;
+            margin-bottom: 10px;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+        .controls button {
+            padding: 8px 16px;
+            margin-right: 10px;
+            cursor: pointer;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        .controls button:hover {
+            background: #2563eb;
+        }
+        .iframe-wrapper {
+            display: inline-block;
+            background: #333;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .iframe-container {
+            background: white;
+            overflow: hidden;
+        }
+        iframe {
+            display: block;
+            border: none;
+        }
+        .size-display {
+            color: #4ade80;
+            font-family: monospace;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>FUB Embedded App - Iframe Test</h1>
+    <div class="info">Testing different iframe sizes to find what works in FUB</div>
+
+    <div class="controls">
+        <button onclick="setSize(400, 600)">400x600</button>
+        <button onclick="setSize(500, 700)">500x700</button>
+        <button onclick="setSize(575, 737)">575x737</button>
+        <button onclick="setSize(350, 500)">350x500 (small)</button>
+        <button onclick="setSize(300, 400)">300x400 (tiny)</button>
+        <button onclick="reload()">Reload iframe</button>
+    </div>
+
+    <div class="iframe-wrapper">
+        <div class="iframe-container" id="container">
+            <iframe id="fubFrame" src="http://127.0.0.1:8000/fub/embedded?example=true"></iframe>
+        </div>
+        <div class="size-display" id="sizeDisplay">Current size: 400x600</div>
+    </div>
+
+    <script>
+        function setSize(w, h) {
+            const container = document.getElementById('container');
+            const frame = document.getElementById('fubFrame');
+            container.style.width = w + 'px';
+            container.style.height = h + 'px';
+            frame.style.width = w + 'px';
+            frame.style.height = h + 'px';
+            document.getElementById('sizeDisplay').textContent = 'Current size: ' + w + 'x' + h;
+        }
+
+        function reload() {
+            const frame = document.getElementById('fubFrame');
+            frame.src = frame.src;
+        }
+
+        // Start with 400x600
+        setSize(400, 600);
+    </script>
+</body>
+</html>

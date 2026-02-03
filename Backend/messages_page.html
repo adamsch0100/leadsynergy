@@ -1,0 +1,132 @@
+<!DOCTYPE html><html lang="en" class="rdHtml"><head>
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <title>Follow Up Boss</title>
+
+    <link rel="apple-touch-icon" sizes="180x180" href="/2/images/favicons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" href="/2/images/favicons/favicon-32x32.png" sizes="32x32">
+    <link rel="icon" type="image/png" href="/2/images/favicons/favicon-16x16.png" sizes="16x16">
+    <link rel="manifest" href="/2/images/favicons/manifest.json">
+    <link rel="mask-icon" href="/2/images/favicons/safari-pinned-tab.svg" color="#5bbad5">
+    <link rel="shortcut icon" href="/2/images/favicons/favicon.ico">
+    <meta name="msapplication-config" content="/2/images/favicons/browserconfig.xml">
+    <meta name="theme-color" content="#ffffff">
+            <meta name="apple-itunes-app" content="app-id=966131499">
+    
+    
+            <script>
+                if (this.customElements) {
+                    try {
+                        customElements.define('built-in',
+                            document.createElement('p').constructor, {'extends':'p'});
+                    } catch(_) {
+                        document.write('<script src="//unpkg.com/@ungap/custom-elements-builtin"><\x2fscript>');
+                    }
+                } else {
+                    document.write('<script src="//unpkg.com/document-register-element"><\x2fscript>');
+                }
+            </script>
+        
+    <script type="text/javascript" src="/js/jquery-3.6.1.min.js?v=829"></script>    <script type="text/javascript" src="/js/v2-login.js?v=829"></script><script src="/js/password-strength-indicator.js"></script>
+    
+    
+    <link rel="stylesheet" href="/2/css/main.css?v=7453">
+<script src="/js/zxcvbn.js"></script></head>
+
+<body class="rdBody rdLoginPage">
+        <div class="rdWrap">
+        
+        <div class="rdContent">
+            <link rel="preload" href="/2/images/microsoft/btn_microsoft_signin_focus_web.png" as="image">
+<div class="rdLogin main-content">
+    <header>
+        <h2>
+            <a href="//www.followupboss.com">
+                <img src="/2/images/logo/fub-logo-color.svg" height="100" title="Follow Up Boss">
+            </a>
+        </h2>
+    </header>
+    <section class="LoginBox BoxContainer" style="position: relative">
+        <div class="LoginBox-content">
+                        <form action="/login/index" id="form" class="clearfix" request_token="" method="post">                <div><input type="hidden" name="start_url" value="/2/people/view/2099" id="StartUrl"></div>                <div><input type="hidden" name="subdomain" value="saahomes" id="Subdomain"></div>                                                    <div class="form-element"><input type="email" name="email" id="email" class="rdInput email" required="required" placeholder="Email Address" data-message="Please enter a valid email address" value="" autocomplete="username" autofocus="autofocus"></div>                                            <div class="LoginBox-password">
+                            <div class="form-element"><input type="password" name="password" class="rdInput" required="required" placeholder="Password" data-message="Please enter a password" style="padding-right: 140px" id="Password"></div>                            <a href="/login/forgotPassword" class="LoginBox-password-forgot">Forgot password?</a>
+                        </div>
+                                        <div class="LoginBox-actions">
+                                                <input type="submit" value="Login →" class="u-bigBlueButton" style="-webkit-appearance: none">                        <div class="LoginBox-rememberMe"><input type="hidden" name="remember" value=""><input type="checkbox" name="remember" label_html="1" checked="checked" id="Remember" value="1"><label for="Remember"><div class="LoginBox-rememberMeCheck  LoginBox-checked "></div> Remember me</label></div>                    </div>
+                            <input type="hidden" name="csrf_token" value="fubcsrf_1d185f811745ad0e97c780f02f03abb445f2dd351e0c3098d1580922ffa2632d"></form>
+            <script type="module">
+                const emailValue = "";
+                document.querySelector('input.email').value = emailValue;
+                const tokenInput = "<input type=\"hidden\" name=\"csrf_token\" value=\"fubcsrf_1d185f811745ad0e97c780f02f03abb445f2dd351e0c3098d1580922ffa2632d\" \/>";
+                document.getElementById('form').insertAdjacentHTML('beforeEnd', tokenInput);
+            </script>
+
+                            <div class="BoxContainer-content" style="padding-bottom: 0;">
+                    <fieldset class="rdSignupDivider">
+                        <legend>Or</legend>
+                    </fieldset>
+                </div>
+                        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; flex-direction: row">
+
+                                <div class="LoginBox-google">
+                    <div class="googleButtonContainer" style="margin-top: 15px">
+                        <div class="preloadHover-signInGoogle"></div>
+                        <div class="preloadActive-signInGoogle"></div>
+                        <div class="preloadDisabled-signInGoogle"></div>
+                        <a href="https://app.followupboss.com/oauth/googleLogin?start_url=%2F2%2Fpeople%2Fview%2F2099" tabindex="1" class="signInGoogle" style="display: block"></a>
+                    </div>
+                </div>
+                
+                                <div style="order: 2; max-width: 180px">
+                    <div class="LoginBox-microsoft">
+                        <div class="microsoftButtonContainer" style="margin-top: 15px">
+                            <a href="https://login.microsoftonline.com/common/oauth2/v2.0/authorize?state=signinMicrosoft-login&amp;scope=openid%20email&amp;prompt=select_account&amp;response_type=code&amp;approval_prompt=auto&amp;redirect_uri=https%3A%2F%2Fapp.followupboss.com%2Foauth%2Fcallback&amp;client_id=9e38b49f-c444-461e-be56-c941428fe2a6" tabindex="1" class="connectButton connectMicrosoft signInMicrosoft" type="button" style="display: block">
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                            </div>
+                        <div id="autoLoginAs" style="display: none; text-align: center; margin-top: 20px">
+                Will sign in as <b id="autoLoginAs-email" style="word-wrap: break-word"></b>
+                <a id="chooseMicrosoftAccount" href="https://login.microsoftonline.com/common/oauth2/v2.0/authorize?state=signinMicrosoft-login&amp;scope=openid%20email&amp;prompt=select_account&amp;response_type=code&amp;approval_prompt=auto&amp;redirect_uri=https%3A%2F%2Fapp.followupboss.com%2Foauth%2Fcallback&amp;client_id=9e38b49f-c444-461e-be56-c941428fe2a6" style="margin-top: 5px; display: none">
+                    Change Microsoft account
+                </a>
+            </div>
+                    </div>
+    </section>
+            <section class="RecentImprovements" style="margin-bottom: 40px;">
+            <center>
+                New to Follow Up Boss?
+                <a href="https://app.followupboss.com/signup/v2">
+                    Start a free trial.
+                </a>
+            </center>
+        </section>
+        <section class="RecentImprovements" style="margin-bottom: 40px;">
+        <center>
+            <a href="http://updates.followupboss.com/" rel="noopener noreferrer" target="_blank">
+                🔥 Check out our recent improvements
+            </a>
+        </center>
+    </section>
+</div>        </div>
+    </div>
+
+        <footer class="rdFooter">
+        <div class="richdesk-container">
+            <div class="rdFooter-copyright">
+                <a href="//www.followupboss.com">
+                    © 2026 Follow Up Boss
+                </a>
+            </div>
+            <ul>
+                <li><a href="https://help.followupboss.com/hc/en-us">Contact</a></li>
+                <li><a href="//www.followupboss.com/terms">Terms &amp; Conditions</a></li>
+                <li><a href="//www.followupboss.com/privacy">Privacy Policy</a></li>
+            </ul>
+        </div>
+    </footer>
+    
+
+</body></html>

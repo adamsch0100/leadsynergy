@@ -63,15 +63,27 @@ def send_scheduled_message(
         compliance = ComplianceChecker(supabase)
         sms_service = FUBSMSService()
 
-        # Get message record to retrieve organization_id
-        msg_record = supabase.table("scheduled_messages").select("organization_id").eq(
+        # Get message record to retrieve organization_id and user_id
+        msg_record = supabase.table("scheduled_messages").select("organization_id, user_id").eq(
             "id", message_id
         ).single().execute()
         organization_id = msg_record.data.get("organization_id")
+        user_id = msg_record.data.get("user_id")
 
-        # Get lead info from FUB
+        # Get user's FUB API key
+        user_record = supabase.table("users").select("fub_api_key").eq(
+            "id", user_id
+        ).single().execute()
+        fub_api_key = user_record.data.get("fub_api_key")
+
+        if not fub_api_key:
+            logger.error(f"No FUB API key found for user {user_id}")
+            _mark_message_failed(supabase, message_id, "No FUB API key configured")
+            return {"success": False, "error": "No FUB API key configured"}
+
+        # Get lead info from FUB with user's API key
         from app.database.fub_api_client import FUBApiClient
-        fub = FUBApiClient()
+        fub = FUBApiClient(api_key=fub_api_key)
         person_data = fub.get_person(fub_person_id)
 
         if not person_data:
@@ -1183,7 +1195,6 @@ def _mark_message_failed(supabase, message_id: str, error: str):
     supabase.table("scheduled_messages").update({
         "status": "failed",
         "error_message": error,
-        "failed_at": datetime.utcnow().isoformat(),
     }).eq("id", message_id).execute()
 
 

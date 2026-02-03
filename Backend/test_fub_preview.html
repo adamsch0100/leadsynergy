@@ -1,0 +1,2315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LeadSynergy</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <meta name="csrf-token" content="c9c1faf1d3854b71f535319db26c8b8e28d7a8d4e10626ae9a40b409b884e9cd">
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --primary-dark: #2563eb;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-500: #6b7280;
+            --gray-700: #374151;
+            --gray-900: #111827;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--gray-50);
+            margin: 0;
+            padding: 0;
+            font-size: 13px;
+            color: var(--gray-700);
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 737px;
+            overflow: hidden;
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 575px;
+            height: 737px;
+            margin: 0 auto;
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .app-header {
+            background: linear-gradient(135deg, var(--primary) 0%, #6366f1 100%);
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .app-logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #fff;
+            font-weight: 600;
+            font-size: 15px;
+        }
+
+        .app-logo-icon {
+            width: 28px;
+            height: 28px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .terms-badge {
+            font-size: 11px;
+            background: rgba(255,255,255,0.2);
+            padding: 4px 8px;
+            border-radius: 12px;
+            color: #fff;
+            cursor: pointer;
+        }
+
+        .terms-badge.accepted { background: rgba(16,185,129,0.3); }
+
+        /* Lead Info Banner */
+        .lead-banner {
+            background: var(--gray-50);
+            border-bottom: 1px solid var(--gray-200);
+            padding: 8px 12px;
+            flex-shrink: 0;
+        }
+
+        .lead-name {
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--gray-900);
+            margin-bottom: 4px;
+        }
+
+        .lead-meta {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: var(--gray-500);
+        }
+
+        .lead-meta i { margin-right: 4px; }
+
+        .lead-updated {
+            font-size: 10px;
+            color: var(--gray-500);
+            margin-top: 4px;
+        }
+
+        .referral-source {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            color: #92400e;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 12px;
+            margin-top: 8px;
+        }
+
+        .referral-source.homelight { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); color: #1e40af; }
+        .referral-source.redfin { background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #991b1b; }
+        .referral-source.referral-exchange { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #065f46; }
+
+        /* Tab Navigation - stays at bottom */
+        .tab-nav {
+            display: flex;
+            border-top: 1px solid var(--gray-200);
+            background: #fff;
+            flex-shrink: 0;
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 8px 4px;
+            border: none;
+            background: none;
+            color: var(--gray-500);
+            font-size: 10px;
+            font-weight: 500;
+            cursor: pointer;
+            border-top: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab-btn:hover {
+            color: var(--primary);
+        }
+
+        .tab-btn.active {
+            color: var(--primary);
+            border-top-color: var(--primary);
+        }
+
+        .tab-btn i {
+            display: block;
+            font-size: 14px;
+            margin-bottom: 2px;
+        }
+
+        /* Content wrapper - scrollable middle area */
+        .content-wrapper {
+            flex: 1;
+            min-height: 0; /* Required for flex overflow to work */
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        .tab-panel {
+            display: none;
+            padding: 10px 12px;
+        }
+
+        .tab-panel.active {
+            display: block;
+        }
+
+        /* Credits Bar - Compact */
+        .credits-bar {
+            display: flex;
+            background: var(--gray-100);
+            border-bottom: 1px solid var(--gray-200);
+            flex-shrink: 0;
+        }
+
+        .credit-item {
+            flex: 1;
+            text-align: center;
+            padding: 6px 4px;
+            border-right: 1px solid var(--gray-200);
+        }
+
+        .credit-item:last-child { border-right: none; }
+
+        .credit-value {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .credit-label {
+            font-size: 9px;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Section Title */
+        .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+
+        /* AI Agent Section */
+        .ai-toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            background: var(--gray-50);
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .ai-toggle-label {
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .ai-toggle-label i {
+            color: var(--primary);
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--gray-200);
+            border-radius: 24px;
+            transition: 0.3s;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--success);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
+
+        /* Lead Score Card */
+        .score-card {
+            background: #fff;
+            border: 1px solid var(--gray-200);
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        .score-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .score-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--gray-900);
+        }
+
+        .score-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .score-badge.hot {
+            background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+            color: #991b1b;
+        }
+
+        .score-badge.warm {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            color: #92400e;
+        }
+
+        .score-badge.cold {
+            background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+            color: #1e40af;
+        }
+
+        .progress-bar-container {
+            height: 6px;
+            background: var(--gray-200);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary) 0%, #6366f1 100%);
+            border-radius: 3px;
+            transition: width 0.3s;
+        }
+
+        .progress-label {
+            font-size: 10px;
+            color: var(--gray-500);
+            margin-top: 4px;
+        }
+
+        /* Extracted Info Chips */
+        .info-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 10px;
+        }
+
+        .info-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            background: var(--gray-100);
+            border-radius: 12px;
+            font-size: 11px;
+            color: var(--gray-700);
+        }
+
+        .info-chip i {
+            font-size: 10px;
+            color: var(--primary);
+        }
+
+        /* AI Response Section */
+        .ai-response-section {
+            background: var(--gray-50);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 12px;
+        }
+
+        .ai-response-preview {
+            background: #fff;
+            border: 1px solid var(--gray-200);
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 13px;
+            line-height: 1.5;
+            min-height: 60px;
+            margin-bottom: 10px;
+        }
+
+        .ai-response-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-action {
+            flex: 1;
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            transition: all 0.15s;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+        }
+
+        .btn-secondary {
+            background: var(--gray-100);
+            color: var(--gray-700);
+            border: 1px solid var(--gray-200);
+        }
+
+        .btn-secondary:hover {
+            background: var(--gray-200);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: #fff;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        /* Search Grid */
+        .search-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .search-card {
+            background: #fff;
+            border: 1px solid var(--gray-200);
+            border-radius: 10px;
+            padding: 14px 10px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .search-card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 2px 8px rgba(59,130,246,0.15);
+            transform: translateY(-2px);
+        }
+
+        .search-card.disabled {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        .search-icon {
+            width: 36px;
+            height: 36px;
+            background: var(--gray-100);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 8px;
+            color: var(--primary);
+            font-size: 16px;
+        }
+
+        .search-card:hover .search-icon {
+            background: linear-gradient(135deg, var(--primary) 0%, #6366f1 100%);
+            color: #fff;
+        }
+
+        .search-title {
+            font-weight: 600;
+            font-size: 12px;
+            color: var(--gray-900);
+            margin-bottom: 4px;
+        }
+
+        .search-desc {
+            font-size: 10px;
+            color: var(--gray-500);
+            line-height: 1.3;
+        }
+
+        /* Quick Actions Row */
+        .quick-actions-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .quick-action-btn {
+            flex: 1;
+            padding: 10px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all 0.15s;
+        }
+
+        .dnc-check-btn {
+            background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+            color: #fff;
+        }
+
+        .dnc-check-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+        }
+
+        .dnc-result {
+            margin-top: 8px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            display: none;
+        }
+
+        .dnc-result.safe {
+            background: #d1fae5;
+            color: #065f46;
+            display: block;
+        }
+
+        .dnc-result.warning {
+            background: #fee2e2;
+            color: #991b1b;
+            display: block;
+        }
+
+        /* Referral Section */
+        .referral-section {
+            padding: 12px 16px;
+            border-top: 1px solid var(--gray-200);
+            background: var(--gray-50);
+        }
+
+        .referral-expanded {
+            background: #fff;
+            border: 1px solid var(--gray-200);
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .referral-status {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .referral-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .referral-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--gray-100);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--gray-500);
+        }
+
+        .referral-details h4 {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--gray-900);
+            margin: 0 0 2px;
+        }
+
+        .referral-details span {
+            font-size: 11px;
+            color: var(--gray-500);
+        }
+
+        .sync-status {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 12px;
+        }
+
+        .sync-status.synced {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .referral-actions {
+            margin-top: 12px;
+        }
+
+        .referral-action-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .status-select {
+            flex: 1;
+            padding: 8px 10px;
+            border: 1px solid var(--gray-200);
+            border-radius: 6px;
+            font-size: 12px;
+            background: #fff;
+        }
+
+        .update-btn {
+            padding: 8px 14px;
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .commission-section {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--gray-200);
+        }
+
+        .commission-row {
+            display: flex;
+            gap: 8px;
+            align-items: end;
+        }
+
+        .commission-input {
+            flex: 1;
+        }
+
+        .commission-input label {
+            display: block;
+            font-size: 10px;
+            color: var(--gray-500);
+            margin-bottom: 4px;
+        }
+
+        .commission-input input {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--gray-200);
+            border-radius: 6px;
+            font-size: 12px;
+        }
+
+        .commission-btn {
+            padding: 8px 14px;
+            background: var(--success);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .referral-fee-badge {
+            font-size: 10px;
+            background: var(--gray-100);
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: var(--gray-600);
+            margin-left: 4px;
+        }
+
+        .no-referral-message {
+            padding: 12px;
+            background: var(--gray-100);
+            border-radius: 8px;
+            text-align: center;
+            color: var(--gray-500);
+            font-size: 12px;
+        }
+
+        .action-note-input {
+            width: 100%;
+            margin-top: 8px;
+            padding: 8px 10px;
+            border: 1px solid var(--gray-200);
+            border-radius: 6px;
+            font-size: 12px;
+        }
+
+        /* History Timeline */
+        .history-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .history-item {
+            display: flex;
+            gap: 10px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--gray-100);
+        }
+
+        .history-item:last-child {
+            border-bottom: none;
+        }
+
+        .history-icon {
+            width: 28px;
+            height: 28px;
+            background: var(--gray-100);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: var(--primary);
+            flex-shrink: 0;
+        }
+
+        .history-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .history-title {
+            font-weight: 500;
+            font-size: 12px;
+            color: var(--gray-900);
+        }
+
+        .history-meta {
+            font-size: 10px;
+            color: var(--gray-500);
+            margin-top: 2px;
+        }
+
+        .history-summary {
+            font-size: 11px;
+            color: var(--gray-600);
+            margin-top: 4px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 30px 20px;
+            color: var(--gray-500);
+        }
+
+        .empty-state i {
+            font-size: 32px;
+            margin-bottom: 10px;
+            color: var(--gray-300);
+        }
+
+        /* Modals */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal-overlay.show { display: flex; }
+
+        .modal-content {
+            background: #fff;
+            border-radius: 12px;
+            max-width: 360px;
+            width: 100%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--gray-200);
+            font-weight: 600;
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .modal-body {
+            padding: 16px;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .modal-body ul {
+            padding-left: 20px;
+            margin: 10px 0;
+        }
+
+        .modal-footer {
+            padding: 16px;
+            border-top: 1px solid var(--gray-200);
+            display: flex;
+            gap: 10px;
+        }
+
+        .modal-footer button {
+            flex: 1;
+            padding: 10px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .btn-accept {
+            background: var(--primary);
+            color: #fff;
+            border: none;
+        }
+
+        .btn-cancel {
+            background: var(--gray-100);
+            color: var(--gray-700);
+            border: 1px solid var(--gray-200);
+        }
+
+        /* Search Modal */
+        .search-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            align-items: flex-end;
+            z-index: 1000;
+        }
+
+        .search-modal.show { display: flex; }
+
+        .search-modal-content {
+            background: #fff;
+            width: 100%;
+            max-height: 85vh;
+            border-radius: 16px 16px 0 0;
+            overflow-y: auto;
+        }
+
+        .search-modal-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--gray-200);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            background: #fff;
+        }
+
+        .search-modal-header h3 {
+            font-size: 15px;
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .close-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: none;
+            background: var(--gray-100);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .search-modal-body {
+            padding: 16px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--gray-700);
+            margin-bottom: 6px;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--gray-200);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 12px;
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        /* Results Section */
+        .results-section {
+            padding: 16px;
+            background: var(--gray-50);
+            border-top: 1px solid var(--gray-200);
+        }
+
+        .result-card {
+            background: #fff;
+            border: 1px solid var(--gray-200);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+        }
+
+        .result-label {
+            font-size: 10px;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .result-value {
+            font-size: 13px;
+            color: var(--gray-900);
+            font-weight: 500;
+        }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 2000;
+        }
+
+        .toast {
+            background: var(--gray-900);
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .toast.show { display: block; }
+        .toast.success { background: var(--success); }
+        .toast.error { background: var(--danger); }
+
+        /* Loading */
+        .loading-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        .loading-spinner.dark {
+            border-color: rgba(0,0,0,0.1);
+            border-top-color: var(--primary);
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* State Badge */
+        .state-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            background: var(--gray-100);
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            color: var(--gray-600);
+        }
+
+        .state-badge.initial { background: #dbeafe; color: #1e40af; }
+        .state-badge.qualifying { background: #fef3c7; color: #92400e; }
+        .state-badge.scheduling { background: #d1fae5; color: #065f46; }
+        .state-badge.handed_off { background: #e0e7ff; color: #4338ca; }
+    </style>
+    <script src="https://eia.followupboss.com/embeddedApps-v1.0.1.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <div class="app-header">
+            <div class="app-logo">
+                <div class="app-logo-icon">
+                    <i class="fas fa-bolt"></i>
+                </div>
+                <span>LeadSynergy</span>
+            </div>
+            <div class="terms-badge " id="termsBadge">
+                <i class="fas fa-info-circle me-1"></i>
+                View Terms
+            </div>
+        </div>
+
+        <!-- Lead Info Banner -->
+        <div class="lead-banner" id="leadBanner">
+            <div class="lead-name" id="leadName">Loading lead info...</div>
+            <div class="lead-meta">
+                <span id="leadPhone"><i class="fas fa-phone"></i> --</span>
+                <span id="leadEmail"><i class="fas fa-envelope"></i> --</span>
+            </div>
+            <div class="lead-updated" id="leadUpdated"></div>
+            <div class="referral-source" id="referralSource" style="display: none;">
+                <i class="fas fa-link"></i>
+                <span id="referralSourceName">Referral Source</span>
+            </div>
+        </div>
+
+        <!-- Scrollable Content Area -->
+        <div class="content-wrapper">
+            <!-- Credits Bar -->
+            <div class="credits-bar">
+            <div class="credit-item">
+                <div class="credit-value" id="enhancementCredits">--</div>
+                <div class="credit-label">Enhance</div>
+            </div>
+            <div class="credit-item">
+                <div class="credit-value" id="criminalCredits">--</div>
+                <div class="credit-label">Criminal</div>
+            </div>
+            <div class="credit-item">
+                <div class="credit-value" id="dncCredits">--</div>
+                <div class="credit-label">DNC</div>
+            </div>
+            </div>
+
+            <!-- Tab: Lead Info -->
+        <div class="tab-panel active" id="panel-lead-info">
+            <!-- Referral Status (if from referral source) -->
+            <div id="referralSection" style="display: none;">
+                <div class="section-title">Referral Platform Actions</div>
+                <div class="referral-expanded">
+                    <div class="referral-status">
+                        <div class="referral-info">
+                            <div class="referral-icon">
+                                <i class="fas fa-exchange-alt"></i>
+                            </div>
+                            <div class="referral-details">
+                                <h4 id="referralPlatform">--</h4>
+                                <span id="referralStage">Status: --</span>
+                                <span class="referral-fee-badge" id="referralFee">25% fee</span>
+                            </div>
+                        </div>
+                        <div class="sync-status synced" id="syncStatus">
+                            <i class="fas fa-check me-1"></i> Synced
+                        </div>
+                    </div>
+
+                    <!-- Status Update -->
+                    <div class="referral-actions">
+                        <div class="section-title" style="margin-top: 12px;">Update Platform Status</div>
+                        <div class="referral-action-row">
+                            <select class="status-select" id="statusSelect">
+                                <option value="">Select status...</option>
+                            </select>
+                            <button class="update-btn" id="updateStatusBtn" disabled>
+                                <i class="fas fa-sync-alt"></i> Update
+                            </button>
+                        </div>
+                        <input type="text" class="action-note-input" id="statusNote" placeholder="Add a note (optional)">
+                    </div>
+
+                    <!-- Commission Logger -->
+                    <div class="commission-section">
+                        <div class="section-title">Log Commission (Closed Deals)</div>
+                        <div class="commission-row">
+                            <div class="commission-input">
+                                <label>Sale Price</label>
+                                <input type="number" id="salePrice" placeholder="$500,000">
+                            </div>
+                            <button class="commission-btn" id="logCommissionBtn">
+                                <i class="fas fa-dollar-sign"></i> Log
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- No referral source message -->
+                <div class="no-referral-message" id="noReferralMessage" style="display: none;">
+                    <i class="fas fa-info-circle"></i> This lead is not from a referral platform
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: AI Agent -->
+        <div class="tab-panel" id="panel-ai-agent">
+            <!-- AI Toggle -->
+            <div class="ai-toggle-row">
+                <div class="ai-toggle-label">
+                    <i class="fas fa-robot"></i>
+                    <span>Auto-Nurture</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="aiToggle">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <!-- Lead Score Card -->
+            <div class="score-card">
+                <div class="score-header">
+                    <div>
+                        <span class="score-value" id="leadScore">--</span>
+                        <span style="color: var(--gray-500); font-size: 12px;">/100</span>
+                    </div>
+                    <span class="score-badge cold" id="scoreBadge">COLD</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-fill" id="qualProgress" style="width: 0%"></div>
+                </div>
+                <div class="progress-label">
+                    <span id="qualProgressText">0% Qualified</span>
+                    <span class="state-badge" id="conversationState" style="margin-left: 8px;">Initial</span>
+                </div>
+
+                <!-- Extracted Info -->
+                <div class="info-chips" id="extractedInfoChips">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- AI Response Section -->
+            <div class="ai-response-section">
+                <div class="section-title">AI Response Assistant</div>
+                <button class="btn-action btn-secondary" id="generateResponseBtn" style="width: 100%; margin-bottom: 10px;">
+                    <i class="fas fa-magic"></i> Get AI Suggestion
+                </button>
+                <div class="ai-response-preview" id="aiResponsePreview" style="display: none;">
+                    <div id="aiResponseText">Loading...</div>
+                </div>
+                <div class="ai-response-actions" id="aiResponseActions" style="display: none;">
+                    <button class="btn-action btn-primary" id="sendSmsBtn">
+                        <i class="fas fa-sms"></i> SMS
+                    </button>
+                    <button class="btn-action btn-secondary" id="sendEmailBtn">
+                        <i class="fas fa-envelope"></i> Email
+                    </button>
+                    <button class="btn-action btn-secondary" id="copyResponseBtn">
+                        <i class="fas fa-copy"></i> Copy
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Enrich -->
+        <div class="tab-panel" id="panel-enrich">
+            <!-- Quick DNC Check -->
+            <div class="section-title">Quick Compliance Check</div>
+            <button class="dnc-check-btn quick-action-btn" id="quickDncBtn" disabled>
+                <i class="fas fa-shield-alt"></i>
+                <span>Check DNC Status</span>
+            </button>
+            <div class="dnc-result" id="dncResult"></div>
+
+            <!-- Search Grid -->
+            <div class="section-title" style="margin-top: 16px;">Enrich Lead Data</div>
+            <div class="search-grid disabled" id="searchGrid">
+                <div class="search-card" data-search="contact_enrichment">
+                    <div class="search-icon"><i class="fas fa-user-plus"></i></div>
+                    <div class="search-title">Contact</div>
+                    <div class="search-desc">Fill missing info</div>
+                </div>
+                <div class="search-card" data-search="reverse_phone_search">
+                    <div class="search-icon"><i class="fas fa-phone"></i></div>
+                    <div class="search-title">Phone</div>
+                    <div class="search-desc">Reverse lookup</div>
+                </div>
+                <div class="search-card" data-search="reverse_email_search">
+                    <div class="search-icon"><i class="fas fa-envelope"></i></div>
+                    <div class="search-title">Email</div>
+                    <div class="search-desc">Find by email</div>
+                </div>
+                <div class="search-card" data-search="owner_search">
+                    <div class="search-icon"><i class="fas fa-home"></i></div>
+                    <div class="search-title">Owner</div>
+                    <div class="search-desc">Property lookup</div>
+                </div>
+                <div class="search-card" data-search="advanced_person_search">
+                    <div class="search-icon"><i class="fas fa-search"></i></div>
+                    <div class="search-title">Person</div>
+                    <div class="search-desc">Advanced search</div>
+                </div>
+                <div class="search-card" data-search="criminal_history_search">
+                    <div class="search-icon"><i class="fas fa-user-shield"></i></div>
+                    <div class="search-title">Background</div>
+                    <div class="search-desc">Safety check</div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="quick-actions-row">
+                <button class="quick-action-btn btn-secondary" id="reEnhanceBtn">
+                    <i class="fas fa-redo"></i> Re-Enhance
+                </button>
+                <button class="quick-action-btn btn-secondary" id="syncBtn">
+                    <i class="fas fa-sync"></i> Sync
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab: History -->
+        <div class="tab-panel" id="panel-history">
+            <div class="section-title">Enrichment History</div>
+            <div class="history-list" id="historyList">
+                <div class="empty-state" id="historyEmpty">
+                    <i class="fas fa-history"></i>
+                    <p>No enrichment history yet</p>
+                </div>
+            </div>
+        </div>
+        </div> <!-- Close content-wrapper -->
+
+        <!-- Tab Navigation - Fixed at Bottom -->
+        <div class="tab-nav">
+            <button class="tab-btn active" data-tab="lead-info">
+                <i class="fas fa-user"></i>
+                Lead
+            </button>
+            <button class="tab-btn" data-tab="ai-agent">
+                <i class="fas fa-robot"></i>
+                AI Agent
+            </button>
+            <button class="tab-btn" data-tab="enrich">
+                <i class="fas fa-search-plus"></i>
+                Enrich
+            </button>
+            <button class="tab-btn" data-tab="history">
+                <i class="fas fa-history"></i>
+                History
+            </button>
+        </div>
+    </div> <!-- Close app-container -->
+
+    <!-- Terms Modal -->
+    <div class="modal-overlay" id="termsOverlay">
+        <div class="modal-content">
+            <div class="modal-header">Terms & Conditions</div>
+            <div class="modal-body">
+                <p><strong>By using this service, you agree to:</strong></p>
+                <ul>
+                    <li>Use data only for legitimate business purposes</li>
+                    <li>Comply with TCPA, DNC, and CAN-SPAM regulations</li>
+                    <li>Not use data for FCRA-covered purposes (credit, employment, insurance)</li>
+                    <li>Perform due diligence before relying on any information</li>
+                </ul>
+                <p style="margin-top: 12px; font-size: 11px; color: var(--gray-500);">
+                    Violations may result in service termination and legal action.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" id="cancelTerms">Cancel</button>
+                <button class="btn-accept" id="acceptTerms">I Accept</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Search Modal -->
+    <div class="search-modal" id="searchModal">
+        <div class="search-modal-content">
+            <div class="search-modal-header">
+                <h3 id="searchModalTitle">Search</h3>
+                <button class="close-btn" id="closeSearchModal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="search-modal-body" id="searchModalBody">
+                <!-- Dynamic form content -->
+            </div>
+            <div class="results-section" id="resultsSection" style="display: none;">
+                <div class="section-title">Results</div>
+                <div id="resultsContent"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast-container">
+        <div class="toast" id="toast"></div>
+    </div>
+
+    <script>
+        // FUB Context
+        let fubContext = {"example": true, "user": {"email": "preview@example.com", "name": "Preview User", "id": 0}, "person": {"id": 12345, "firstName": "Jane", "lastName": "Smith", "emails": [{"value": "jane.smith@example.com"}], "phones": [{"value": "(555) 123-4567"}]}, "address": {}, "email": "jane.smith@example.com", "phone": "(555) 123-4567"};
+        let hasAcceptedTerms = false;
+        let currentReferralInfo = null;
+        let currentAIData = null;
+
+        // DOM Elements
+        const termsBadge = document.getElementById('termsBadge');
+        const termsOverlay = document.getElementById('termsOverlay');
+        const searchModal = document.getElementById('searchModal');
+        const searchGrid = document.getElementById('searchGrid');
+        const quickDncBtn = document.getElementById('quickDncBtn');
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            initFubContext();
+            loadCredits();
+            loadAILeadData();
+            loadEnrichmentInfo();
+            loadEnrichmentHistory();
+            setupEventListeners();
+            setupTabNavigation();
+        });
+
+        function setupTabNavigation() {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    // Update active tab button
+                    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+
+                    // Show corresponding panel
+                    const tabId = btn.dataset.tab;
+                    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                    document.getElementById('panel-' + tabId).classList.add('active');
+                });
+            });
+        }
+
+        function initFubContext() {
+            // Update lead info from FUB context
+            if (fubContext && fubContext.person) {
+                const person = fubContext.person;
+                const name = [person.firstName, person.lastName].filter(Boolean).join(' ') || 'Unknown Lead';
+                document.getElementById('leadName').textContent = name;
+
+                if (person.phones && person.phones.length > 0) {
+                    document.getElementById('leadPhone').innerHTML = '<i class="fas fa-phone"></i> ' + person.phones[0].value;
+                }
+
+                if (person.emails && person.emails.length > 0) {
+                    document.getElementById('leadEmail').innerHTML = '<i class="fas fa-envelope"></i> ' + person.emails[0].value;
+                }
+
+                // Check for referral source tag
+                if (person.tags) {
+                    const sourceTags = ['homelight', 'redfin', 'referral_exchange', 'agent_pronto', 'myagentfinder'];
+                    for (const tag of person.tags) {
+                        const tagLower = tag.toLowerCase().replace(/\s+/g, '_');
+                        if (sourceTags.some(s => tagLower.includes(s))) {
+                            showReferralSource(tag);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ============ AI Agent Functions ============
+        function loadAILeadData() {
+            const fubPersonId = fubContext?.person?.id;
+            if (!fubPersonId) return;
+
+            fetch('/fub/ai/lead-data?fub_person_id=' + encodeURIComponent(fubPersonId), {
+                headers: { 'X-FUB-Context': JSON.stringify(fubContext) }
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.data) {
+                    currentAIData = data.data;
+                    displayAILeadData(data.data);
+                }
+            })
+            .catch(err => console.error('Failed to load AI lead data:', err));
+        }
+
+        function displayAILeadData(data) {
+            // Update toggle
+            document.getElementById('aiToggle').checked = data.ai_enabled;
+
+            // Update score
+            document.getElementById('leadScore').textContent = data.lead_score;
+
+            // Update badge
+            const scoreBadge = document.getElementById('scoreBadge');
+            scoreBadge.textContent = data.temperature.toUpperCase();
+            scoreBadge.className = 'score-badge ' + data.temperature;
+
+            // Update progress
+            document.getElementById('qualProgress').style.width = data.qualification_progress + '%';
+            document.getElementById('qualProgressText').textContent = data.qualification_progress + '% Qualified';
+
+            // Update state
+            const stateEl = document.getElementById('conversationState');
+            stateEl.textContent = data.conversation_state.replace('_', ' ');
+            stateEl.className = 'state-badge ' + data.conversation_state;
+
+            // Update extracted info chips
+            const chipsContainer = document.getElementById('extractedInfoChips');
+            chipsContainer.innerHTML = '';
+
+            const info = data.extracted_info || {};
+            const chipData = [
+                { key: 'timeline', icon: 'clock', label: 'Timeline' },
+                { key: 'budget', icon: 'dollar-sign', label: 'Budget' },
+                { key: 'location', icon: 'map-marker-alt', label: 'Location' },
+                { key: 'pre_approved', icon: 'check-circle', label: 'Pre-approved' },
+                { key: 'motivation', icon: 'heart', label: 'Motivation' }
+            ];
+
+            chipData.forEach(chip => {
+                if (info[chip.key]) {
+                    const value = chip.key === 'pre_approved'
+                        ? (info[chip.key] ? 'Yes' : 'No')
+                        : info[chip.key];
+
+                    chipsContainer.innerHTML += `
+                        <div class="info-chip">
+                            <i class="fas fa-${chip.icon}"></i>
+                            ${chip.label}: ${value}
+                        </div>
+                    `;
+                }
+            });
+        }
+
+        function toggleAIAgent() {
+            const toggle = document.getElementById('aiToggle');
+            const enabled = toggle.checked;
+            const fubPersonId = fubContext?.person?.id;
+
+            if (!fubPersonId) {
+                showToast('No lead ID available', 'error');
+                toggle.checked = !enabled;
+                return;
+            }
+
+            fetch('/fub/ai/toggle', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-FUB-Context': JSON.stringify(fubContext)
+                },
+                body: JSON.stringify({
+                    fub_person_id: fubPersonId,
+                    enabled: enabled
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showToast(`AI Agent ${enabled ? 'enabled' : 'disabled'}`, 'success');
+                } else {
+                    showToast(data.message || 'Failed to toggle AI', 'error');
+                    toggle.checked = !enabled;
+                }
+            })
+            .catch(err => {
+                showToast('Failed to toggle AI', 'error');
+                toggle.checked = !enabled;
+            });
+        }
+
+        function generateAIResponse() {
+            const btn = document.getElementById('generateResponseBtn');
+            const preview = document.getElementById('aiResponsePreview');
+            const actions = document.getElementById('aiResponseActions');
+            const textEl = document.getElementById('aiResponseText');
+            const fubPersonId = fubContext?.person?.id;
+
+            if (!fubPersonId) {
+                showToast('No lead ID available', 'error');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<div class="loading-spinner" style="display:inline-block;width:12px;height:12px;"></div> Generating...';
+
+            fetch('/fub/ai/generate-response', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-FUB-Context': JSON.stringify(fubContext)
+                },
+                body: JSON.stringify({
+                    fub_person_id: fubPersonId
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.data) {
+                    textEl.textContent = data.data.response_text;
+                    preview.style.display = 'block';
+                    actions.style.display = 'flex';
+                } else {
+                    showToast(data.message || 'Failed to generate response', 'error');
+                }
+            })
+            .catch(err => {
+                showToast('Failed to generate response', 'error');
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-magic"></i> Get AI Suggestion';
+            });
+        }
+
+        function copyAIResponse() {
+            const text = document.getElementById('aiResponseText').textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('Copied to clipboard!', 'success');
+            }).catch(() => {
+                showToast('Failed to copy', 'error');
+            });
+        }
+
+        // ============ Enrichment Functions ============
+        function loadEnrichmentInfo() {
+            const fubPersonId = fubContext?.person?.id;
+            if (!fubPersonId) return;
+
+            fetch('/fub/lead/enrichment-info?fub_person_id=' + encodeURIComponent(fubPersonId), {
+                headers: { 'X-FUB-Context': JSON.stringify(fubContext) }
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.data && data.data.last_enhanced_at) {
+                    const date = new Date(data.data.last_enhanced_at);
+                    document.getElementById('leadUpdated').innerHTML =
+                        '<i class="fas fa-clock"></i> Last enhanced: ' + formatTimeAgo(date);
+                }
+            })
+            .catch(err => console.error('Failed to load enrichment info:', err));
+        }
+
+        function loadEnrichmentHistory() {
+            const fubPersonId = fubContext?.person?.id;
+            if (!fubPersonId) return;
+
+            fetch('/fub/lead/enrichment-history?fub_person_id=' + encodeURIComponent(fubPersonId), {
+                headers: { 'X-FUB-Context': JSON.stringify(fubContext) }
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.data && data.data.length > 0) {
+                    displayEnrichmentHistory(data.data);
+                }
+            })
+            .catch(err => console.error('Failed to load enrichment history:', err));
+        }
+
+        function displayEnrichmentHistory(history) {
+            const listEl = document.getElementById('historyList');
+            document.getElementById('historyEmpty').style.display = 'none';
+
+            const iconMap = {
+                'contact_enrichment': 'user-plus',
+                'reverse_phone_search': 'phone',
+                'reverse_email_search': 'envelope',
+                'owner_search': 'home',
+                'advanced_person_search': 'search',
+                'criminal_history_search': 'user-shield',
+                'dnc_check': 'shield-alt'
+            };
+
+            const nameMap = {
+                'contact_enrichment': 'Contact Enrichment',
+                'reverse_phone_search': 'Reverse Phone',
+                'reverse_email_search': 'Reverse Email',
+                'owner_search': 'Owner Search',
+                'advanced_person_search': 'Person Search',
+                'criminal_history_search': 'Background Check',
+                'dnc_check': 'DNC Check'
+            };
+
+            let html = '';
+            history.forEach(item => {
+                const icon = iconMap[item.search_type] || 'search';
+                const name = nameMap[item.search_type] || item.search_type;
+                const date = new Date(item.created_at);
+
+                html += `
+                    <div class="history-item">
+                        <div class="history-icon">
+                            <i class="fas fa-${icon}"></i>
+                        </div>
+                        <div class="history-content">
+                            <div class="history-title">${name}</div>
+                            <div class="history-meta">${formatTimeAgo(date)}</div>
+                            ${item.result_summary ? `<div class="history-summary">${item.result_summary}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+
+            listEl.innerHTML = html;
+        }
+
+        function reEnhanceLead() {
+            const btn = document.getElementById('reEnhanceBtn');
+            const fubPersonId = fubContext?.person?.id;
+
+            if (!fubPersonId) {
+                showToast('No lead ID available', 'error');
+                return;
+            }
+
+            if (!hasAcceptedTerms) {
+                showToast('Please accept terms first', 'error');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<div class="loading-spinner dark" style="display:inline-block;width:12px;height:12px;"></div>';
+
+            fetch('/fub/lead/re-enhance', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-FUB-Context': JSON.stringify(fubContext)
+                },
+                body: JSON.stringify({
+                    fub_person_id: fubPersonId
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showToast('Lead re-enhanced successfully!', 'success');
+                    loadCredits();
+                    loadEnrichmentInfo();
+                    loadEnrichmentHistory();
+                } else {
+                    showToast(data.message || 'Re-enhancement failed', 'error');
+                }
+            })
+            .catch(err => {
+                showToast('Re-enhancement failed', 'error');
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-redo"></i> Re-Enhance';
+            });
+        }
+
+        function syncLead() {
+            const btn = document.getElementById('syncBtn');
+            const fubPersonId = fubContext?.person?.id;
+
+            if (!fubPersonId) {
+                showToast('No lead ID available', 'error');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<div class="loading-spinner dark" style="display:inline-block;width:12px;height:12px;"></div>';
+
+            fetch('/fub/lead/sync', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-FUB-Context': JSON.stringify(fubContext)
+                },
+                body: JSON.stringify({
+                    fub_person_id: fubPersonId
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showToast('Lead synced successfully!', 'success');
+                } else {
+                    showToast(data.message || 'Sync failed', 'error');
+                }
+            })
+            .catch(err => {
+                showToast('Sync failed', 'error');
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-sync"></i> Sync';
+            });
+        }
+
+        // ============ Referral Functions ============
+        function showReferralSource(source) {
+            const sourceEl = document.getElementById('referralSource');
+            const sourceNameEl = document.getElementById('referralSourceName');
+
+            sourceEl.style.display = 'inline-flex';
+            sourceNameEl.textContent = source;
+
+            // Add color class
+            const sourceLower = source.toLowerCase();
+            if (sourceLower.includes('homelight')) sourceEl.classList.add('homelight');
+            else if (sourceLower.includes('redfin')) sourceEl.classList.add('redfin');
+            else if (sourceLower.includes('referral')) sourceEl.classList.add('referral-exchange');
+
+            // Load referral info from API
+            loadReferralInfo();
+        }
+
+        function loadReferralInfo() {
+            const fubPersonId = fubContext?.person?.id;
+            if (!fubPersonId) {
+                showNoReferralMessage();
+                return;
+            }
+
+            fetch('/fub/referral/info?fub_person_id=' + encodeURIComponent(fubPersonId), {
+                headers: { 'X-FUB-Context': JSON.stringify(fubContext) }
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.data?.has_referral_source) {
+                    currentReferralInfo = data.data;
+                    displayReferralInfo(data.data);
+                } else {
+                    showNoReferralMessage();
+                }
+            })
+            .catch(err => {
+                console.error('Failed to load referral info:', err);
+                showNoReferralMessage();
+            });
+        }
+
+        function displayReferralInfo(info) {
+            const sectionEl = document.getElementById('referralSection');
+            const platformEl = document.getElementById('referralPlatform');
+            const stageEl = document.getElementById('referralStage');
+            const feeEl = document.getElementById('referralFee');
+            const statusSelect = document.getElementById('statusSelect');
+            const expandedEl = document.querySelector('.referral-expanded');
+            const noRefEl = document.getElementById('noReferralMessage');
+
+            sectionEl.style.display = 'block';
+            expandedEl.style.display = 'block';
+            noRefEl.style.display = 'none';
+
+            platformEl.textContent = info.platform?.display_name || 'Unknown';
+            stageEl.textContent = 'Status: ' + (info.current_status || 'Unknown');
+            feeEl.textContent = (info.platform?.fee_percent || 25) + '% fee';
+
+            // Populate status dropdown
+            statusSelect.innerHTML = '<option value="">Select status...</option>';
+            if (info.available_statuses) {
+                info.available_statuses.forEach(status => {
+                    const opt = document.createElement('option');
+                    opt.value = status.value;
+                    opt.textContent = status.label;
+                    if (status.value === info.current_status) {
+                        opt.selected = true;
+                    }
+                    statusSelect.appendChild(opt);
+                });
+            }
+
+            // Enable update button when status changes
+            statusSelect.addEventListener('change', () => {
+                document.getElementById('updateStatusBtn').disabled = !statusSelect.value;
+            });
+        }
+
+        function showNoReferralMessage() {
+            const sectionEl = document.getElementById('referralSection');
+            const expandedEl = document.querySelector('.referral-expanded');
+            const noRefEl = document.getElementById('noReferralMessage');
+
+            sectionEl.style.display = 'block';
+            expandedEl.style.display = 'none';
+            noRefEl.style.display = 'block';
+        }
+
+        function updatePlatformStatus() {
+            const statusSelect = document.getElementById('statusSelect');
+            const noteInput = document.getElementById('statusNote');
+            const updateBtn = document.getElementById('updateStatusBtn');
+            const newStatus = statusSelect.value;
+
+            if (!newStatus) {
+                showToast('Please select a status', 'error');
+                return;
+            }
+
+            const fubPersonId = fubContext?.person?.id;
+            if (!fubPersonId) {
+                showToast('No lead ID available', 'error');
+                return;
+            }
+
+            updateBtn.disabled = true;
+            updateBtn.innerHTML = '<div class="loading-spinner" style="display:inline-block;width:12px;height:12px;"></div>';
+
+            fetch('/fub/referral/update-status', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-FUB-Context': JSON.stringify(fubContext)
+                },
+                body: JSON.stringify({
+                    fub_person_id: fubPersonId,
+                    new_status: newStatus,
+                    note: noteInput.value || null
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showToast('Status updated on platform!', 'success');
+                    document.getElementById('referralStage').textContent = 'Status: ' + newStatus;
+                    noteInput.value = '';
+                } else {
+                    showToast(data.message || 'Update failed', 'error');
+                }
+            })
+            .catch(err => {
+                showToast('Update failed', 'error');
+            })
+            .finally(() => {
+                updateBtn.disabled = false;
+                updateBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Update';
+            });
+        }
+
+        function logCommission() {
+            const salePriceInput = document.getElementById('salePrice');
+            const commissionBtn = document.getElementById('logCommissionBtn');
+            const salePrice = parseFloat(salePriceInput.value);
+
+            if (!salePrice || salePrice <= 0) {
+                showToast('Please enter a valid sale price', 'error');
+                return;
+            }
+
+            const fubPersonId = fubContext?.person?.id;
+            if (!fubPersonId) {
+                showToast('No lead ID available', 'error');
+                return;
+            }
+
+            commissionBtn.disabled = true;
+            commissionBtn.innerHTML = '<div class="loading-spinner" style="display:inline-block;width:12px;height:12px;"></div>';
+
+            fetch('/fub/referral/log-commission', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-FUB-Context': JSON.stringify(fubContext)
+                },
+                body: JSON.stringify({
+                    fub_person_id: fubPersonId,
+                    sale_price: salePrice,
+                    fee_percent: currentReferralInfo?.platform?.fee_percent
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    const comm = data.commission;
+                    showToast(`Commission logged: $${comm.commission_amount.toFixed(2)}`, 'success');
+                    salePriceInput.value = '';
+                    loadReferralInfo();
+                } else {
+                    showToast(data.message || 'Failed to log commission', 'error');
+                }
+            })
+            .catch(err => {
+                showToast('Failed to log commission', 'error');
+            })
+            .finally(() => {
+                commissionBtn.disabled = false;
+                commissionBtn.innerHTML = '<i class="fas fa-dollar-sign"></i> Log';
+            });
+        }
+
+        // ============ Credits & Search Functions ============
+        function loadCredits() {
+            const userEmail = fubContext?.user?.email || '';
+            if (!userEmail) return;
+
+            fetch('/fub/credits?email=' + encodeURIComponent(userEmail))
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success && data.credits) {
+                        document.getElementById('enhancementCredits').textContent = data.credits.enhancement || 0;
+                        document.getElementById('criminalCredits').textContent = data.credits.criminal || 0;
+                        document.getElementById('dncCredits').textContent = data.credits.dnc || 0;
+                    }
+                })
+                .catch(err => console.error('Failed to load credits:', err));
+        }
+
+        function performQuickDncCheck() {
+            const phone = fubContext?.person?.phones?.[0]?.value;
+            if (!phone) {
+                showToast('No phone number available', 'error');
+                return;
+            }
+
+            quickDncBtn.disabled = true;
+            quickDncBtn.innerHTML = '<div class="loading-spinner"></div> Checking...';
+
+            fetch('/fub/manual_search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-FUB-Context': JSON.stringify(fubContext)
+                },
+                body: JSON.stringify({
+                    searchType: 'dnc_check',
+                    formData: { phone: phone }
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                const resultEl = document.getElementById('dncResult');
+                if (data.success) {
+                    const isOnDnc = data.data?.on_dnc_list || false;
+                    if (isOnDnc) {
+                        resultEl.className = 'dnc-result warning';
+                        resultEl.innerHTML = '<i class="fas fa-exclamation-triangle me-1"></i> WARNING: Number is on DNC Registry';
+                    } else {
+                        resultEl.className = 'dnc-result safe';
+                        resultEl.innerHTML = '<i class="fas fa-check-circle me-1"></i> CLEAR: Not on DNC Registry';
+                    }
+                    loadCredits();
+                } else {
+                    showToast(data.message || 'DNC check failed', 'error');
+                }
+            })
+            .catch(err => {
+                showToast('DNC check failed', 'error');
+            })
+            .finally(() => {
+                quickDncBtn.disabled = false;
+                quickDncBtn.innerHTML = '<i class="fas fa-shield-alt"></i><span>Check DNC Status</span>';
+            });
+        }
+
+        function openSearchModal(searchType) {
+            const titles = {
+                'contact_enrichment': 'Contact Enrichment',
+                'reverse_phone_search': 'Reverse Phone Search',
+                'reverse_email_search': 'Reverse Email Search',
+                'owner_search': 'Property Owner Search',
+                'advanced_person_search': 'Person Search',
+                'criminal_history_search': 'Background Check'
+            };
+
+            document.getElementById('searchModalTitle').textContent = titles[searchType] || 'Search';
+            document.getElementById('searchModalBody').innerHTML = getSearchForm(searchType);
+            document.getElementById('resultsSection').style.display = 'none';
+            searchModal.classList.add('show');
+
+            // Attach form submit
+            const form = document.getElementById('searchForm');
+            if (form) {
+                form.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    executeSearch(searchType);
+                });
+            }
+        }
+
+        function getSearchForm(searchType) {
+            const person = fubContext?.person || {};
+            const phone = person.phones?.[0]?.value || '';
+            const email = person.emails?.[0]?.value || '';
+            const firstName = person.firstName || '';
+            const lastName = person.lastName || '';
+
+            switch (searchType) {
+                case 'contact_enrichment':
+                    return `
+                        <form id="searchForm">
+                            <div class="form-group">
+                                <label class="form-label">First Name</label>
+                                <input type="text" class="form-control" name="firstName" value="${firstName}">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Last Name</label>
+                                <input type="text" class="form-control" name="lastName" value="${lastName}">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Phone</label>
+                                <input type="text" class="form-control" name="phone" value="${phone}">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Email</label>
+                                <input type="email" class="form-control" name="email" value="${email}">
+                            </div>
+                            <button type="submit" class="submit-btn">Search</button>
+                        </form>
+                    `;
+                case 'reverse_phone_search':
+                    return `
+                        <form id="searchForm">
+                            <div class="form-group">
+                                <label class="form-label">Phone Number</label>
+                                <input type="text" class="form-control" name="phone" value="${phone}" required>
+                            </div>
+                            <button type="submit" class="submit-btn">Search</button>
+                        </form>
+                    `;
+                case 'reverse_email_search':
+                    return `
+                        <form id="searchForm">
+                            <div class="form-group">
+                                <label class="form-label">Email Address</label>
+                                <input type="email" class="form-control" name="email" value="${email}" required>
+                            </div>
+                            <button type="submit" class="submit-btn">Search</button>
+                        </form>
+                    `;
+                case 'owner_search':
+                    return `
+                        <form id="searchForm">
+                            <div class="form-group">
+                                <label class="form-label">Property Address</label>
+                                <input type="text" class="form-control" name="address" placeholder="123 Main St, City, State ZIP" required>
+                            </div>
+                            <button type="submit" class="submit-btn">Search</button>
+                        </form>
+                    `;
+                case 'advanced_person_search':
+                    return `
+                        <form id="searchForm">
+                            <div class="form-group">
+                                <label class="form-label">First Name</label>
+                                <input type="text" class="form-control" name="firstName" value="${firstName}" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Last Name</label>
+                                <input type="text" class="form-control" name="lastName" value="${lastName}" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">City (optional)</label>
+                                <input type="text" class="form-control" name="city">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">State (optional)</label>
+                                <input type="text" class="form-control" name="state" maxlength="2" placeholder="CA">
+                            </div>
+                            <button type="submit" class="submit-btn">Search</button>
+                        </form>
+                    `;
+                case 'criminal_history_search':
+                    return `
+                        <form id="searchForm">
+                            <div class="form-group">
+                                <label class="form-label">First Name</label>
+                                <input type="text" class="form-control" name="firstName" value="${firstName}" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Last Name</label>
+                                <input type="text" class="form-control" name="lastName" value="${lastName}" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">State (optional)</label>
+                                <input type="text" class="form-control" name="state" maxlength="2" placeholder="CA">
+                            </div>
+                            <button type="submit" class="submit-btn">Run Background Check</button>
+                        </form>
+                    `;
+                default:
+                    return '<p>Search not available</p>';
+            }
+        }
+
+        function executeSearch(searchType) {
+            const form = document.getElementById('searchForm');
+            const formData = Object.fromEntries(new FormData(form));
+            const submitBtn = form.querySelector('.submit-btn');
+
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<div class="loading-spinner" style="display:inline-block;margin-right:8px;"></div> Searching...';
+
+            fetch('/fub/manual_search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-FUB-Context': JSON.stringify(fubContext)
+                },
+                body: JSON.stringify({
+                    searchType: searchType,
+                    formData: formData
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    displayResults(data.data);
+                    loadCredits();
+                    loadEnrichmentHistory();
+                    showToast('Search completed!', 'success');
+                } else {
+                    showToast(data.message || 'Search failed', 'error');
+                }
+            })
+            .catch(err => {
+                showToast('Search failed', 'error');
+            })
+            .finally(() => {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Search';
+            });
+        }
+
+        function displayResults(data) {
+            const resultsSection = document.getElementById('resultsSection');
+            const resultsContent = document.getElementById('resultsContent');
+
+            if (!data || Object.keys(data).length === 0) {
+                resultsContent.innerHTML = '<p style="color: var(--gray-500);">No results found</p>';
+            } else {
+                let html = '';
+
+                if (data.persons && data.persons.length > 0) {
+                    const person = data.persons[0];
+                    if (person.name) {
+                        html += `<div class="result-card"><div class="result-label">Name</div><div class="result-value">${person.name}</div></div>`;
+                    }
+                    if (person.phones && person.phones.length > 0) {
+                        html += `<div class="result-card"><div class="result-label">Phone(s)</div><div class="result-value">${person.phones.join(', ')}</div></div>`;
+                    }
+                    if (person.emails && person.emails.length > 0) {
+                        html += `<div class="result-card"><div class="result-label">Email(s)</div><div class="result-value">${person.emails.join(', ')}</div></div>`;
+                    }
+                    if (person.addresses && person.addresses.length > 0) {
+                        html += `<div class="result-card"><div class="result-label">Address(es)</div><div class="result-value">${person.addresses.join('<br>')}</div></div>`;
+                    }
+                } else {
+                    for (const [key, value] of Object.entries(data)) {
+                        if (value && typeof value !== 'object') {
+                            const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                            html += `<div class="result-card"><div class="result-label">${label}</div><div class="result-value">${value}</div></div>`;
+                        }
+                    }
+                }
+
+                resultsContent.innerHTML = html || '<p>Results received - check console for details</p>';
+                console.log('Search results:', data);
+            }
+
+            resultsSection.style.display = 'block';
+        }
+
+        // ============ Utility Functions ============
+        function setupEventListeners() {
+            // Terms badge
+            termsBadge.addEventListener('click', () => {
+                if (!hasAcceptedTerms) {
+                    termsOverlay.classList.add('show');
+                }
+            });
+
+            // Cancel terms
+            document.getElementById('cancelTerms').addEventListener('click', () => {
+                termsOverlay.classList.remove('show');
+            });
+
+            // Accept terms
+            document.getElementById('acceptTerms').addEventListener('click', acceptTerms);
+
+            // Search cards
+            document.querySelectorAll('.search-card').forEach(card => {
+                card.addEventListener('click', () => {
+                    if (!hasAcceptedTerms) {
+                        showToast('Please accept terms first', 'error');
+                        return;
+                    }
+                    openSearchModal(card.dataset.search);
+                });
+            });
+
+            // Close search modal
+            document.getElementById('closeSearchModal').addEventListener('click', () => {
+                searchModal.classList.remove('show');
+            });
+
+            // Quick DNC check
+            quickDncBtn.addEventListener('click', performQuickDncCheck);
+
+            // Referral actions
+            document.getElementById('updateStatusBtn').addEventListener('click', updatePlatformStatus);
+            document.getElementById('logCommissionBtn').addEventListener('click', logCommission);
+
+            // AI Agent
+            document.getElementById('aiToggle').addEventListener('change', toggleAIAgent);
+            document.getElementById('generateResponseBtn').addEventListener('click', generateAIResponse);
+            document.getElementById('copyResponseBtn').addEventListener('click', copyAIResponse);
+
+            // Enrichment actions
+            document.getElementById('reEnhanceBtn').addEventListener('click', reEnhanceLead);
+            document.getElementById('syncBtn').addEventListener('click', syncLead);
+        }
+
+        function acceptTerms() {
+            const userEmail = fubContext?.user?.email || '';
+            const userName = fubContext?.user?.name || '';
+
+            fetch('/fub/accept_terms', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agent_email: userEmail, agent_name: userName })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.message) {
+                    hasAcceptedTerms = true;
+                    termsOverlay.classList.remove('show');
+                    termsBadge.classList.add('accepted');
+                    termsBadge.innerHTML = '<i class="fas fa-check-circle me-1"></i> Terms Accepted';
+                    searchGrid.classList.remove('disabled');
+                    quickDncBtn.disabled = false;
+                    showToast('Terms accepted!', 'success');
+                }
+            })
+            .catch(err => {
+                showToast('Failed to accept terms', 'error');
+            });
+        }
+
+        function showToast(message, type = '') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast show ' + type;
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        function formatTimeAgo(date) {
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000);
+
+            if (diff < 60) return 'Just now';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+            if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+            return date.toLocaleDateString();
+        }
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
