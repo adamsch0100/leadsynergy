@@ -63,6 +63,12 @@ def send_scheduled_message(
         compliance = ComplianceChecker(supabase)
         sms_service = FUBSMSService()
 
+        # Get message record to retrieve organization_id
+        msg_record = supabase.table("scheduled_messages").select("organization_id").eq(
+            "id", message_id
+        ).single().execute()
+        organization_id = msg_record.data.get("organization_id")
+
         # Get lead info from FUB
         from app.database.fub_api_client import FUBApiClient
         fub = FUBApiClient()
@@ -79,13 +85,14 @@ def send_scheduled_message(
         # Check compliance
         if channel == "sms":
             compliance_result = asyncio.run(
-                compliance.check_send_allowed(
-                    phone_number=lead_profile.phone,
+                compliance.check_sms_compliance(
                     fub_person_id=fub_person_id,
+                    organization_id=organization_id,
+                    phone_number=lead_profile.phone,
                 )
             )
 
-            if compliance_result.status.value != "allowed":
+            if not compliance_result.can_send:
                 logger.warning(f"Compliance blocked: {compliance_result.reason}")
                 _mark_message_failed(supabase, message_id, f"Compliance: {compliance_result.reason}")
                 return {"success": False, "error": compliance_result.reason}
