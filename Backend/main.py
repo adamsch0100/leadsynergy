@@ -1,3 +1,4 @@
+"""LeadSynergy Backend API - Main entry point"""
 from flask import Flask, jsonify, request
 from app.webhook.fub_webhook_f import (
     webhook_stage_updated_handler,
