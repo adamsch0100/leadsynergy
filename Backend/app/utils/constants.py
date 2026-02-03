@@ -42,8 +42,8 @@ class Credentials:
         self.GMAIL_APP_PASSWORD = os.getenv('GMAIL_APP_PASSWORD')
 
         # AI Agent System credentials for FUB API identification
-        self.AI_AGENT_SYSTEM_NAME = os.getenv('AI_AGENT_SYSTEM_NAME', 'leadsynergy-ai')
-        self.AI_AGENT_SYSTEM_KEY = os.getenv('AI_AGENT_SYSTEM_KEY')
+        self.AI_AGENT_SYSTEM_NAME = os.getenv('FUB_SYSTEM_NAME', 'leadsynergy-ai')
+        self.AI_AGENT_SYSTEM_KEY = os.getenv('FUB_SYSTEM_KEY')
 
         # FUB Web Login Credentials (for Playwright browser automation)
         self.FUB_LOGIN_EMAIL = os.getenv('FUB_LOGIN_EMAIL')
