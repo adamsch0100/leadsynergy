@@ -87,6 +87,26 @@ class FUBSMSService:
             self.creds.get('FUB_SYSTEM_KEY'),
         )
 
+        # Get agent's phone number for fromNumber field
+        from_number = None
+        if from_user_id or self.user_id:
+            agent_user_id = from_user_id or self.user_id
+            try:
+                # Fetch agent's user profile from FUB to get their phone number
+                user_response = requests.get(
+                    f"{self.base_url}users/{agent_user_id}",
+                    headers={"Authorization": self.auth_header},
+                    timeout=10,
+                )
+                if user_response.status_code == 200:
+                    user_data = user_response.json()
+                    phones = user_data.get("phones", [])
+                    if phones:
+                        from_number = phones[0].get("value")
+                        logger.info(f"Using agent phone number: {from_number}")
+            except Exception as e:
+                logger.warning(f"Could not fetch agent phone number: {e}")
+
         # Build request payload
         payload = {
             "personId": person_id,
@@ -94,11 +114,11 @@ class FUBSMSService:
             "isIncoming": False,  # Outbound message
         }
 
-        # Add sender user if specified
-        if from_user_id or self.user_id:
-            payload["userId"] = from_user_id or self.user_id
+        # Add fromNumber (agent's phone)
+        if from_number:
+            payload["fromNumber"] = from_number
 
-        # Add specific phone if provided
+        # Add specific phone if provided (recipient)
         if phone_number:
             payload["toNumber"] = phone_number
 
