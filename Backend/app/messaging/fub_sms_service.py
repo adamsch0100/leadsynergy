@@ -100,7 +100,7 @@ class FUBSMSService:
 
         # Add specific phone if provided
         if phone_number:
-            payload["to"] = phone_number
+            payload["toNumber"] = phone_number
 
         try:
             response = requests.post(
