@@ -54,12 +54,12 @@ def send_scheduled_message(
     from app.ai_agent import LeadProfile
     from app.ai_agent.compliance_checker import ComplianceChecker
     from app.messaging.fub_sms_service import FUBSMSService
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
 
     logger.info(f"Sending scheduled message {message_id} to person {fub_person_id}")
 
     try:
-        supabase = get_supabase_client()
+        supabase = SupabaseClientSingleton.get_instance()
         compliance = ComplianceChecker(supabase)
         sms_service = FUBSMSService()
 
@@ -181,12 +181,12 @@ def process_off_hours_queue(self):
     Process the off-hours message queue and send due messages via Playwright.
     Run this task every 5 minutes during 8-10 AM to send queued messages.
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
 
     logger.info("Processing off-hours message queue...")
 
     try:
-        supabase = get_supabase_client()
+        supabase = SupabaseClientSingleton.get_instance()
         now = datetime.utcnow().isoformat()
 
         # Get pending messages where scheduled_for has passed
@@ -292,14 +292,14 @@ def process_ai_response(
         LeadProfile,
         ProcessingResult,
     )
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
     from app.fub.fub_client import FUBClient
     from app.messaging.fub_sms_service import FUBSMSService
 
     logger.info(f"Processing AI response for person {fub_person_id}")
 
     try:
-        supabase = get_supabase_client()
+        supabase = SupabaseClientSingleton.get_instance()
         fub = FUBClient()
         sms_service = FUBSMSService()
 
@@ -393,11 +393,11 @@ def start_new_lead_sequence(
         fub_person_id: FUB person ID
         sequence_type: Type of sequence to start
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
 
     logger.info(f"Starting {sequence_type} sequence for person {fub_person_id}")
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClientSingleton.get_instance()
 
     # Check if already in a sequence
     existing = supabase.table("scheduled_messages").select("id").eq(
@@ -465,11 +465,11 @@ def start_nurture_sequence(
         fub_person_id: FUB person ID
         cadence_type: Type of nurture cadence
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
 
     logger.info(f"Starting {cadence_type} nurture for person {fub_person_id}")
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClientSingleton.get_instance()
 
     # Get nurture sequence
     sequence = NURTURE_SEQUENCES.get(cadence_type)
@@ -527,11 +527,11 @@ def cancel_lead_sequences(self, fub_person_id: int, reason: str = None):
         fub_person_id: FUB person ID
         reason: Reason for cancellation
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
 
     logger.info(f"[CANCEL] Cancelling sequences for person {fub_person_id} (reason: {reason or 'lead_responded'})")
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClientSingleton.get_instance()
     total_cancelled = 0
 
     # Cancel from scheduled_messages table
@@ -601,12 +601,12 @@ def check_dormant_lead(self, fub_person_id: int):
     Args:
         fub_person_id: FUB person ID
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
     from app.ai_agent.settings_service import get_settings_service
 
     logger.info(f"Checking if lead {fub_person_id} is dormant")
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClientSingleton.get_instance()
 
     # Get conversation state
     conv_result = supabase.table("ai_conversations").select("*").eq(
@@ -741,7 +741,7 @@ def send_re_engagement_message(self, fub_person_id: int, attempt_number: int = 1
         fub_person_id: FUB person ID
         attempt_number: Which re-engagement attempt this is (1, 2, 3...)
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
     from app.messaging.fub_sms_service import FUBSMSService
     from app.ai_agent.template_engine import get_template_engine
     from app.ai_agent.compliance_checker import ComplianceChecker
@@ -751,7 +751,7 @@ def send_re_engagement_message(self, fub_person_id: int, attempt_number: int = 1
 
     logger.info(f"Sending re-engagement message #{attempt_number} to person {fub_person_id}")
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClientSingleton.get_instance()
     sms_service = FUBSMSService()
     template_engine = get_template_engine()
     fub = FUBClient()
@@ -983,13 +983,13 @@ def send_appointment_reminder(
         appointment_id: ID of the appointment
         reminder_type: 'day_before', 'hour_before', etc.
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
     from app.messaging.fub_sms_service import FUBSMSService
     from app.ai_agent.template_engine import get_template_engine
 
     logger.info(f"Sending {reminder_type} reminder for appointment {appointment_id}")
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClientSingleton.get_instance()
     sms_service = FUBSMSService()
     template_engine = get_template_engine()
 
@@ -1053,9 +1053,9 @@ def schedule_appointment_reminders(self, appointment_id: str):
     Args:
         appointment_id: ID of the appointment
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClientSingleton.get_instance()
 
     # Get appointment
     apt_result = supabase.table("ai_appointments").select("*").eq(
@@ -1104,9 +1104,9 @@ def process_pending_messages(self):
 
     This is a periodic task that runs every minute.
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClientSingleton.get_instance()
     now = datetime.utcnow()
 
     # Get all due messages
@@ -1143,9 +1143,9 @@ def cleanup_old_messages(self, days_old: int = 30):
     Args:
         days_old: Delete messages older than this many days
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import SupabaseClientSingleton
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClientSingleton.get_instance()
     cutoff = datetime.utcnow() - timedelta(days=days_old)
 
     # Delete old sent/cancelled messages
@@ -1732,7 +1732,7 @@ def trigger_instant_ai_response(
     )
 
     try:
-        from app.database.supabase_client import get_supabase_client
+        from app.database.supabase_client import SupabaseClientSingleton
         from app.ai_agent.settings_service import get_settings_service
         from app.ai_agent.followup_manager import get_followup_manager, FollowUpTrigger
         from app.ai_agent.compliance_checker import ComplianceChecker
@@ -1740,7 +1740,7 @@ def trigger_instant_ai_response(
         from app.fub.fub_client import FUBClient
         import random
 
-        supabase = get_supabase_client()
+        supabase = SupabaseClientSingleton.get_instance()
 
         # Load settings for channel toggles and configuration
         settings_service = get_settings_service(supabase)
