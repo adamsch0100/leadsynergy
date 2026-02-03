@@ -178,6 +178,7 @@ def send_scheduled_message(
             result = sms_service.send_text_message(
                 person_id=fub_person_id,
                 message=final_message,
+                phone_number=lead_profile.phone,
             )
         else:
             # Email sending would go here
@@ -373,6 +374,7 @@ def process_ai_response(
                 send_result = sms_service.send_text_message(
                     person_id=fub_person_id,
                     message=response.response_text,
+                    phone_number=lead_profile.phone,
                 )
 
                 if not send_result.get("success"):
@@ -907,6 +909,7 @@ def send_re_engagement_message(self, fub_person_id: int, attempt_number: int = 1
         result = sms_service.send_text_message(
             person_id=fub_person_id,
             message=message,
+            phone_number=phone,
         )
     else:  # email
         from app.email.email_service import EmailService
@@ -1058,10 +1061,15 @@ def send_appointment_reminder(
         first_name=person.get("firstName", "there"),
     )
 
+    # Get phone number
+    phones = person.get("phones", [])
+    phone_number = phones[0].get("value") if phones else None
+
     # Send reminder
     result = sms_service.send_text_message(
         person_id=appointment["fub_person_id"],
         message=message,
+        phone_number=phone_number,
     )
 
     if result.get("success"):
@@ -1886,6 +1894,7 @@ def trigger_instant_ai_response(
         result = sms_service.send_text_message(
             person_id=fub_person_id,
             message=message,
+            phone_number=phone,
         )
 
         if result.get("success"):

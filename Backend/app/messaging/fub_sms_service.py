@@ -83,8 +83,8 @@ class FUBSMSService:
             Exception if message fails to send
         """
         headers = self._get_headers(
-            self.creds.get('AI_AGENT_SYSTEM_NAME', 'leadsynergy-ai'),
-            self.creds.get('AI_AGENT_SYSTEM_KEY'),
+            self.creds.get('FUB_SYSTEM_NAME', 'leadsynergy-ai'),
+            self.creds.get('FUB_SYSTEM_KEY'),
         )
 
         # Build request payload
@@ -154,8 +154,8 @@ class FUBSMSService:
             Dict with message details
         """
         headers = self._get_headers(
-            self.creds.get('AI_AGENT_SYSTEM_NAME', 'leadsynergy-ai'),
-            self.creds.get('AI_AGENT_SYSTEM_KEY'),
+            self.creds.get('FUB_SYSTEM_NAME', 'leadsynergy-ai'),
+            self.creds.get('FUB_SYSTEM_KEY'),
         )
 
         payload = {
@@ -168,7 +168,7 @@ class FUBSMSService:
             payload["userId"] = from_user_id or self.user_id
 
         if phone_number:
-            payload["to"] = phone_number
+            payload["toNumber"] = phone_number
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -348,8 +348,8 @@ class FUBSMSService:
             Dict with note details
         """
         headers = self._get_headers(
-            self.creds.get('AI_AGENT_SYSTEM_NAME', 'leadsynergy-ai'),
-            self.creds.get('AI_AGENT_SYSTEM_KEY'),
+            self.creds.get('FUB_SYSTEM_NAME', 'leadsynergy-ai'),
+            self.creds.get('FUB_SYSTEM_KEY'),
         )
 
         payload = {
