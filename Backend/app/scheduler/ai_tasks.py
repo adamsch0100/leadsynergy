@@ -64,8 +64,8 @@ def send_scheduled_message(
         sms_service = FUBSMSService()
 
         # Get lead info from FUB
-        from app.fub.fub_client import FUBClient
-        fub = FUBClient()
+        from app.database.fub_api_client import FUBApiClient
+        fub = FUBApiClient()
         person_data = fub.get_person(fub_person_id)
 
         if not person_data:
@@ -293,14 +293,14 @@ def process_ai_response(
         ProcessingResult,
     )
     from app.database.supabase_client import SupabaseClientSingleton
-    from app.fub.fub_client import FUBClient
+    from app.database.fub_api_client import FUBApiClient
     from app.messaging.fub_sms_service import FUBSMSService
 
     logger.info(f"Processing AI response for person {fub_person_id}")
 
     try:
         supabase = SupabaseClientSingleton.get_instance()
-        fub = FUBClient()
+        fub = FUBApiClient()
         sms_service = FUBSMSService()
 
         # Get person data from FUB
@@ -745,7 +745,7 @@ def send_re_engagement_message(self, fub_person_id: int, attempt_number: int = 1
     from app.messaging.fub_sms_service import FUBSMSService
     from app.ai_agent.template_engine import get_template_engine
     from app.ai_agent.compliance_checker import ComplianceChecker
-    from app.fub.fub_client import FUBClient
+    from app.database.fub_api_client import FUBApiClient
     from app.ai_agent.settings_service import get_settings_service
     import asyncio
 
@@ -754,7 +754,7 @@ def send_re_engagement_message(self, fub_person_id: int, attempt_number: int = 1
     supabase = SupabaseClientSingleton.get_instance()
     sms_service = FUBSMSService()
     template_engine = get_template_engine()
-    fub = FUBClient()
+    fub = FUBApiClient()
 
     # Get person data
     person_data = fub.get_person(fub_person_id)
@@ -1010,8 +1010,8 @@ def send_appointment_reminder(
         return {"success": True, "already_sent": True}
 
     # Get lead info
-    from app.fub.fub_client import FUBClient
-    fub = FUBClient()
+    from app.database.fub_api_client import FUBApiClient
+    fub = FUBApiClient()
     person = fub.get_person(appointment["fub_person_id"])
 
     if not person:
@@ -1737,7 +1737,7 @@ def trigger_instant_ai_response(
         from app.ai_agent.followup_manager import get_followup_manager, FollowUpTrigger
         from app.ai_agent.compliance_checker import ComplianceChecker
         from app.messaging.fub_sms_service import FUBSMSService
-        from app.fub.fub_client import FUBClient
+        from app.database.fub_api_client import FUBApiClient
         import random
 
         supabase = SupabaseClientSingleton.get_instance()
@@ -1752,7 +1752,7 @@ def trigger_instant_ai_response(
             return {"success": False, "reason": "instant_response_disabled"}
 
         # Get person data from FUB
-        fub = FUBClient()
+        fub = FUBApiClient()
         person_data = fub.get_person(fub_person_id)
 
         if not person_data:
