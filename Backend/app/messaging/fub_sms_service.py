@@ -100,9 +100,14 @@ class FUBSMSService:
                 )
                 if user_response.status_code == 200:
                     user_data = user_response.json()
-                    phones = user_data.get("phones", [])
-                    if phones:
-                        from_number = phones[0].get("value")
+                    # FUB user profile has phone in direct field, not phones array
+                    phone = user_data.get("phone")
+                    if phone:
+                        # Format as E.164 if not already (add +1 for US numbers)
+                        if not phone.startswith('+'):
+                            from_number = f"+1{phone}"
+                        else:
+                            from_number = phone
                         logger.info(f"Using agent phone number: {from_number}")
             except Exception as e:
                 logger.warning(f"Could not fetch agent phone number: {e}")
