@@ -655,6 +655,34 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         )
         logger.info(f"Conversation context ready, state: {context.state}")
 
+        # CRITICAL: Skip AI responses if conversation has been handed off to human agent
+        # Once handed off, the human agent owns the conversation thread
+        if context.state == ConversationState.HANDED_OFF:
+            logger.info(f"Conversation {context.conversation_id} is HANDED_OFF - skipping AI response. Human agent will handle.")
+
+            # Still log the inbound message for history
+            await log_ai_message(
+                conversation_id=context.conversation_id,
+                fub_person_id=person_id,
+                direction="inbound",
+                channel="sms",
+                message_content=message_content,
+                extracted_data={"state": "handed_off", "skipped_ai_response": True},
+            )
+
+            # Cancel any pending automation
+            try:
+                from app.scheduler.ai_tasks import cancel_lead_sequences
+                cancel_lead_sequences.delay(
+                    fub_person_id=person_id,
+                    reason="Conversation handed off - human agent handling",
+                )
+            except Exception:
+                pass
+
+            logger.info(f"Skipped AI response for handed-off conversation {person_id}")
+            return  # Exit early - let human agent handle
+
         # Record inbound message in context
         context.add_message("inbound", message_content, "sms")
 
