@@ -354,15 +354,15 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             return
 
         # ============================================
-        # PHONE NUMBER FILTER CHECK
+        # PHONE NUMBER FILTER CHECK (BLACKLIST)
         # ============================================
-        # If ai_respond_to_phone_numbers is configured, only respond to
-        # messages received on those specific FUB phone numbers.
-        # This allows agents to limit AI responses to their personal inbox
-        # and exclude leads, sign calls, website, etc.
+        # If ai_respond_to_phone_numbers is configured, IGNORE messages
+        # received on those specific FUB phone numbers (blacklist).
+        # This allows teams to exclude certain numbers (sign calls, website leads, etc.)
+        # while responding to everything else.
         # ============================================
-        allowed_phone_numbers = ai_settings.ai_respond_to_phone_numbers or []
-        if allowed_phone_numbers and to_number:
+        blocked_phone_numbers = ai_settings.ai_respond_to_phone_numbers or []
+        if blocked_phone_numbers and to_number:
             # Normalize the to_number for comparison
             # FUB may send it in various formats: +1XXXXXXXXXX, (XXX) XXX-XXXX, etc.
             import re
@@ -371,22 +371,22 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 normalized_to = '1' + normalized_to
             normalized_to = '+' + normalized_to if not normalized_to.startswith('+') else normalized_to
 
-            # Check if normalized_to matches any allowed number
-            is_allowed = False
-            for allowed in allowed_phone_numbers:
-                normalized_allowed = re.sub(r'[^\d]', '', allowed)
-                if not normalized_allowed.startswith('1') and len(normalized_allowed) == 10:
-                    normalized_allowed = '1' + normalized_allowed
-                normalized_allowed = '+' + normalized_allowed if not normalized_allowed.startswith('+') else normalized_allowed
+            # Check if normalized_to matches any blocked number (BLACKLIST)
+            is_blocked = False
+            for blocked in blocked_phone_numbers:
+                normalized_blocked = re.sub(r'[^\d]', '', blocked)
+                if not normalized_blocked.startswith('1') and len(normalized_blocked) == 10:
+                    normalized_blocked = '1' + normalized_blocked
+                normalized_blocked = '+' + normalized_blocked if not normalized_blocked.startswith('+') else normalized_blocked
 
-                if normalized_to == normalized_allowed:
-                    is_allowed = True
+                if normalized_to == normalized_blocked:
+                    is_blocked = True
                     break
 
-            if not is_allowed:
+            if is_blocked:
                 logger.info(
                     f"Skipping person {person_id} - message received on phone {to_number} "
-                    f"which is not in allowed list: {allowed_phone_numbers}"
+                    f"which is in blocked list: {blocked_phone_numbers}"
                 )
                 await log_ai_message(
                     conversation_id=None,
@@ -396,14 +396,14 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                     message_content=message_content,
                     extracted_data={
                         "ai_disabled": True,
-                        "reason": f"Phone number {to_number} not in allowed list",
+                        "reason": f"Phone number {to_number} in blocked list",
                         "to_number": to_number,
-                        "allowed_numbers": allowed_phone_numbers,
+                        "blocked_numbers": blocked_phone_numbers,
                     },
                 )
                 return
 
-            logger.info(f"Phone number {to_number} is in allowed list - proceeding with AI response")
+            logger.info(f"Phone number {to_number} is not blocked - proceeding with AI response")
 
         # Global is ON - now check per-lead setting (OPT-IN model)
         from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
