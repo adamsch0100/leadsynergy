@@ -3090,11 +3090,15 @@ def trigger_immediate_sync(source_id):
         import uuid
         import threading
         from app.service.sync_status_tracker import get_tracker
-        
+
         # Get user ID from headers
         user_id = request.headers.get('X-User-ID')
         if not user_id:
             return jsonify({"success": False, "error": "User ID not provided"}), 400
+
+        # Check if force_sync is requested (bypasses minimum interval)
+        request_data = request.get_json() if request.is_json else {}
+        force_sync = request_data.get('force_sync', False)
 
         # Get the lead source
         source = lead_source_service.get_by_id(source_id)
@@ -3147,10 +3151,10 @@ def trigger_immediate_sync(source_id):
         # Run sync in background thread
         def run_sync():
             try:
-                logger.info(f"Starting background sync for {source_name} - {len(leads)} leads")
+                logger.info(f"Starting background sync for {source_name} - {len(leads)} leads (force_sync={force_sync})")
                 # Use generic sync method that handles all platforms
                 lead_source_service.sync_all_sources_bulk_with_tracker(
-                    sync_id, source_name, leads, user_id, tracker
+                    sync_id, source_name, leads, user_id, tracker, force_sync=force_sync
                 )
             except Exception as e:
                 logger.error(f"Error in background sync: {str(e)}", exc_info=True)

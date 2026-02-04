@@ -471,6 +471,19 @@ class AIAgentService:
                     lead_profile=lead_profile,
                 )
 
+                # Schedule fallback monitoring (3h + 24h checks)
+                try:
+                    from app.ai_agent.handoff_monitor import schedule_handoff_monitoring
+                    await schedule_handoff_monitoring(
+                        fub_person_id=fub_person_id,
+                        conversation_id=conversation_context.conversation_id if conversation_context else str(fub_person_id),
+                        handoff_reason=f"Smart trigger: {handoff_trigger}",
+                        organization_id=getattr(self.settings, 'organization_id', 'default'),
+                    )
+                    logger.info(f"Scheduled handoff monitoring for person {fub_person_id}")
+                except Exception as e:
+                    logger.error(f"Failed to schedule handoff monitoring: {e}")
+
                 # Get world-class acknowledgment message
                 # Use human agent name for handoff, pass AI name to avoid confusion
                 human_agent_name = lead_profile.assigned_agent or "your agent"
@@ -862,8 +875,19 @@ class AIAgentService:
                     lead_profile=lead_profile,
                 )
                 logger.info(f"Created handoff task for person {fub_person_id}: {reason}")
+
+                # Schedule fallback monitoring (3h + 24h checks)
+                from app.ai_agent.handoff_monitor import schedule_handoff_monitoring
+                await schedule_handoff_monitoring(
+                    fub_person_id=fub_person_id,
+                    conversation_id=response.conversation_id or str(fub_person_id),
+                    handoff_reason=reason,
+                    organization_id=getattr(self.settings, 'organization_id', 'default'),
+                )
+                logger.info(f"Scheduled handoff monitoring for person {fub_person_id}")
+
             except Exception as e:
-                logger.error(f"Failed to create handoff task: {e}")
+                logger.error(f"Failed to create handoff task or schedule monitoring: {e}")
                 # Don't fail the handoff just because task creation failed
 
         # Get handoff message

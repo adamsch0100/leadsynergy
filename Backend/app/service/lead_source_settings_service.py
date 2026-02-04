@@ -822,12 +822,13 @@ class LeadSourceSettingsService:
             }
 
     def sync_homelight_bulk_with_tracker(
-        self, 
-        sync_id: str, 
-        source_name: str, 
-        leads: List, 
-        user_id: str, 
-        tracker
+        self,
+        sync_id: str,
+        source_name: str,
+        leads: List,
+        user_id: str,
+        tracker,
+        force_sync: bool = False
     ) -> None:
         """Sync HomeLight leads with progress tracking (runs in background)"""
         try:
@@ -848,24 +849,30 @@ class LeadSourceSettingsService:
                     min_sync_interval_hours = metadata.get("min_sync_interval_hours", 168)
                 except:
                     pass
-            
-            tracker.update_progress(
-                sync_id,
-                message=f"Checking min sync interval: {min_sync_interval_hours}h"
-            )
-            
-            # Filter leads to skip recently synced ones
+
+            if force_sync:
+                tracker.update_progress(
+                    sync_id,
+                    message=f"🔄 Force sync - bypassing {min_sync_interval_hours}h minimum interval"
+                )
+            else:
+                tracker.update_progress(
+                    sync_id,
+                    message=f"Checking min sync interval: {min_sync_interval_hours}h"
+                )
+
+            # Filter leads to skip recently synced ones (unless force_sync is True)
             from datetime import datetime, timedelta, timezone
             now = datetime.now(timezone.utc)
             cutoff_time = now - timedelta(hours=min_sync_interval_hours)
-            
+
             filtered_leads = []
             skipped_leads = []
 
             for lead in leads:
-                # Check if lead was recently synced
+                # Check if lead was recently synced (skip this check if force_sync is True)
                 last_synced = None
-                if lead.metadata and isinstance(lead.metadata, dict):
+                if not force_sync and lead.metadata and isinstance(lead.metadata, dict):
                     last_synced_str = lead.metadata.get("homelight_last_updated")
                     if last_synced_str:
                         try:
@@ -878,8 +885,8 @@ class LeadSourceSettingsService:
                         except Exception as e:
                             last_synced = None
 
-                # Skip if synced recently
-                if last_synced and last_synced > cutoff_time:
+                # Skip if synced recently (only if not force_sync)
+                if not force_sync and last_synced and last_synced > cutoff_time:
                     hours_since = (now - last_synced).total_seconds() / 3600
                     skipped_leads.append({
                         "lead_id": lead.id,
@@ -904,6 +911,32 @@ class LeadSourceSettingsService:
             )
 
             if not filtered_leads:
+                # Add a clear message about why no leads are being processed
+                import time
+                if skipped_leads and not force_sync:
+                    tracker.update_progress(
+                        sync_id,
+                        message=f"⚠️ All {len(skipped_leads)} leads were synced within the last {min_sync_interval_hours} hours"
+                    )
+                    time.sleep(0.5)  # Give frontend time to receive the message
+                    tracker.update_progress(
+                        sync_id,
+                        message=f"No updates needed - all leads are up to date. Use 'Force Sync' to override."
+                    )
+                elif not skipped_leads:
+                    tracker.update_progress(
+                        sync_id,
+                        message=f"⚠️ No leads have mapped stages configured for {source_name}"
+                    )
+                else:
+                    # Force sync was used but still no leads to process
+                    tracker.update_progress(
+                        sync_id,
+                        message=f"⚠️ No leads have mapped stages configured for {source_name}"
+                    )
+
+                time.sleep(1)  # Give frontend time to display messages before completing
+
                 tracker.complete_sync(
                     sync_id,
                     results={
@@ -911,7 +944,7 @@ class LeadSourceSettingsService:
                         "failed": 0,
                         "filter_summary": {
                             "total_leads": len(leads),
-                            "skipped_recently_synced": len(skipped_leads),
+                            "skipped_recently_synced": len(skipped_leads) if not force_sync else 0,
                             "will_process": 0
                         },
                         "details": []
@@ -965,7 +998,8 @@ class LeadSourceSettingsService:
         leads: List,
         user_id: str,
         tracker,
-        min_sync_interval_hours: int = 168
+        min_sync_interval_hours: int = 168,
+        force_sync: bool = False
     ) -> None:
         """Sync ReferralExchange leads with progress tracking (bulk - login once)"""
         try:
@@ -1055,11 +1089,13 @@ class LeadSourceSettingsService:
             tracker.update_progress(sync_id, message=f"TEST_DEBUG_V3: Creating service for {template_lead.first_name} {template_lead.last_name}...")
 
             try:
+                # Set min_sync_interval to 0 if force_sync to bypass filtering
+                effective_min_interval = 0 if force_sync else min_sync_interval_hours
                 service = ReferralExchangeService(
                     lead=template_lead,
                     status=template_status,
                     organization_id=template_lead.organization_id,
-                    min_sync_interval_hours=min_sync_interval_hours
+                    min_sync_interval_hours=effective_min_interval
                 )
                 driver_status = "initialized" if service.driver_service.driver else "NOT INITIALIZED"
                 creds_status = "loaded" if service.email and service.password else "MISSING"
@@ -1098,7 +1134,8 @@ class LeadSourceSettingsService:
         leads: List,
         user_id: str,
         tracker,
-        min_sync_interval_hours: int = 168
+        min_sync_interval_hours: int = 168,
+        force_sync: bool = False
     ) -> None:
         """Sync Redfin leads with progress tracking (bulk - login once)"""
         try:
@@ -1361,7 +1398,8 @@ class LeadSourceSettingsService:
         leads: List,
         user_id: str,
         tracker,
-        min_sync_interval_hours: int = 168
+        min_sync_interval_hours: int = 168,
+        force_sync: bool = False
     ) -> None:
         """Sync Agent Pronto leads with progress tracking (bulk - login once via magic link)"""
         try:
@@ -1463,7 +1501,8 @@ class LeadSourceSettingsService:
         leads: List,
         user_id: str,
         tracker,
-        min_sync_interval_hours: int = 168
+        min_sync_interval_hours: int = 168,
+        force_sync: bool = False
     ) -> None:
         """Sync My Agent Finder leads with progress tracking (bulk - login once)"""
         try:
@@ -1698,7 +1737,8 @@ class LeadSourceSettingsService:
         source_name: str,
         leads: List,
         user_id: str,
-        tracker
+        tracker,
+        force_sync: bool = False
     ) -> None:
         """Generic sync method for all lead sources with progress tracking"""
         try:
@@ -1719,11 +1759,18 @@ class LeadSourceSettingsService:
                     min_sync_interval_hours = metadata.get("min_sync_interval_hours", 168)
                 except:
                     pass
-            
-            tracker.update_progress(
-                sync_id,
-                message=f"Checking min sync interval: {min_sync_interval_hours}h"
-            )
+
+            # Skip minimum interval check if force_sync is True
+            if force_sync:
+                tracker.update_progress(
+                    sync_id,
+                    message=f"🔄 Force sync enabled - bypassing {min_sync_interval_hours}h minimum interval"
+                )
+            else:
+                tracker.update_progress(
+                    sync_id,
+                    message=f"Checking min sync interval: {min_sync_interval_hours}h"
+                )
             
             platform_lower = source_name.lower()
 
@@ -1731,35 +1778,35 @@ class LeadSourceSettingsService:
             if platform_lower == "homelight":
                 # Use existing HomeLight bulk sync (it does its own filtering)
                 self.sync_homelight_bulk_with_tracker(
-                    sync_id, source_name, leads, user_id, tracker
+                    sync_id, source_name, leads, user_id, tracker, force_sync=force_sync
                 )
                 return
 
             # Handle ReferralExchange with bulk sync (login once, process all leads)
             if platform_lower in ["referralexchange", "referral exchange"]:
                 self.sync_referralexchange_bulk_with_tracker(
-                    sync_id, source_name, leads, user_id, tracker, min_sync_interval_hours
+                    sync_id, source_name, leads, user_id, tracker, min_sync_interval_hours, force_sync=force_sync
                 )
                 return
 
             # Handle Redfin with bulk sync (login once, process all leads)
             if platform_lower == "redfin":
                 self.sync_redfin_bulk_with_tracker(
-                    sync_id, source_name, leads, user_id, tracker, min_sync_interval_hours
+                    sync_id, source_name, leads, user_id, tracker, min_sync_interval_hours, force_sync=force_sync
                 )
                 return
 
             # Handle Agent Pronto with bulk sync (login once via magic link, process all leads)
             if platform_lower in ["agentpronto", "agent pronto"]:
                 self.sync_agentpronto_bulk_with_tracker(
-                    sync_id, source_name, leads, user_id, tracker, min_sync_interval_hours
+                    sync_id, source_name, leads, user_id, tracker, min_sync_interval_hours, force_sync=force_sync
                 )
                 return
 
             # Handle My Agent Finder with bulk sync (login once, process all leads)
             if platform_lower in ["myagentfinder", "my agent finder"]:
                 self.sync_myagentfinder_bulk_with_tracker(
-                    sync_id, source_name, leads, user_id, tracker, min_sync_interval_hours
+                    sync_id, source_name, leads, user_id, tracker, min_sync_interval_hours, force_sync=force_sync
                 )
                 return
 

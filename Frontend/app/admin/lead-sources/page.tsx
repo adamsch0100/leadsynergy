@@ -333,6 +333,7 @@ export default function LeadSourcesPage() {
   const [user, setUser] = useState<User | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [syncSourceName, setSyncSourceName] = useState<string | null>(null)
+  const [forceSync, setForceSync] = useState(false) // Force sync bypass minimum interval
 
   // Merge sources state
   const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false)
@@ -992,7 +993,10 @@ export default function LeadSourcesPage() {
         headers: {
           'Content-Type': 'application/json',
           'X-User-ID': user.id
-        }
+        },
+        body: JSON.stringify({
+          force_sync: forceSync
+        })
       })
 
       const data = await response.json()
@@ -1028,6 +1032,7 @@ export default function LeadSourcesPage() {
                 setCurrentSyncId(null)
                 setSyncingSourceId(null)
                 setSyncSourceName(null)
+                setForceSync(false) // Reset force sync checkbox
                 setSuccessMessage(`Sync cancelled for ${source.source_name}`)
                 setTimeout(() => setSuccessMessage(null), 3000)
                 // Refresh sources (silent - no loading spinner)
@@ -1044,6 +1049,7 @@ export default function LeadSourcesPage() {
               setCurrentSyncId(null)
               setSyncingSourceId(null)
               setSyncSourceName(null)
+              setForceSync(false) // Reset force sync checkbox
               const successCount = update.data?.successful || 0
               const failCount = update.data?.failed || 0
               setSuccessMessage(`Sync complete for ${source.source_name}: ${successCount} updated, ${failCount} failed. Click status for details.`)
@@ -1058,6 +1064,7 @@ export default function LeadSourcesPage() {
               setCurrentSyncId(null)
               setSyncingSourceId(null)
               setSyncSourceName(null)
+              setForceSync(false) // Reset force sync checkbox
             }
           } catch (e) {
             console.error('Error parsing SSE message:', e)
@@ -1091,6 +1098,7 @@ export default function LeadSourcesPage() {
       setCurrentSyncId(null)
       setSyncingSourceId(null)
       setSyncSourceName(null)
+      setForceSync(false) // Reset force sync checkbox
     }
   }
 
@@ -1752,8 +1760,24 @@ export default function LeadSourcesPage() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle>Lead Sources</CardTitle>
-          <CardDescription>Configure your lead sources and their credentials</CardDescription>
+          <div className="flex items-start justify-between">
+            <div>
+              <CardTitle>Lead Sources</CardTitle>
+              <CardDescription>Configure your lead sources and their credentials</CardDescription>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                id="forceSync"
+                checked={forceSync}
+                onChange={(e) => setForceSync(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 cursor-pointer"
+              />
+              <label htmlFor="forceSync" className="cursor-pointer text-muted-foreground hover:text-foreground">
+                Force Sync (bypass 7-day interval)
+              </label>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (

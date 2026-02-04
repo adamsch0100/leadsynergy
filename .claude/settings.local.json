@@ -29,7 +29,28 @@
       "Bash(taskkill:*)",
       "Bash(tasklist:*)",
       "Bash(powershell:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(git restore:*)",
+      "Bash(dir /s /b \"c:\\\\Users\\\\adamm\\\\Projects\\\\LeadSynergy\\\\Backend\\\\*.html\")",
+      "Bash(railway status:*)",
+      "Bash(wmic logicaldisk get:*)",
+      "Bash(git checkout:*)",
+      "WebFetch(domain:docs.followupboss.com)",
+      "Bash(pip show:*)",
+      "Bash(start \"\" cmd //c \"cd /d C:\\\\Users\\\\adamm\\\\Projects\\\\LeadSynergy\\\\Frontend && npm run dev\")",
+      "Bash(uv:*)",
+      "Bash(cmd.exe //c \"start \"\"LeadSynergy Frontend\"\" cmd /k \"\"cd /d C:\\\\Users\\\\adamm\\\\Projects\\\\LeadSynergy\\\\Frontend && npm run dev\"\"\")",
+      "Bash(cmd.exe //c \"start cmd /k cd /d C:\\\\Users\\\\adamm\\\\Projects\\\\LeadSynergy\\\\Frontend ^& npm run dev\")",
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(npx next dev)",
+      "Bash(npm run build:*)",
+      "Bash(npx next build)",
+      "Bash(echo:*)",
+      "Bash(redis-cli:*)",
+      "Bash(railway --version:*)",
+      "Bash(tee:*)",
+      "Bash(pkill:*)",
+      "Bash(where:*)"
     ]
   }
 }
