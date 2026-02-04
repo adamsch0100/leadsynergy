@@ -481,6 +481,24 @@ class AIAgentService:
                         organization_id=getattr(self.settings, 'organization_id', 'default'),
                     )
                     logger.info(f"Scheduled handoff monitoring for person {fub_person_id}")
+
+                    # Send immediate notifications to the agent (SMS + Email)
+                    from app.ai_agent.agent_notifier import notify_agent_of_handoff
+                    notify_result = await notify_agent_of_handoff(
+                        fub_person_id=fub_person_id,
+                        lead_name=f"{lead_profile.first_name} {lead_profile.last_name or ''}".strip(),
+                        lead_phone=lead_profile.phone or "Unknown",
+                        lead_email=lead_profile.email or "Unknown",
+                        handoff_reason=f"Smart trigger: {handoff_trigger}",
+                        last_message=message,
+                        assigned_agent_email=getattr(lead_profile, 'assigned_agent_email', None),
+                        settings=self.settings,
+                    )
+                    if notify_result.get('success'):
+                        logger.info(f"Agent notifications sent for handoff: {notify_result['notifications_sent']}")
+                    else:
+                        logger.warning(f"Agent notification failed: {notify_result.get('errors')}")
+
                 except Exception as e:
                     logger.error(f"Failed to schedule handoff monitoring: {e}")
 
@@ -885,6 +903,23 @@ class AIAgentService:
                     organization_id=getattr(self.settings, 'organization_id', 'default'),
                 )
                 logger.info(f"Scheduled handoff monitoring for person {fub_person_id}")
+
+                # Send immediate notifications to the agent (SMS + Email)
+                from app.ai_agent.agent_notifier import notify_agent_of_handoff
+                notify_result = await notify_agent_of_handoff(
+                    fub_person_id=fub_person_id,
+                    lead_name=f"{lead_profile.first_name} {lead_profile.last_name or ''}".strip(),
+                    lead_phone=lead_profile.phone or "Unknown",
+                    lead_email=lead_profile.email or "Unknown",
+                    handoff_reason=reason,
+                    last_message=getattr(response, 'original_message', 'No message'),
+                    assigned_agent_email=getattr(lead_profile, 'assigned_agent_email', None),
+                    settings=self.settings,
+                )
+                if notify_result.get('success'):
+                    logger.info(f"Agent notifications sent for handoff: {notify_result['notifications_sent']}")
+                else:
+                    logger.warning(f"Agent notification failed: {notify_result.get('errors')}")
 
             except Exception as e:
                 logger.error(f"Failed to create handoff task or schedule monitoring: {e}")

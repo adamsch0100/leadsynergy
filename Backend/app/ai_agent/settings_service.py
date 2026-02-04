@@ -118,6 +118,12 @@ class AIAgentSettings:
     # Then set notification_fub_person_id to that lead's ID (e.g., 12345678)
     notification_fub_person_id: Optional[int] = None  # FUB person ID to text for hot lead alerts
 
+    # Handoff Notification Settings
+    # When AI hands off to human, notify the agent immediately
+    notify_agent_on_handoff_sms: bool = True  # Send SMS to notification_fub_person_id
+    notify_agent_on_handoff_email: bool = True  # Send email from lead to assigned agent
+    handoff_notification_template: str = "🔔 HANDOFF ALERT: {lead_name} needs your attention!\n\nReason: {reason}\nLast message: \"{last_message}\"\n\nRespond ASAP: {fub_link}"
+
     # Phone Number Filter Settings
     # List of FUB phone numbers the AI agent should respond to (normalized format: +1XXXXXXXXXX)
     # If empty, AI responds to all incoming texts
@@ -213,6 +219,9 @@ class AIAgentSettings:
             fub_login_type=row.get('fub_login_type') or "email",
             # Agent Notification
             notification_fub_person_id=row.get('notification_fub_person_id'),
+            notify_agent_on_handoff_sms=row.get('notify_agent_on_handoff_sms', True),
+            notify_agent_on_handoff_email=row.get('notify_agent_on_handoff_email', True),
+            handoff_notification_template=row.get('handoff_notification_template') or "🔔 HANDOFF ALERT: {lead_name} needs your attention!\n\nReason: {reason}\nLast message: \"{last_message}\"\n\nRespond ASAP: {fub_link}",
             # Phone number filter
             ai_respond_to_phone_numbers=row.get('ai_respond_to_phone_numbers') or [],
             # NOTE: Gmail credentials now in system_settings (global)
