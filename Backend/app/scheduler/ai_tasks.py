@@ -200,16 +200,36 @@ def send_scheduled_message(
             except Exception as e:
                 logger.error(f"Browser automation SMS failed: {e}")
                 result = {"success": False, "error": str(e)}
+        elif channel == "email":
+            # Email sending via Playwright browser automation
+            from app.messaging.playwright_sms_service import PlaywrightSMSService
+            from app.utils.constants import Credentials
+
+            creds_config = Credentials()
+
+            # Build FUB login credentials
+            credentials = {
+                "type": creds_config.FUB_LOGIN_TYPE or "email",
+                "email": creds_config.FUB_LOGIN_EMAIL,
+                "password": creds_config.FUB_LOGIN_PASSWORD,
+            }
+
+            try:
+                # Use browser automation to send email through FUB web UI
+                email_service = PlaywrightSMSService()
+                result = await email_service.send_email(
+                    agent_id=user_id,
+                    person_id=fub_person_id,
+                    subject="From your real estate agent",
+                    body=final_message,
+                    credentials=credentials,
+                )
+            except Exception as e:
+                logger.error(f"Browser automation email failed: {e}")
+                result = {"success": False, "error": str(e)}
         else:
-            # Email sending would go here
-            from app.email.email_service import EmailService
-            email_service = EmailService()
-            result = email_service.send_email(
-                to_email=lead_profile.email,
-                subject="From your real estate agent",
-                body=final_message,
-                fub_person_id=fub_person_id,
-            )
+            logger.error(f"Unknown channel: {channel}")
+            result = {"success": False, "error": f"Unknown channel: {channel}"}
 
         if result.get("success"):
             _mark_message_sent(supabase, message_id)
@@ -793,17 +813,18 @@ def send_re_engagement_message(self, fub_person_id: int, attempt_number: int = 1
         attempt_number: Which re-engagement attempt this is (1, 2, 3...)
     """
     from app.database.supabase_client import SupabaseClientSingleton
-    from app.messaging.fub_sms_service import FUBSMSService
+    from app.messaging.playwright_sms_service import PlaywrightSMSService
     from app.ai_agent.template_engine import get_template_engine
     from app.ai_agent.compliance_checker import ComplianceChecker
     from app.database.fub_api_client import FUBApiClient
     from app.ai_agent.settings_service import get_settings_service
+    from app.utils.constants import Credentials
     import asyncio
 
     logger.info(f"Sending re-engagement message #{attempt_number} to person {fub_person_id}")
 
     supabase = SupabaseClientSingleton.get_instance()
-    sms_service = FUBSMSService()
+    playwright_service = PlaywrightSMSService()
     template_engine = get_template_engine()
     fub = FUBApiClient()
 
@@ -924,22 +945,40 @@ def send_re_engagement_message(self, fub_person_id: int, attempt_number: int = 1
             }
         message = fallbacks.get(attempt_number, fallbacks[1])
 
-    # Send message based on channel
-    if channel == "sms":
-        result = sms_service.send_text_message(
-            person_id=fub_person_id,
-            message=message,
-            phone_number=phone,
-        )
-    else:  # email
-        from app.email.email_service import EmailService
-        email_service = EmailService()
-        result = email_service.send_email(
-            to_email=email,
-            subject=f"Quick check-in from your real estate agent",
-            body=message,
-            fub_person_id=fub_person_id,
-        )
+    # Send message based on channel via Playwright browser automation
+    # Get FUB credentials
+    creds_config = Credentials()
+    credentials = {
+        "type": creds_config.FUB_LOGIN_TYPE or "email",
+        "email": creds_config.FUB_LOGIN_EMAIL,
+        "password": creds_config.FUB_LOGIN_PASSWORD,
+    }
+
+    # Get user_id from conversation data (already fetched above)
+    user_id = conv_result.data.get("user_id") if conv_result.data else None
+    if not user_id:
+        logger.warning(f"No user_id found for person {fub_person_id}, using default")
+        user_id = "default_agent"
+
+    try:
+        if channel == "sms":
+            result = await playwright_service.send_sms(
+                agent_id=user_id,
+                person_id=fub_person_id,
+                message=message,
+                credentials=credentials,
+            )
+        else:  # email
+            result = await playwright_service.send_email(
+                agent_id=user_id,
+                person_id=fub_person_id,
+                subject=f"Quick check-in from your real estate agent",
+                body=message,
+                credentials=credentials,
+            )
+    except Exception as e:
+        logger.error(f"Browser automation {channel} send failed: {e}")
+        result = {"success": False, "error": str(e)}
 
     if result.get("success"):
         # Update last AI message timestamp
