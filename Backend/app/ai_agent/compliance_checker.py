@@ -634,11 +634,11 @@ class ComplianceChecker:
             r'\bstop\b',              # TCPA required keyword
             r'\bunsubscribe\b',       # Standard opt-out
             r'\bcancel\b',            # Intent to stop
-            r'\bend\b',              # Intent to stop
             r'\bquit\b',             # Intent to stop
             r'\bopt\s*out\b',        # "opt out" or "optout"
             r'\bremove me\b',        # Request to remove
             r"\bdon'?t\s+text\b",    # "don't text" or "dont text"
+            # Note: "end" removed - too many false positives with "end of year", "weekend", etc.
         ]
 
         return any(re.search(pattern, message_lower) for pattern in opt_out_patterns)
