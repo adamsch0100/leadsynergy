@@ -471,14 +471,16 @@ class AIAgentService:
                     lead_profile=lead_profile,
                 )
 
-                # Get acknowledgment message
+                # Get world-class acknowledgment message
                 # Use human agent name for handoff, pass AI name to avoid confusion
                 human_agent_name = lead_profile.assigned_agent or "your agent"
                 ai_agent_name = self.settings.agent_name
                 response.response_text = get_handoff_acknowledgment(
-                    handoff_trigger,
+                    trigger_type=handoff_trigger,
                     agent_name=human_agent_name,
-                    ai_agent_name=ai_agent_name
+                    ai_agent_name=ai_agent_name,
+                    lead_message=message,
+                    lead_first_name=lead_profile.first_name
                 )
                 response.should_handoff = True
                 response.handoff_reason = f"Lead trigger: {handoff_trigger}"

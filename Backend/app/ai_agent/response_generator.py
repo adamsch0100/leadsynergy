@@ -191,27 +191,33 @@ MODERATE SIGNALS (consider handoff if multiple present):
 """
 
 # Acknowledgment messages for each handoff type
+# These are WORLD-CLASS handoff messages that:
+# 1. Acknowledge the lead's interest/request
+# 2. Introduce the human agent by name
+# 3. Set clear expectations for response time
+# 4. Build credibility and warmth
+# 5. Keep the conversation flowing
 HANDOFF_ACKNOWLEDGMENTS = {
     # Buyer triggers
-    "schedule_showing": "I'd love to get you in to see that property! Let me connect you with {agent_name} to find a time that works for you. They'll reach out shortly!",
-    "price_negotiation": "This is exciting! Making an offer is a big step. Let me get {agent_name} involved - they're the expert on negotiations.",
+    "schedule_showing": "Perfect! I'd love to get you in to see that property. I'm connecting you with {agent_name}, who specializes in showings and knows this area inside and out. They'll reach out within the next hour to find a time that works best for you!",
+    "price_negotiation": "This is such an exciting step! You're getting close to making this happen. I'm bringing in {agent_name} who's an expert negotiator and will make sure you get the best deal. Expect a call from them within the hour!",
 
     # Seller triggers
-    "ready_to_list": "That's exciting - sounds like you're ready to get your home on the market! Let me connect you with {agent_name} who can walk you through the listing process. They'll reach out shortly!",
-    "home_valuation": "Great question! {agent_name} can provide a detailed analysis of your home's value based on recent sales in your area. They'll reach out to set up a time to discuss.",
+    "ready_to_list": "That's exciting - you're ready to make your move! I'm connecting you with {agent_name}, who's helped dozens of sellers in your area get top dollar for their homes. They'll reach out within the next hour to discuss your listing strategy!",
+    "home_valuation": "Great question! Getting the right price is crucial. I'm connecting you with {agent_name}, who can provide a comprehensive market analysis based on recent sales in your neighborhood. They'll reach out today to set up a time to go through it with you!",
 
     # General triggers
-    "wants_call": "Absolutely, a call is a great idea! I'll have {agent_name} give you a call. What's the best time to reach you?",
-    "urgent_timeline": "I understand time is of the essence! Let me get {agent_name} on this right away - they'll reach out within the hour.",
-    "complex_question": "Great question! That's something {agent_name} can explain better than I can. Let me connect you with them.",
+    "wants_call": "Absolutely! A call is the best way to discuss this. I'm having {agent_name} give you a call - they're the expert on this. What time works best for you today? Morning or afternoon?",
+    "urgent_timeline": "Got it - when you're ready, we move fast! I'm getting {agent_name} on this right away. You'll hear from them within the next 30 minutes. They'll make sure we take care of this quickly!",
+    "complex_question": "That's a great question, and you deserve a thorough answer. I'm connecting you with {agent_name}, who can walk you through all the details. They'll reach out within the next hour!",
 
-    # Appointment agreement
-    "appointment_agreed": "Awesome, I'll have {agent_name} confirm the details and follow up with you shortly!",
+    # Appointment agreement - MOST COMMON, MAKE IT STELLAR
+    "appointment_agreed": "Perfect - {time_mentioned} works great! I'm connecting you with {agent_name} right now to lock that in. They'll send you a calendar invite and confirmation text within the next 30 minutes. You're going to love working with them!",
 
     # AI-detected hot leads
-    "hot_lead": "This is exciting - sounds like you're ready to take the next step! Let me get {agent_name} involved so we can make this happen. They'll reach out shortly!",
-    "high_intent": "I can tell you're serious about this - that's great! Let me connect you with {agent_name} who can give you their full attention. They'll be in touch soon!",
-    "hot_seller": "Sounds like you're ready to make a move! Let me get {agent_name} involved to discuss your options. They'll reach out shortly!",
+    "hot_lead": "I can tell you're ready to move forward - that's awesome! I'm connecting you with {agent_name} right now. They specialize in helping buyers just like you and will make this process smooth and stress-free. Expect to hear from them within the hour!",
+    "high_intent": "You're serious about this, and I love that! Let me get you connected with {agent_name}, who can give you their full attention and answer all your questions. They'll reach out within the next hour!",
+    "hot_seller": "Sounds like you're ready to make your move! I'm connecting you with {agent_name}, who's helped sellers in your area get incredible results. They'll reach out within the hour to discuss your options!",
 }
 
 
@@ -479,43 +485,84 @@ Respond with ONLY a number 0-100. Nothing else.
     return _quick_intent_score(message)
 
 
-def get_handoff_acknowledgment(trigger_type: str, agent_name: str = "your agent", ai_agent_name: str = None) -> str:
+def get_handoff_acknowledgment(
+    trigger_type: str,
+    agent_name: str = "your agent",
+    ai_agent_name: str = None,
+    lead_message: str = None,
+    lead_first_name: str = None
+) -> str:
     """
-    Get an appropriate acknowledgment message for a handoff trigger.
+    Get a WORLD-CLASS acknowledgment message for a handoff trigger.
+
+    World-class handoffs:
+    1. Acknowledge what the lead said
+    2. Introduce the human agent by name
+    3. Set clear expectations (response time)
+    4. Build credibility
+    5. Keep it warm and professional
 
     Args:
         trigger_type: Type of handoff trigger detected
         agent_name: Name of the human agent to connect with
         ai_agent_name: Name of the AI agent (to avoid self-reference confusion)
+        lead_message: The lead's original message (for context extraction)
+        lead_first_name: Lead's first name for personalization
 
     Returns:
         Acknowledgment message string
     """
+    # Extract time from lead message for personalization
+    time_mentioned = ""
+    if lead_message and trigger_type == "appointment_agreed":
+        import re
+        # Try to extract day or time from message
+        days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "tomorrow", "today"]
+        message_lower = lead_message.lower()
+        for day in days:
+            if day in message_lower:
+                time_mentioned = day.title()
+                break
+        # Try to extract time (6pm, 10am, etc.)
+        time_match = re.search(r'\d{1,2}\s*(am|pm|:)', message_lower)
+        if time_match:
+            if time_mentioned:
+                time_mentioned += f" at {time_match.group()}"
+            else:
+                time_mentioned = time_match.group()
+
     # If agent_name matches AI's name, use first-person language to avoid confusion
     # (e.g., "I'll confirm" instead of "Nadia will confirm" when AI is Nadia)
     if ai_agent_name and agent_name and agent_name.lower().strip() == ai_agent_name.lower().strip():
         # Use first-person templates that don't create identity confusion
         first_person_templates = {
-            "appointment_agreed": "Awesome! Let me confirm those details and get that locked in for you shortly.",
-            "schedule_showing": "Perfect! Let me get that showing scheduled for you - I'll confirm the details shortly.",
-            "wants_call": "Absolutely! I'll give you a call to discuss further. What's the best time to reach you?",
-            "urgent_timeline": "I understand time is of the essence! Let me get on this right away - I'll reach out within the hour.",
-            "home_valuation": "Great question! Let me put together a detailed analysis of your home's value based on recent sales in your area.",
-            "ready_to_list": "That's exciting! Let me walk you through the listing process - I'll reach out shortly to get started.",
+            "appointment_agreed": f"Perfect{' - ' + time_mentioned if time_mentioned else ''}! Let me get that locked in for you. I'll send you a confirmation text within the next 30 minutes with all the details. Looking forward to meeting you!",
+            "schedule_showing": "Perfect! Let me get that showing scheduled for you. I'll reach out within the next hour to confirm the time and send you the property address. Excited to show you this one!",
+            "wants_call": "Absolutely! I'll give you a call to discuss this in detail. What time works best for you today? Morning or afternoon?",
+            "urgent_timeline": "Got it - when you're ready, I move fast! You'll hear from me within the next 30 minutes. Let's make this happen!",
+            "home_valuation": "Great question! Let me put together a comprehensive market analysis based on recent sales in your neighborhood. I'll reach out today to set up a time to go through it with you!",
+            "ready_to_list": "That's exciting! Let me walk you through the listing process and what you can expect. I'll reach out within the hour to discuss your timeline and goals!",
         }
 
         # Return first-person template if available, otherwise generic first-person message
         return first_person_templates.get(
             trigger_type,
-            "Let me take care of that for you - I'll follow up shortly!"
+            "Let me take care of that for you - I'll follow up within the hour!"
         )
 
     # Normal handoff with human agent name
     template = HANDOFF_ACKNOWLEDGMENTS.get(
         trigger_type,
-        "Let me connect you with {agent_name} who can help you with that!"
+        "Let me connect you with {agent_name} who can help you with that. They'll reach out within the hour!"
     )
-    return template.format(agent_name=agent_name)
+
+    # Format with available variables
+    formatted = template.format(
+        agent_name=agent_name,
+        time_mentioned=time_mentioned if time_mentioned else "that time"
+    )
+
+    return formatted
 
 
 class ResponseQuality(Enum):
