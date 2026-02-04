@@ -217,13 +217,13 @@ def send_scheduled_message(
             try:
                 # Use browser automation to send email through FUB web UI
                 email_service = PlaywrightSMSService()
-                result = await email_service.send_email(
+                result = asyncio.run(email_service.send_email(
                     agent_id=user_id,
                     person_id=fub_person_id,
                     subject="From your real estate agent",
                     body=final_message,
                     credentials=credentials,
-                )
+                ))
             except Exception as e:
                 logger.error(f"Browser automation email failed: {e}")
                 result = {"success": False, "error": str(e)}
@@ -962,20 +962,20 @@ def send_re_engagement_message(self, fub_person_id: int, attempt_number: int = 1
 
     try:
         if channel == "sms":
-            result = await playwright_service.send_sms(
+            result = asyncio.run(playwright_service.send_sms(
                 agent_id=user_id,
                 person_id=fub_person_id,
                 message=message,
                 credentials=credentials,
-            )
+            ))
         else:  # email
-            result = await playwright_service.send_email(
+            result = asyncio.run(playwright_service.send_email(
                 agent_id=user_id,
                 person_id=fub_person_id,
                 subject=f"Quick check-in from your real estate agent",
                 body=message,
                 credentials=credentials,
-            )
+            ))
     except Exception as e:
         logger.error(f"Browser automation {channel} send failed: {e}")
         result = {"success": False, "error": str(e)}
