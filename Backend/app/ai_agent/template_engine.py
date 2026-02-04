@@ -376,8 +376,9 @@ class TemplateLibrary:
                 category=TemplateCategory.HANDOFF,
                 name="Human Agent Handoff",
                 variants=[
-                    "Great talking with you, {first_name}! I'm going to connect you with {human_agent_name} who can help you even more. They'll reach out shortly!",
-                    "Thanks for chatting! {human_agent_name} from our team will follow up with you soon - they're awesome and will take great care of you!",
+                    "Perfect timing, {first_name}! I'm connecting you with {human_agent_name}, our local market expert who's helped dozens of buyers find their dream homes. They'll reach out within the hour with exactly what you need. You're in great hands!",
+                    "Awesome, {first_name}! {human_agent_name} is our specialist for this area and knows the market inside-out. They'll follow up today with personalized insights and next steps. Excited for you!",
+                    "Great call, {first_name}! {human_agent_name} is the perfect person to help you - they've closed over 50 deals in this market and get outstanding results. Expect a call/text within a few hours with your next steps!",
                 ],
                 variables=["first_name", "human_agent_name"],
             ),
