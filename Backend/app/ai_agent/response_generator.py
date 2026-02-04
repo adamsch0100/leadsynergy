@@ -1734,7 +1734,7 @@ WHEN THEY AGREE:
         self.team_members = team_members
         self.use_assigned_agent_name = use_assigned_agent_name
         # Dynamic message length limits (override class constant)
-        self.max_sms_length = max_sms_length or self.max_sms_length
+        self.max_sms_length = max_sms_length or self.MAX_SMS_LENGTH
         self.max_email_length = max_email_length or 5000
         self._client = None
         self._openrouter_client = None
