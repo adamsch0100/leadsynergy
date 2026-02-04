@@ -36,6 +36,7 @@ class PlaywrightSMSService:
         self._initialized = False
         self._init_lock = threading.Lock()  # Only for initialization
         self._agent_busy: Dict[str, bool] = {}  # Track if agent is mid-operation
+        self._agent_busy_since: Dict[str, float] = {}  # Track when agent became busy (for circuit breaker)
         self._agent_busy_lock = threading.Lock()  # Quick lock for flag check only
         self._consecutive_failures: Dict[str, int] = {}  # Track failures per agent
         self._login_cooldown: Dict[str, float] = {}  # agent_id -> timestamp when cooldown ends
@@ -88,16 +89,19 @@ class PlaywrightSMSService:
 
     def _try_acquire_agent(self, agent_id: str) -> bool:
         """Try to mark agent as busy. Returns True if acquired, False if already busy."""
+        import time
         with self._agent_busy_lock:
             if self._agent_busy.get(agent_id, False):
                 return False
             self._agent_busy[agent_id] = True
+            self._agent_busy_since[agent_id] = time.time()
             return True
 
     def _release_agent(self, agent_id: str):
         """Mark agent as no longer busy."""
         with self._agent_busy_lock:
             self._agent_busy[agent_id] = False
+            self._agent_busy_since.pop(agent_id, None)
 
     def _record_success(self, agent_id: str):
         """Record successful operation, resetting failure count."""
@@ -430,6 +434,22 @@ class PlaywrightSMSService:
         while not self._try_acquire_agent(agent_id):
             if waited >= max_wait:
                 raise Exception(f"Timeout waiting for agent {agent_id} to become available for {operation_name}")
+
+            # CIRCUIT BREAKER: Check if agent has been stuck for too long
+            # If agent busy for >120s (longer than operation timeout of 90s), assume it's dead/frozen
+            import time
+            busy_since = self._agent_busy_since.get(agent_id)
+            if busy_since:
+                busy_duration = time.time() - busy_since
+                if busy_duration > 120:
+                    logger.error(f"Agent {agent_id} stuck for {busy_duration:.1f}s - FORCE RELEASING (circuit breaker)")
+                    # Force release the stuck agent
+                    self._release_agent(agent_id)
+                    # Invalidate its session (it's probably dead)
+                    await self._invalidate_session(agent_id)
+                    # Try to acquire again
+                    continue
+
             logger.info(f"Agent {agent_id} busy, waiting for {operation_name}... ({waited}s)")
             await asyncio.sleep(2)
             waited += 2
