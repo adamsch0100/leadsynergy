@@ -174,14 +174,32 @@ def send_scheduled_message(
             _mark_message_failed(supabase, message_id, "No message content")
             return {"success": False, "error": "No message content"}
 
-        # Send the message
+        # Send the message via browser automation (Playwright)
         if channel == "sms":
-            result = sms_service.send_text_message(
-                person_id=fub_person_id,
-                message=final_message,
-                phone_number=lead_profile.phone,
-                from_user_id=fub_user_id,
-            )
+            from app.messaging.playwright_sms_service import PlaywrightSMSService
+            from app.utils.constants import Credentials
+
+            creds_config = Credentials()
+
+            # Build FUB login credentials
+            credentials = {
+                "type": creds_config.FUB_LOGIN_TYPE or "email",
+                "email": creds_config.FUB_LOGIN_EMAIL,
+                "password": creds_config.FUB_LOGIN_PASSWORD,
+            }
+
+            try:
+                # Use browser automation to send SMS through FUB web UI
+                sms_service = PlaywrightSMSService()
+                result = asyncio.run(sms_service.send_sms(
+                    agent_id=user_id,  # Use LeadSynergy user ID as agent identifier
+                    person_id=fub_person_id,
+                    message=final_message,
+                    credentials=credentials,
+                ))
+            except Exception as e:
+                logger.error(f"Browser automation SMS failed: {e}")
+                result = {"success": False, "error": str(e)}
         else:
             # Email sending would go here
             from app.email.email_service import EmailService
