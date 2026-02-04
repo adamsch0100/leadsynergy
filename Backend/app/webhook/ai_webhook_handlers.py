@@ -758,15 +758,31 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                     logger.error(f"Failed to queue message for person {person_id}: {queue_result.get('error')}")
                 return  # Exit after queueing
 
-            # Send response via FUB Native Texting API
-            # Native API is faster (<1s) and more reliable than Playwright browser automation
-            logger.info(f"Sending SMS via FUB API to person {person_id}...")
+            # Send response via Playwright browser automation
+            # We use Playwright instead of FUB Native Texting API because we don't have
+            # System-level API credentials (which would be required for the API endpoint)
+            logger.info(f"Sending SMS via Playwright to person {person_id}...")
 
             try:
-                fub_sms = FUBSMSService(api_key=fub_api_key)
-                result = await fub_sms.send_text_message_async(
+                from app.messaging.playwright_sms_service import PlaywrightSMSService
+                from app.utils.constants import Credentials
+
+                creds_config = Credentials()
+
+                # Build FUB login credentials (same as used for reading messages)
+                credentials = {
+                    "type": creds_config.FUB_LOGIN_TYPE or "email",
+                    "email": creds_config.FUB_LOGIN_EMAIL,
+                    "password": creds_config.FUB_LOGIN_PASSWORD,
+                }
+
+                # Use browser automation to send SMS through FUB web UI
+                sms_service = PlaywrightSMSService()
+                result = await sms_service.send_sms(
+                    agent_id=user_id,  # Use LeadSynergy user ID as agent identifier
                     person_id=person_id,
                     message=agent_response.response_text,
+                    credentials=credentials,
                 )
             except Exception as sms_err:
                 logger.error(f"SMS send FAILED for person {person_id}: {sms_err}")
