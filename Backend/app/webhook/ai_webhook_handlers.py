@@ -442,6 +442,7 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         # Check for FUB privacy-redacted messages
         # FUB API intentionally hides SMS content with "* Body is hidden for privacy reasons *"
         # When this happens, we use Playwright browser automation to read the actual content
+        logger.info(f"Message content for person {person_id}: [{message_content}]")
         if "Body is hidden" in message_content or "hidden for privacy" in message_content.lower():
             logger.warning(f"FUB API returned privacy-redacted message for person {person_id}. Using Playwright to read actual content...")
 

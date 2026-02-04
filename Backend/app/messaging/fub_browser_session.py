@@ -30,13 +30,13 @@ class FUBBrowserSession:
 
     # Navigation retry settings
     MAX_NAVIGATION_RETRIES = 3
-    NAVIGATION_TIMEOUT_MS = 30000  # 30 seconds (reduced from 60s for faster failure)
+    NAVIGATION_TIMEOUT_MS = 90000  # 90 seconds (increased for Railway production environment)
 
-    # Step-level timeouts (in milliseconds) for faster failure detection
-    CLICK_TIMEOUT_MS = 10000  # 10 seconds for element clicks
-    INPUT_TIMEOUT_MS = 10000  # 10 seconds for text input
-    JS_EVAL_TIMEOUT_MS = 15000  # 15 seconds for JavaScript evaluation
-    ELEMENT_WAIT_TIMEOUT_MS = 10000  # 10 seconds for element waits
+    # Step-level timeouts (in milliseconds) for Railway production environment
+    CLICK_TIMEOUT_MS = 20000  # 20 seconds for element clicks
+    INPUT_TIMEOUT_MS = 20000  # 20 seconds for text input
+    JS_EVAL_TIMEOUT_MS = 30000  # 30 seconds for JavaScript evaluation
+    ELEMENT_WAIT_TIMEOUT_MS = 20000  # 20 seconds for element waits
 
     async def login(self, credentials: dict):
         """Login to FUB with credentials or SSO.
