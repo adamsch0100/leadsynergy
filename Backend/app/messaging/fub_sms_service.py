@@ -82,10 +82,8 @@ class FUBSMSService:
         Raises:
             Exception if message fails to send
         """
-        headers = self._get_headers(
-            self.creds.get('FUB_SYSTEM_NAME', 'leadsynergy-ai'),
-            self.creds.get('FUB_SYSTEM_KEY'),
-        )
+        # Don't use System credentials for SMS - causes messages to show from system instead of agent
+        headers = self.headers.copy()
 
         # Get agent's phone number for fromNumber field
         from_number = None
@@ -178,10 +176,8 @@ class FUBSMSService:
         Returns:
             Dict with message details
         """
-        headers = self._get_headers(
-            self.creds.get('FUB_SYSTEM_NAME', 'leadsynergy-ai'),
-            self.creds.get('FUB_SYSTEM_KEY'),
-        )
+        # Don't use System credentials for SMS - causes messages to show from system instead of agent
+        headers = self.headers.copy()
 
         payload = {
             "personId": person_id,
@@ -372,10 +368,8 @@ class FUBSMSService:
         Returns:
             Dict with note details
         """
-        headers = self._get_headers(
-            self.creds.get('FUB_SYSTEM_NAME', 'leadsynergy-ai'),
-            self.creds.get('FUB_SYSTEM_KEY'),
-        )
+        # Don't use System credentials for SMS - causes messages to show from system instead of agent
+        headers = self.headers.copy()
 
         payload = {
             "personId": person_id,
