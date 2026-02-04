@@ -994,7 +994,7 @@ export default function AISettingsPage() {
                   Phone Number Filter
                 </CardTitle>
                 <CardDescription>
-                  Limit which FUB phone numbers the AI responds to. Leave empty to respond to all incoming texts.
+                  Block specific FUB phone numbers from AI responses. Leave empty to respond to all incoming texts.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1013,7 +1013,7 @@ export default function AISettingsPage() {
                 {settings.ai_respond_to_phone_numbers.length > 0 ? (
                   <div className="space-y-2">
                     <Label className="text-sm text-muted-foreground">
-                      AI will ONLY respond to messages received on these numbers:
+                      AI will IGNORE messages received on these numbers:
                     </Label>
                     <div className="flex flex-wrap gap-2">
                       {settings.ai_respond_to_phone_numbers.map((phone, index) => (
@@ -1044,8 +1044,8 @@ export default function AISettingsPage() {
                     <strong>Why use a phone filter?</strong>
                     <p className="mt-1 text-sm">
                       If you have multiple FUB phone numbers (inbox, Google, website, sign calls, etc.),
-                      you may only want the AI to respond to your personal inbox number. Add that number here
-                      and the AI will ignore messages coming in on other numbers.
+                      you may want to exclude certain numbers from AI responses. Add those numbers here
+                      and the AI will ignore messages coming in on them (responding to everything else).
                     </p>
                     <p className="mt-2 text-sm">
                       Find your phone numbers at: <code className="bg-muted px-1 rounded">FUB → Admin → Phone Numbers</code>
