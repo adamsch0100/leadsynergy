@@ -122,13 +122,23 @@ HANDOFF_KEYWORDS = {
     ],
     # Appointment agreement - lead confirmed a time/date for showing or meeting
     "appointment_agreed": [
-        r"(saturday|sunday|monday|tuesday|wednesday|thursday|friday) (works|is good|at \d|morning|afternoon|evening)",
-        r"(i'?m|we'?re|i am) free (at|on|this|next)",
-        r"(sounds good|perfect|great|yes|yeah|yep|sure).*(saturday|sunday|monday|tuesday|wednesday|thursday|friday|tomorrow|weekend|10|11|noon|1|2|3|4)",
+        # Day + optional time + agreement (e.g., "Friday around 6pm works", "Saturday at 10 is good")
+        r"(saturday|sunday|monday|tuesday|wednesday|thursday|friday).*?(works|is good|is fine|sounds good|that works)",
+        r"(saturday|sunday|monday|tuesday|wednesday|thursday|friday) (at|around) \d",  # "Friday at 6", "Saturday around 10"
+        r"(saturday|sunday|monday|tuesday|wednesday|thursday|friday).*(morning|afternoon|evening)",  # "Friday morning", "Saturday in the evening"
+        # Availability statements
+        r"(i'?m|we'?re|i am) (free|available) (at|on|this|next|around)",
+        # Positive confirmation with specific day/time
+        r"(sounds good|perfect|great|yes|yeah|yep|sure|ok|okay).*(saturday|sunday|monday|tuesday|wednesday|thursday|friday|tomorrow|weekend)",
+        r"(sounds good|perfect|great|yes|yeah|yep|sure|ok|okay).*\d{1,2}\s*(am|pm|:)",  # "Sounds good! 6pm"
+        # Time commitment
+        r"\d{1,2}\s*(am|pm|:|o\'?clock).*(works|is (good|fine)|sounds good)",  # "6pm works", "10am is good"
+        # Action commitment
         r"let'?s do (it|that|saturday|sunday|tomorrow)",
-        r"(book|confirm|lock) (it|that|me) in",
-        r"(i|we) can (do|make) (that|it|\d)",
-        r"see you (then|there|saturday|sunday|tomorrow|at \d)",
+        r"(book|confirm|lock|schedule) (it|that|me) in",
+        r"(i|we) can (do|make) (that|it|then)",
+        r"see you (then|there|saturday|sunday|tomorrow|at)",
+        r"count me in",
     ],
 }
 
@@ -469,17 +479,38 @@ Respond with ONLY a number 0-100. Nothing else.
     return _quick_intent_score(message)
 
 
-def get_handoff_acknowledgment(trigger_type: str, agent_name: str = "your agent") -> str:
+def get_handoff_acknowledgment(trigger_type: str, agent_name: str = "your agent", ai_agent_name: str = None) -> str:
     """
     Get an appropriate acknowledgment message for a handoff trigger.
 
     Args:
         trigger_type: Type of handoff trigger detected
-        agent_name: Name of the agent to connect with
+        agent_name: Name of the human agent to connect with
+        ai_agent_name: Name of the AI agent (to avoid self-reference confusion)
 
     Returns:
         Acknowledgment message string
     """
+    # If agent_name matches AI's name, use first-person language to avoid confusion
+    # (e.g., "I'll confirm" instead of "Nadia will confirm" when AI is Nadia)
+    if ai_agent_name and agent_name and agent_name.lower().strip() == ai_agent_name.lower().strip():
+        # Use first-person templates that don't create identity confusion
+        first_person_templates = {
+            "appointment_agreed": "Awesome! Let me confirm those details and get that locked in for you shortly.",
+            "schedule_showing": "Perfect! Let me get that showing scheduled for you - I'll confirm the details shortly.",
+            "wants_call": "Absolutely! I'll give you a call to discuss further. What's the best time to reach you?",
+            "urgent_timeline": "I understand time is of the essence! Let me get on this right away - I'll reach out within the hour.",
+            "home_valuation": "Great question! Let me put together a detailed analysis of your home's value based on recent sales in your area.",
+            "ready_to_list": "That's exciting! Let me walk you through the listing process - I'll reach out shortly to get started.",
+        }
+
+        # Return first-person template if available, otherwise generic first-person message
+        return first_person_templates.get(
+            trigger_type,
+            "Let me take care of that for you - I'll follow up shortly!"
+        )
+
+    # Normal handoff with human agent name
     template = HANDOFF_ACKNOWLEDGMENTS.get(
         trigger_type,
         "Let me connect you with {agent_name} who can help you with that!"

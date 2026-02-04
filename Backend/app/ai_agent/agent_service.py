@@ -472,8 +472,14 @@ class AIAgentService:
                 )
 
                 # Get acknowledgment message
-                agent_name = self.settings.agent_name or lead_profile.assigned_agent or "your agent"
-                response.response_text = get_handoff_acknowledgment(handoff_trigger, agent_name)
+                # Use human agent name for handoff, pass AI name to avoid confusion
+                human_agent_name = lead_profile.assigned_agent or "your agent"
+                ai_agent_name = self.settings.agent_name
+                response.response_text = get_handoff_acknowledgment(
+                    handoff_trigger,
+                    agent_name=human_agent_name,
+                    ai_agent_name=ai_agent_name
+                )
                 response.should_handoff = True
                 response.handoff_reason = f"Lead trigger: {handoff_trigger}"
                 response.result = ProcessingResult.HANDOFF_TRIGGERED
@@ -1390,10 +1396,38 @@ ACTION REQUIRED: Respond to this lead promptly!
         )
         response.lead_score = current_score.total
 
+        # CRITICAL: Force handoff for appointment scheduling interest regardless of score
+        # Appointment scheduling is a HOT LEAD signal - don't let low score block handoff
+        is_appointment_scheduling = (
+            response.detected_intent in ['time_selection', 'appointment_interest', 'appointment_confirmed'] or
+            (response.handoff_reason and 'appointment' in response.handoff_reason.lower()) or
+            'appointment_agreed' in (response.handoff_reason or '')
+        )
+
+        if is_appointment_scheduling:
+            logger.info(f"Appointment scheduling detected - forcing handoff (current score: {current_score.total})")
+
+            # Boost score to reflect appointment interest (major signal)
+            if current_score.total < self.settings.auto_handoff_score:
+                score_boost = max(20, self.settings.auto_handoff_score - current_score.total + 10)
+                logger.info(f"Boosting score by {score_boost} for appointment scheduling")
+                response.lead_score_delta = getattr(response, 'lead_score_delta', 0) + score_boost
+                response.lead_score = current_score.total + score_boost
+
+            # Force handoff
+            response.should_handoff = True
+            response.handoff_reason = response.handoff_reason or "Appointment scheduling interest - immediate handoff required"
+            response.appointment_requested = True
+
+            if conversation_context:
+                conversation_context.state = ConversationState.HANDED_OFF
+                response.conversation_state = ConversationState.HANDED_OFF.value
+                response.state_changed = True
+
         # Check if should suggest scheduling -> immediate handoff to human agent
         # When a lead is qualified enough for scheduling, hand off to the human
         # agent rather than having the AI try to book appointments itself.
-        if (current_score.total >= self.settings.auto_schedule_score_threshold and
+        elif (current_score.total >= self.settings.auto_schedule_score_threshold and
             conversation_context.state == ConversationState.QUALIFYING and
             progress.is_minimally_qualified):
             response.appointment_requested = True
@@ -1406,7 +1440,7 @@ ACTION REQUIRED: Respond to this lead promptly!
         # Check if should auto-handoff due to high score
         if current_score.total >= self.settings.auto_handoff_score_threshold:
             response.should_handoff = True
-            response.handoff_reason = "Lead is highly qualified and ready for human agent"
+            response.handoff_reason = response.handoff_reason or "Lead is highly qualified and ready for human agent"
 
         # Sync qualification data to FUB CRM (async, non-blocking)
         if fub_person_id and response.extracted_info:
