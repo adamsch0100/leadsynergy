@@ -85,24 +85,27 @@ def send_scheduled_message(
         sms_service = FUBSMSService(api_key=fub_api_key)
 
         # Get lead info from database (not FUB API)
-        lead_record = supabase.table("leads").select("*").eq(
+        # Use execute() without .single() to avoid exception on no rows
+        lead_query = supabase.table("leads").select("*").eq(
             "fub_person_id", fub_person_id
-        ).single().execute()
+        ).execute()
 
-        if not lead_record.data:
+        if not lead_query.data or len(lead_query.data) == 0:
             logger.error(f"Person {fub_person_id} not found in database")
             _mark_message_failed(supabase, message_id, "Person not found in database")
             return {"success": False, "error": "Person not found"}
 
+        lead_data = lead_query.data[0]  # Get first result
+
         # Build lead profile from database data
         lead_profile = LeadProfile(
             fub_person_id=fub_person_id,
-            first_name=lead_record.data.get("first_name", ""),
-            last_name=lead_record.data.get("last_name", ""),
-            phone=lead_record.data.get("phone", ""),
-            email=lead_record.data.get("email", ""),
-            source=lead_record.data.get("source", ""),
-            stage=lead_record.data.get("stage", ""),
+            first_name=lead_data.get("first_name", ""),
+            last_name=lead_data.get("last_name", ""),
+            phone=lead_data.get("phone", ""),
+            email=lead_data.get("email", ""),
+            source=lead_data.get("source", ""),
+            stage=lead_data.get("stage", ""),
         )
 
         # Check compliance

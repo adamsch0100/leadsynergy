@@ -1484,6 +1484,46 @@ async def process_new_lead(webhook_data: Dict[str, Any], resource_uri: str, reso
             logger.warning(f"Cannot initiate AI for new lead {person_id}: {compliance_result.reason}")
             return
 
+        # Ensure lead exists in database before creating conversation
+        try:
+            from app.models.lead import Lead
+            import json
+
+            # Check if lead already exists
+            existing_lead = supabase.table("leads").select("id").eq(
+                "fub_person_id", str(person_id)
+            ).eq(
+                "user_id", user_id
+            ).execute()
+
+            if not existing_lead.data:
+                # Lead doesn't exist, create it
+                lead_obj = Lead.from_fub(person_data)
+                lead_dict = {
+                    key: value
+                    for key, value in lead_obj.to_dict().items()
+                    if value is not None
+                }
+                lead_dict.pop("fub_id", None)
+                lead_dict["fub_person_id"] = str(person_id)
+                lead_dict["user_id"] = user_id
+                lead_dict["organization_id"] = organization_id
+
+                if lead_dict.get("price") is None:
+                    lead_dict["price"] = 0
+                if isinstance(lead_dict.get("tags"), list):
+                    lead_dict["tags"] = json.dumps(lead_dict["tags"])
+
+                # Insert the lead
+                supabase.table("leads").insert(lead_dict).execute()
+                logger.info(f"Created lead record in database for person {person_id}")
+            else:
+                logger.info(f"Lead record already exists for person {person_id}")
+
+        except Exception as lead_error:
+            logger.error(f"Error creating lead record: {lead_error}")
+            # Continue anyway - the conversation can still work
+
         # Create conversation context
         from app.ai_agent.conversation_manager import ConversationManager
         conversation_manager = ConversationManager(supabase_client=supabase)
