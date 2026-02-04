@@ -501,6 +501,7 @@ class AIAgentService:
                     lead_profile=lead_profile,
                     reason=self._get_handoff_reason(detected),
                     start_time=start_time,
+                    fub_person_id=fub_person_id,  # Pass person ID to create task
                 )
 
             # Step 4: Check for opt-out
@@ -844,11 +845,26 @@ class AIAgentService:
         lead_profile: LeadProfile,
         reason: str,
         start_time: datetime,
+        fub_person_id: int = None,
     ) -> AgentResponse:
         """Handle handoff to human agent."""
         response.result = ProcessingResult.HANDOFF_TRIGGERED
         response.should_handoff = True
         response.handoff_reason = reason
+
+        # Create FUB task to notify agent (CRITICAL - was missing!)
+        if fub_person_id:
+            try:
+                await self._create_handoff_task(
+                    fub_person_id=fub_person_id,
+                    trigger_type="immediate_handoff",
+                    lead_message=None,  # No specific message for frustration/profanity handoffs
+                    lead_profile=lead_profile,
+                )
+                logger.info(f"Created handoff task for person {fub_person_id}: {reason}")
+            except Exception as e:
+                logger.error(f"Failed to create handoff task: {e}")
+                # Don't fail the handoff just because task creation failed
 
         # Get handoff message
         response.response_text = self.template_engine.get_handoff_message(
