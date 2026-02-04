@@ -61,6 +61,8 @@ async def notify_agent_of_handoff(
                     last_message=last_message,
                     fub_link=fub_link,
                     template=settings.handoff_notification_template,
+                    user_id=settings.user_id,
+                    organization_id=settings.organization_id,
                 )
 
                 if sms_result:
@@ -82,6 +84,8 @@ async def notify_agent_of_handoff(
                     handoff_reason=handoff_reason,
                     last_message=last_message,
                     assigned_agent_email=assigned_agent_email,
+                    user_id=settings.user_id,
+                    organization_id=settings.organization_id,
                     fub_client=fub_client,
                 )
 
@@ -124,6 +128,8 @@ async def send_sms_to_agent(
     last_message: str,
     fub_link: str,
     template: str,
+    user_id: str = None,
+    organization_id: str = None,
 ):
     """
     Send SMS to agent's notification number via FUB.
@@ -138,6 +144,8 @@ async def send_sms_to_agent(
         last_message: Last message from lead
         fub_link: Link to lead in FUB
         template: Message template
+        user_id: User ID for credential lookup
+        organization_id: Organization ID for credential lookup
     """
     from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
 
@@ -155,6 +163,8 @@ async def send_sms_to_agent(
         result = await send_sms_with_auto_credentials(
             person_id=notification_person_id,
             message=message,
+            user_id=user_id,
+            organization_id=organization_id,
         )
 
         if result.get('success'):
@@ -175,13 +185,15 @@ async def send_email_to_agent(
     handoff_reason: str,
     last_message: str,
     assigned_agent_email: str,
+    user_id: str = None,
+    organization_id: str = None,
     fub_client=None,
 ):
     """
-    Send email from the lead to the assigned agent via FUB API.
+    Send email from the lead to the assigned agent via Playwright.
 
-    This creates an email in FUB as if the lead sent it to the agent.
-    The agent receives it in their inbox with the lead's email as the sender.
+    This sends an email through the FUB interface to the assigned agent.
+    The agent receives it in their inbox.
 
     Args:
         fub_person_id: FUB person ID of the lead
@@ -189,69 +201,49 @@ async def send_email_to_agent(
         handoff_reason: Why handoff occurred
         last_message: Last message from lead
         assigned_agent_email: Email of the assigned agent
-        fub_client: Optional FUB client
+        user_id: User ID for credential lookup
+        organization_id: Organization ID for credential lookup
+        fub_client: Optional FUB client (unused, kept for API compatibility)
     """
-    from app.integrations.fub.client import FUBClient
-    from app.database.credentials import Credentials
-
-    if not fub_client:
-        fub_client = FUBClient(api_key=Credentials().FUB_API_KEY)
+    from app.messaging.playwright_sms_service import send_email_with_auto_credentials
 
     try:
         # Build email subject and body
         subject = f"🔔 AI Handoff Alert: {lead_name} needs your attention"
 
-        body = f"""
-<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-    <div style="background: #ff6b6b; color: white; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-        <h2 style="margin: 0;">🔔 HANDOFF ALERT</h2>
-        <p style="margin: 5px 0 0 0; font-size: 14px;">AI has handed off this lead to you - respond ASAP</p>
-    </div>
+        body = f"""AI has handed off this lead to you - respond ASAP
 
-    <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
-        <h3 style="margin-top: 0; color: #333;">Lead Information</h3>
-        <p style="margin: 5px 0;"><strong>Name:</strong> {lead_name}</p>
-        <p style="margin: 5px 0;"><strong>Handoff Reason:</strong> {handoff_reason}</p>
-    </div>
+Lead Information:
+- Name: {lead_name}
+- Handoff Reason: {handoff_reason}
 
-    <div style="background: #e3f2fd; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
-        <h3 style="margin-top: 0; color: #1976d2;">Last Message from Lead</h3>
-        <p style="margin: 0; font-style: italic;">"{last_message}"</p>
-    </div>
+Last Message from Lead:
+"{last_message}"
 
-    <div style="background: #fff3cd; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
-        <h3 style="margin-top: 0; color: #856404;">⚡ Action Required</h3>
-        <p style="margin: 5px 0;">The AI has determined this lead needs human attention. Please respond to them as soon as possible.</p>
-    </div>
+Action Required:
+The AI has determined this lead needs human attention. Please respond to them as soon as possible.
 
-    <div style="text-align: center; margin-top: 20px;">
-        <a href="https://app.followupboss.com/2/people/view/{fub_person_id}"
-           style="background: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
-            View Lead in Follow Up Boss →
-        </a>
-    </div>
+View Lead in Follow Up Boss:
+https://app.followupboss.com/2/people/view/{fub_person_id}
 
-    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; text-align: center; color: #666; font-size: 12px;">
-        <p>This is an automated handoff notification from your AI agent.</p>
-        <p>Powered by LeadSynergy AI</p>
-    </div>
-</div>
-        """
+---
+This is an automated handoff notification from your AI agent.
+Powered by LeadSynergy AI"""
 
-        # Create email via FUB API
-        # Note: This sends as the lead to the agent
-        result = await fub_client.create_email(
+        # Send email via Playwright
+        result = await send_email_with_auto_credentials(
             person_id=fub_person_id,
-            to_email=assigned_agent_email,
             subject=subject,
-            body_html=body,
+            body=body,
+            user_id=user_id,
+            organization_id=organization_id,
         )
 
-        if result:
+        if result.get('success'):
             logger.info(f"Email notification sent to agent {assigned_agent_email} for lead {fub_person_id}")
             return True
         else:
-            logger.error(f"Failed to send email notification via FUB")
+            logger.error(f"Failed to send email notification: {result.get('error')}")
             return False
 
     except Exception as e:

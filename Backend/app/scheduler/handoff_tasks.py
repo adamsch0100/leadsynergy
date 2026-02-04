@@ -77,11 +77,11 @@ def check_handoff_fallback(
         logger.info(f"Agent hasn't responded to person {fub_person_id}, sending fallback")
 
         # Get lead info from FUB
-        from app.integrations.fub.client import FUBClient
-        from app.database.credentials import Credentials
+        from app.database.fub_api_client import FUBApiClient
+        from app.utils.constants import Credentials
 
-        fub = FUBClient(api_key=Credentials().FUB_API_KEY)
-        person = asyncio.run(fub.get_person(fub_person_id))
+        fub = FUBApiClient(api_key=Credentials().FUB_API_KEY)
+        person = fub.get_person(fub_person_id)
 
         if not person:
             logger.error(f"Could not fetch person {fub_person_id} from FUB")
@@ -188,11 +188,11 @@ def check_handoff_reactivation(
         logger.warning(f"Agent NEVER responded to person {fub_person_id} - reactivating AI")
 
         # Get lead info
-        from app.integrations.fub.client import FUBClient
-        from app.database.credentials import Credentials
+        from app.database.fub_api_client import FUBApiClient
+        from app.utils.constants import Credentials
 
-        fub = FUBClient(api_key=Credentials().FUB_API_KEY)
-        person = asyncio.run(fub.get_person(fub_person_id))
+        fub = FUBApiClient(api_key=Credentials().FUB_API_KEY)
+        person = fub.get_person(fub_person_id)
 
         if not person:
             logger.error(f"Could not fetch person {fub_person_id} from FUB")

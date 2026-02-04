@@ -117,13 +117,13 @@ async def check_if_agent_responded(
                 return True
 
         # Also check FUB API for recent texts/emails from the agent
-        from app.integrations.fub.client import FUBClient
-        from app.database.credentials import Credentials
+        from app.database.fub_api_client import FUBApiClient
+        from app.utils.constants import Credentials
 
-        fub = FUBClient(api_key=Credentials().FUB_API_KEY)
+        fub = FUBApiClient(api_key=Credentials().FUB_API_KEY)
 
         # Get recent text messages
-        texts = await fub.get_text_messages(fub_person_id)
+        texts = fub.get_text_messages_for_person(fub_person_id)
         for text in reversed(texts):  # Most recent first
             sent_time = datetime.fromisoformat(text.get('created', '').replace('Z', '+00:00'))
             if sent_time <= handoff_time:
