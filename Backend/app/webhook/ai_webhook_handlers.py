@@ -1535,6 +1535,46 @@ async def process_new_lead(webhook_data: Dict[str, Any], resource_uri: str, reso
             lead_data=person_data,
         )
 
+        # ==================== PROACTIVE AI OUTREACH ====================
+        # Trigger world-class proactive outreach with historical context analysis
+        logger.info(f"🚀 Triggering proactive AI outreach for lead {person_id}")
+
+        try:
+            from app.ai_agent.proactive_outreach_orchestrator import ProactiveOutreachOrchestrator
+            from app.messaging.fub_sms_service import FUBSMSService
+            from app.ai_agent.compliance_checker import ComplianceChecker
+
+            orchestrator = ProactiveOutreachOrchestrator(
+                supabase_client=supabase,
+                fub_client=fub_client,
+                sms_service=FUBSMSService(),
+                compliance_checker=ComplianceChecker(supabase_client=supabase),
+            )
+
+            # Determine if this was manual or auto enable
+            # (Auto-enable comes through this webhook, manual has different flow)
+            enable_type = "auto"
+
+            outreach_result = await orchestrator.trigger_proactive_outreach(
+                fub_person_id=person_id,
+                organization_id=organization_id,
+                user_id=user_id,
+                trigger_reason="new_lead_ai_enabled",
+                enable_type=enable_type,
+            )
+
+            if outreach_result["success"]:
+                logger.info(f"✅ Proactive outreach completed: {', '.join(outreach_result['actions_taken'])}")
+                # Continue to Celery sequence - it handles day 1-7 follow-ups intelligently
+            else:
+                logger.warning(f"⚠️  Proactive outreach partial/failed: {', '.join(outreach_result.get('errors', []))}")
+                # Continue to Celery as fallback
+
+        except Exception as outreach_error:
+            logger.error(f"❌ Proactive outreach orchestrator exception: {outreach_error}", exc_info=True)
+            # Continue to Celery welcome sequence as fallback - better than nothing
+        # ==================== END PROACTIVE OUTREACH ====================
+
         # Trigger welcome sequence via Celery task
         try:
             from app.scheduler.ai_tasks import start_new_lead_sequence
@@ -1667,54 +1707,135 @@ async def schedule_welcome_sequence(context, settings: Dict[str, Any]):
     """
     Schedule the welcome message sequence for a new lead.
 
+    This is a FALLBACK when Celery is unavailable. It sends both SMS and email
+    immediately via Playwright so they appear in FUB.
+
     Sequence:
-    1. Immediate (or slight delay): Welcome message
-    2. 15 min: Follow-up if no response
-    3. 1 hour: Email intro
-    4. 4 hours: Second text attempt
+    1. Immediate SMS: Welcome message via Playwright
+    2. Immediate Email: AI-generated welcome email via Playwright
     """
     try:
         from datetime import timedelta
+        from app.messaging.playwright_sms_service import send_sms_with_auto_credentials, send_email_with_auto_credentials
 
-        # Get first name
+        # Get lead info
         first_name = context.lead_first_name or "there"
         agent_name = settings.get('agent_name', 'Sarah')
         brokerage = settings.get('brokerage_name', 'our team')
+        fub_person_id = context.fub_person_id
+        user_id = context.user_id
+        organization_id = context.organization_id
 
-        # Welcome message (send after short delay for more natural feel)
-        welcome_msg = f"Hey {first_name}! I'm {agent_name} with {brokerage}. Saw you were looking at properties - that's exciting! Are you just starting to explore or getting closer to making a move?"
+        logger.info(f"[FALLBACK] Sending immediate SMS + Email for lead {fub_person_id} (Celery unavailable)")
 
-        # Schedule messages
-        now = datetime.utcnow()
-        delay_seconds = settings.get('response_delay_seconds', 10)
+        # ================================================================
+        # 1. SEND WELCOME SMS VIA PLAYWRIGHT
+        # ================================================================
+        welcome_sms = f"Hey {first_name}! I'm {agent_name} with {brokerage}. Saw you were looking at properties - that's exciting! Are you just starting to explore or getting closer to making a move?"
 
-        messages_to_schedule = [
-            {
-                "scheduled_for": now + timedelta(seconds=delay_seconds),
-                "message_content": welcome_msg,
-                "message_template": "WELCOME_001",
-                "channel": "sms",
-            },
-        ]
+        try:
+            sms_result = await send_sms_with_auto_credentials(
+                person_id=fub_person_id,
+                message=welcome_sms,
+                user_id=user_id,
+                organization_id=organization_id,
+                supabase_client=supabase,
+            )
 
-        for msg_data in messages_to_schedule:
-            supabase.table("scheduled_messages").insert({
-                "id": str(uuid.uuid4()),
-                "conversation_id": context.conversation_id,
-                "fub_person_id": context.fub_person_id,
-                "user_id": context.user_id,
-                "organization_id": context.organization_id,
-                "channel": msg_data["channel"],
-                "message_template": msg_data["message_template"],
-                "message_content": msg_data["message_content"],
-                "scheduled_for": msg_data["scheduled_for"].isoformat(),
-                "status": "pending",
-            }).execute()
+            if sms_result.get("success"):
+                logger.info(f"[FALLBACK] SMS sent to lead {fub_person_id}")
+            else:
+                logger.error(f"[FALLBACK] SMS failed for lead {fub_person_id}: {sms_result.get('error')}")
+        except Exception as sms_error:
+            logger.error(f"[FALLBACK] SMS exception for lead {fub_person_id}: {sms_error}")
 
-        logger.info(f"Scheduled {len(messages_to_schedule)} messages for conversation {context.conversation_id}")
+        # ================================================================
+        # 2. GENERATE AND SEND WELCOME EMAIL VIA PLAYWRIGHT
+        # ================================================================
+        try:
+            # Get person data for AI email generation
+            person_data = fub_client.get_person(fub_person_id)
+
+            if person_data:
+                # Get lead's email
+                emails = person_data.get('emails', [])
+                lead_email = emails[0].get('value') if emails else None
+
+                if lead_email:
+                    # Get recent events for context
+                    import requests
+                    import base64
+                    import os
+                    events = []
+                    try:
+                        fub_api_key = os.getenv('FUB_API_KEY') or CREDS.FUB_API_KEY
+                        if fub_api_key:
+                            headers = {
+                                'Authorization': f'Basic {base64.b64encode(f"{fub_api_key}:".encode()).decode()}',
+                            }
+                            resp = requests.get(
+                                f'https://api.followupboss.com/v1/events?personId={fub_person_id}&limit=5',
+                                headers=headers,
+                                timeout=10,
+                            )
+                            if resp.status_code == 200:
+                                events = resp.json().get('events', [])
+                    except Exception as e:
+                        logger.warning(f"Could not fetch events for email context: {e}")
+
+                    # Generate AI-powered email
+                    from app.ai_agent.initial_outreach_generator import generate_initial_outreach
+
+                    outreach = await generate_initial_outreach(
+                        person_data=person_data,
+                        events=events,
+                        agent_name=agent_name,
+                        agent_email=settings.get('agent_email', ''),
+                        agent_phone=settings.get('agent_phone', ''),
+                        brokerage_name=brokerage,
+                    )
+
+                    if outreach and outreach.email_body:
+                        # Send email via Playwright (so it appears in FUB)
+                        email_result = await send_email_with_auto_credentials(
+                            person_id=fub_person_id,
+                            subject=outreach.email_subject,
+                            body=outreach.email_body,
+                            user_id=user_id,
+                            organization_id=organization_id,
+                            supabase_client=supabase,
+                        )
+
+                        if email_result.get("success"):
+                            logger.info(f"[FALLBACK] Email sent to lead {fub_person_id} via Playwright")
+
+                            # Log to database
+                            supabase.table("ai_message_log").insert({
+                                "fub_person_id": fub_person_id,
+                                "direction": "outbound",
+                                "channel": "email",
+                                "message_content": outreach.email_subject,
+                                "intent_detected": "fallback_welcome_email",
+                                "created_at": datetime.utcnow().isoformat(),
+                            }).execute()
+                        else:
+                            logger.error(f"[FALLBACK] Email failed for lead {fub_person_id}: {email_result.get('error')}")
+                    else:
+                        logger.warning(f"[FALLBACK] Could not generate AI email for lead {fub_person_id}")
+                else:
+                    logger.info(f"[FALLBACK] No email address for lead {fub_person_id}, skipping email")
+            else:
+                logger.warning(f"[FALLBACK] Could not fetch person data for lead {fub_person_id}")
+
+        except Exception as email_error:
+            logger.error(f"[FALLBACK] Email exception for lead {fub_person_id}: {email_error}")
+
+        logger.info(f"[FALLBACK] Completed welcome sequence for lead {fub_person_id}")
 
     except Exception as e:
-        logger.error(f"Error scheduling welcome sequence: {e}")
+        logger.error(f"Error in fallback welcome sequence: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 async def resolve_organization_for_person(person_id: int) -> Optional[str]:

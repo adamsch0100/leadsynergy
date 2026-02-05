@@ -20,6 +20,13 @@ from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
+# Import HistoricalContext for context-aware outreach
+try:
+    from app.ai_agent.lead_context_analyzer import HistoricalContext
+except ImportError:
+    # Allow running without lead_context_analyzer for backwards compat
+    HistoricalContext = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -398,7 +405,45 @@ TONE GUIDE by timeline:
 - 1-3 months: Helpful, "Let me send you what's hitting the market"
 - 3-6 months: Supportive, "Perfect time to start exploring"
 - 6-12 months: Very relaxed, "No rush - I'll be a resource when you're ready"
-- Just browsing: Zero pressure, "Happy to share market insights whenever"""
+- Just browsing: Zero pressure, "Happy to share market insights whenever"
+
+HISTORICAL CONTEXT & CONTINUITY RULES (CRITICAL - READ CAREFULLY):
+If "=== PRIOR COMMUNICATION HISTORY ===" section is provided below, you MUST acknowledge prior communication!
+
+CONTINUITY RULES FOR RETURNING/DORMANT LEADS:
+1. If lead had previous conversation (DORMANT/RETURNING stage):
+   - **Reference what you discussed before**: "Last time we chatted about [X]..." or "When we talked about [Y]..."
+   - **NEVER re-ask questions they already answered** - Check "Questions ALREADY Asked" list
+   - **Acknowledge the time gap naturally**: "It's been a few months since we last connected..." or "Been a while since we talked..."
+   - Be warm and welcoming: "Great to hear from you again!"
+
+2. If conversation ended with lead going silent ("went_silent"):
+   - **Soft re-entry**: "Not sure if you're still looking, but..." or "Wanted to check in..."
+   - **Value-first approach**: Lead with market update, new listing, or helpful info
+   - **No guilt trips**: Don't make them feel bad for not responding
+
+3. If objection was raised before (check "Previous Objections"):
+   - **Address indirectly with value**: Don't re-raise the objection
+   - Example: "too_expensive" → "Market has shifted - seeing more inventory in your budget range now"
+   - Example: "not_ready" → "No pressure - thought you'd want to know about [market change/new listing]"
+
+4. For BRAND NEW leads (NEW stage, no prior contact):
+   - **Standard enthusiastic intro** - reference their inquiry source
+   - NO historical context to worry about
+
+MESSAGE TONE BY LEAD STAGE:
+- NEW: Enthusiastic, introduce yourself, reference their property search
+- DORMANT: Friendly check-in, market update angle, acknowledge time gap, low pressure
+- WARM: Casual continuation of conversation, pick up where you left off
+- COLD: Soft value offer (market insight), very low pressure, no ask
+- RETURNING: "Good to hear from you again!" - warm welcome back, reference prior context
+
+ABSOLUTE DON'TS WITH HISTORICAL CONTEXT:
+- DON'T ask about things marked "[ALREADY DISCUSSED]" or in "Topics ALREADY Discussed"
+- DON'T re-introduce yourself if you've had conversations before
+- DON'T ignore that you had previous conversations - ALWAYS acknowledge them
+- DON'T pressure leads who went silent - soft re-entry only
+- DON'T re-ask questions in "Questions ALREADY Asked" list"""
 
     def __init__(
         self,
@@ -417,18 +462,20 @@ TONE GUIDE by timeline:
     async def generate_outreach(
         self,
         lead_context: LeadContext,
+        historical_context: Optional['HistoricalContext'] = None,
     ) -> InitialOutreach:
         """
         Generate personalized SMS and email for initial lead contact.
 
         Args:
             lead_context: Rich context about the new lead
+            historical_context: Optional historical context with prior communication analysis
 
         Returns:
             InitialOutreach with SMS and email content
         """
-        # Build the context prompt
-        context_prompt = self._build_context_prompt(lead_context)
+        # Build the context prompt (now includes historical context if provided)
+        context_prompt = self._build_context_prompt(lead_context, historical_context)
 
         # Call Claude to generate messages
         try:
@@ -458,10 +505,48 @@ TONE GUIDE by timeline:
             logger.error(f"AI generation failed, using smart fallback: {e}")
             return self._generate_smart_fallback(lead_context)
 
-    def _build_context_prompt(self, ctx: LeadContext) -> str:
-        """Build the context section of the prompt."""
+    def _build_context_prompt(self, ctx: LeadContext, hist: Optional['HistoricalContext'] = None) -> str:
+        """Build the context section of the prompt with optional historical context."""
         parts = []
 
+        # Add historical context section if provided
+        if hist and HistoricalContext:
+            parts.append("\n=== PRIOR COMMUNICATION HISTORY ===")
+            parts.append(f"Lead Stage: {hist.lead_stage.stage}")
+            parts.append(f"Stage Reasoning: {hist.lead_stage.reasoning}")
+            parts.append(f"Days Since Last Contact: {hist.communication_history.days_since_last_contact}")
+
+            if hist.communication_history.last_message_preview:
+                parts.append(f"Last Message Context: \"{hist.communication_history.last_message_preview}\"")
+                parts.append(f"Conversation Ended How: {hist.communication_history.conversation_ended_how}")
+
+            if hist.communication_history.topics_discussed:
+                topics_str = ", ".join(hist.communication_history.topics_discussed)
+                parts.append(f"Topics ALREADY Discussed: {topics_str}")
+
+            if hist.communication_history.questions_already_asked:
+                questions_str = ", ".join(hist.communication_history.questions_already_asked)
+                parts.append(f"Questions ALREADY Asked (DO NOT RE-ASK): {questions_str}")
+
+            if hist.communication_history.objections_raised:
+                objections_str = ", ".join(hist.communication_history.objections_raised)
+                parts.append(f"Previous Objections Raised: {objections_str}")
+
+            parts.append(f"\nRE-ENGAGEMENT STRATEGY:")
+            parts.append(f"- Approach: {hist.strategy.approach}")
+            parts.append(f"- Tone: {hist.strategy.tone}")
+            parts.append(f"- Message Angle: {hist.strategy.message_angle}")
+
+            if hist.strategy.reference_context:
+                parts.append(f"- Reference This Context: {hist.strategy.reference_context}")
+
+            if hist.strategy.avoid_topics:
+                avoid_str = ", ".join(hist.strategy.avoid_topics)
+                parts.append(f"- Avoid These Topics: {avoid_str}")
+
+            parts.append("=== END PRIOR HISTORY ===\n")
+
+        # Standard lead context
         parts.append(f"Lead Name: {ctx.first_name}")
 
         # Use friendly source name
