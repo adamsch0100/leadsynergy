@@ -221,7 +221,8 @@ class ProactiveOutreachOrchestrator:
 
             if result.data:
                 settings = result.data[0]
-                settings['organization_id'] = organization_id  # Ensure org_id is included
+                settings['organization_id'] = organization_id
+                settings['user_id'] = user_id
                 return settings
 
             # Fallback to org settings
@@ -232,6 +233,7 @@ class ProactiveOutreachOrchestrator:
             if result.data:
                 settings = result.data[0]
                 settings['organization_id'] = organization_id
+                settings['user_id'] = user_id
                 return settings
 
             # Return defaults
@@ -244,6 +246,7 @@ class ProactiveOutreachOrchestrator:
                 'working_hours_start': 8,
                 'working_hours_end': 20,
                 'organization_id': organization_id,
+                'user_id': user_id,
             }
 
         except Exception as e:
@@ -392,20 +395,25 @@ class ProactiveOutreachOrchestrator:
         # Send or queue SMS
         try:
             if compliance_result["send_immediately"]:
-                # Send immediately
+                # Send immediately via Playwright
                 logger.info(f"📤 Sending SMS immediately to lead {fub_person_id}")
 
-                sms_result = await self.sms_service.send_text_message_async(
+                from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
+
+                sms_result = await send_sms_with_auto_credentials(
                     person_id=fub_person_id,
                     message=outreach.sms_message,
+                    user_id=settings.get('user_id'),
+                    organization_id=settings.get('organization_id'),
+                    supabase_client=self.supabase,
                 )
 
-                if sms_result.get('id'):
+                if sms_result.get('success'):
                     result["actions"].append("sms_sent")
-                    logger.info(f"✅ SMS sent successfully (FUB message ID: {sms_result.get('id')})")
+                    logger.info(f"✅ SMS sent successfully via Playwright")
                 else:
                     result["errors"].append("SMS send failed")
-                    logger.error(f"❌ SMS send failed: {sms_result}")
+                    logger.error(f"❌ SMS send failed: {sms_result.get('error', 'Unknown error')}")
 
             else:
                 # Queue for later
