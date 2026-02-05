@@ -68,13 +68,22 @@ class LeadContext:
     beds: int = 0
     baths: float = 0
 
+    # Specific Property Details (CRITICAL for personalization!)
+    property_address: str = ""  # For SELLERS: "9556 Juniper Way" - their home to sell
+    property_full_address: str = ""  # Full: "9556 Juniper Way, Arvada, CO"
+    inquiry_property: str = ""  # For BUYERS: specific property they inquired about
+
     # Timeline & Motivation
     timeline: str = ""  # Immediate, 1-3 months, 6-12 months, Just Browsing
     financing_status: str = ""  # Pre-approved, Not Applied, Working on it
     buyer_type: str = ""  # First-time, Move-up, Investor, Relocating
 
-    # Lead Type (derived from tags)
+    # Lead Type (derived from tags and type field)
     lead_type: str = ""  # "buyer", "seller", "both", or ""
+
+    # Professional/Social Context
+    company: str = ""  # From socialData
+    job_title: str = ""  # From socialData
 
     # Tags from FUB
     tags: list = None
@@ -113,13 +122,26 @@ class LeadContext:
         state = ''
         zip_code = ''
         neighborhoods = []
+        property_address = ''  # Street address only
+        property_full_address = ''  # Full address with city/state
 
         addresses = person_data.get('addresses', [])
         if addresses:
             addr = addresses[0]
+            street = addr.get('street', '')
             city = addr.get('city', '')
             state = addr.get('state', '')
             zip_code = addr.get('code', '')  # FUB uses 'code' for zip
+
+            # For SELLERS: this is their property to sell
+            if street:
+                property_address = street
+                if city and state:
+                    property_full_address = f"{street}, {city}, {state}"
+                elif city:
+                    property_full_address = f"{street}, {city}"
+                else:
+                    property_full_address = street
 
         # Check cities field (FUB stores location interest here)
         if person_data.get('cities'):
@@ -136,9 +158,10 @@ class LeadContext:
         # Extract property interest
         property_type = person_data.get('propertyType', '')
 
-        # Extract timeline and financing from events/notes
+        # Extract timeline, financing, and property inquiries from events
         timeline = ''
         financing_status = ''
+        inquiry_property = ''  # For BUYERS: specific property they inquired about
 
         if events:
             for event in events:
@@ -151,6 +174,31 @@ class LeadContext:
                 # Also check for zip code in event description
                 if 'Primary Zip:' in desc and not zip_code:
                     zip_code = desc.split('Primary Zip:')[1].split('|')[0].strip()
+
+                # Check for specific property inquiry (for BUYERS)
+                prop = event.get('property', {})
+                if prop and prop.get('street'):
+                    # This is a specific property they inquired about
+                    prop_street = prop.get('street', '')
+                    prop_city = prop.get('city', '')
+                    prop_state = prop.get('state', '')
+
+                    if prop_street:
+                        if prop_city and prop_state:
+                            inquiry_property = f"{prop_street}, {prop_city}, {prop_state}"
+                        elif prop_city:
+                            inquiry_property = f"{prop_street}, {prop_city}"
+                        else:
+                            inquiry_property = prop_street
+                    break  # Use first property found
+
+        # Extract social/professional data
+        company = ''
+        job_title = ''
+        social_data = person_data.get('socialData', {})
+        if social_data:
+            company = social_data.get('company', '')
+            job_title = social_data.get('title', '')
 
         # Extract tags
         tags = person_data.get('tags', [])
@@ -200,10 +248,15 @@ class LeadContext:
             property_type=property_type,
             price_min=price_min,
             price_max=price_max,
+            property_address=property_address,
+            property_full_address=property_full_address,
+            inquiry_property=inquiry_property,
             timeline=timeline,
             financing_status=financing_status,
             buyer_type=buyer_type,
             lead_type=lead_type,
+            company=company,
+            job_title=job_title,
             tags=tags,
         )
 
@@ -276,12 +329,19 @@ CRITICAL RULES:
 5. NEVER use generic phrases like "I saw your inquiry" - be specific about WHERE they came from
 6. Don't oversell or make promises - just start a friendly conversation
 7. Use the agent's actual name, not "your agent" or similar
-8. If they inquired about a SPECIFIC PROPERTY, mention it by address!
+8. **CRITICAL:** If "Property to Sell" or "Property They Inquired About" is provided, ALWAYS mention the EXACT ADDRESS in your message!
 9. DO NOT ASK about buyer/seller status if Lead Type is already provided - we already know!
+10. **For SELLERS:** If you have their property address, reference it specifically: "your home at 9556 Juniper Way" not "your home in Arvada"
+11. **For BUYERS:** If they inquired about a specific property, mention it: "saw you were checking out 123 Main Street"
 
 LEAD TYPE RULES (critical - pay attention to Lead Type field!):
 - If Lead Type is "BUYER only": Focus on home search, listings, neighborhoods, market conditions for buyers
-- If Lead Type is "SELLER only": Focus on home valuation, market timing, listing strategy, comparable sales
+- If Lead Type is "SELLER only": Focus on market expertise, timing guidance, and being a helpful resource
+  * EMPATHY-FIRST: Acknowledge that selling can be stressful - you're here to help, not pressure
+  * Start by asking what's driving their move (their story matters!)
+  * Offer expertise on market conditions, timing, and what buyers are looking for
+  * AVOID "free home valuation" or "free estimate" language - emphasize market expertise and guidance instead
+  * Be a helper and expert guide, not a salesperson pushing for appointments
 - If Lead Type is "BUYER AND SELLER": Acknowledge BOTH needs! They're making a move. Focus on:
   * Coordinating the sale of their current home with purchasing a new one
   * Understanding their timeline for both transactions
@@ -306,9 +366,12 @@ EMAIL-SPECIFIC RULES:
 - MUST explain the connection: HOW you were matched (e.g., "Top Agents Ranked connected us...", "MyAgentFinder matched us because...")
 - MUST briefly introduce yourself: who you are, your role
 - MUST OFFER VALUE UPFRONT:
-  * For BUYERS: Offer curated listings, neighborhood guides, off-market properties
-  * For SELLERS: Offer free home valuation, market analysis, comparable sales data
-  * For BOTH: Offer to coordinate both transactions, timeline planning
+  * For BUYERS: Offer curated listings, neighborhood guides, market insights
+  * For SELLERS: Offer market expertise, timing guidance, understanding of local conditions - NOT "free valuations"
+    - Emphasize you'll walk them through the market, discuss timing, answer questions
+    - Focus on being a resource and expert guide (bring data, strategy, knowledge)
+    - "No pressure - here when you're ready" tone
+  * For BOTH: Offer to coordinate both transactions, timeline planning, strategic guidance
 - MUST end with a CLEAR, EXPLICIT CALL TO ACTION in <strong> tags:
   * "Just hit reply and tell me [specific thing] - I'll [specific result]!"
 - Add a PS line in <em> tags at the end - most-read part!
@@ -414,6 +477,14 @@ TONE GUIDE by timeline:
                 'both': 'BUYER AND SELLER - looking to sell current home AND buy a new one',
             }.get(ctx.lead_type, ctx.lead_type)
             parts.append(f"Lead Type: {lead_type_desc}")
+
+        # CRITICAL: Property address for SELLERS
+        if ctx.property_full_address and ctx.lead_type in ['seller', 'both']:
+            parts.append(f"Property to Sell: {ctx.property_full_address}")
+
+        # CRITICAL: Specific property inquiry for BUYERS
+        if ctx.inquiry_property and ctx.lead_type == 'buyer':
+            parts.append(f"Property They Inquired About: {ctx.inquiry_property}")
 
         location = ctx.get_location_str()
         if location and location != "your area":
@@ -602,44 +673,154 @@ IMPORTANT: The email_body MUST be a complete email with greeting, body paragraph
         """Generate fallback messages without AI if API fails."""
         location = ctx.get_location_str()
         timeline = ctx.get_timeline_str()
+        friendly_source = ctx.get_friendly_source()
 
-        # Smart SMS based on timeline
-        if 'soon' in timeline or 'immediate' in ctx.timeline.lower() if ctx.timeline else False:
-            sms = f"Hey {ctx.first_name}! {self.agent_name} here. Saw you're looking at {location} - great area! When's a good time to chat about what you're looking for?"
-        elif ctx.timeline and ('12' in ctx.timeline or 'year' in ctx.timeline.lower()):
-            sms = f"Hey {ctx.first_name}! {self.agent_name} here. I see you're exploring {location} for down the road. Happy to be a resource - what questions can I answer for you?"
+        # ================================================================
+        # DETERMINE IF BUYER, SELLER, OR BOTH
+        # ================================================================
+        is_seller = ctx.lead_type == 'seller'
+        is_buyer = ctx.lead_type == 'buyer'
+        is_both = ctx.lead_type == 'both'
+
+        # ================================================================
+        # SMART SMS - CUSTOMIZED BY LEAD TYPE
+        # ================================================================
+        if is_seller:
+            # SELLER-focused SMS - use specific address if available!
+            # EMPATHY-FIRST: Be helpful, not pushy
+            if ctx.property_address:
+                if 'soon' in timeline or ('immediate' in ctx.timeline.lower() if ctx.timeline else False):
+                    sms = f"Hey {ctx.first_name}! {self.agent_name} here. Saw you're thinking about selling your home at {ctx.property_address}. What's got you thinking about making a move?"
+                else:
+                    sms = f"Hey {ctx.first_name}! {self.agent_name} here. Noticed you're considering selling your home at {ctx.property_address}. Happy to chat about the market when you're ready."
+            else:
+                # Fallback if no address
+                if 'soon' in timeline or ('immediate' in ctx.timeline.lower() if ctx.timeline else False):
+                    sms = f"Hey {ctx.first_name}! {self.agent_name} here. Saw you're thinking about selling in {location}. What's driving the move?"
+                else:
+                    sms = f"Hey {ctx.first_name}! {self.agent_name} here. Noticed you're considering selling in {location}. I know that market well - happy to chat when you're ready."
+
+        elif is_both:
+            # BOTH buyer and seller
+            sms = f"Hey {ctx.first_name}! {self.agent_name} here. Saw you're making a move - selling and buying in {location}. I can help coordinate both! When's a good time to chat?"
+
         else:
-            sms = f"Hey {ctx.first_name}! {self.agent_name} here. Noticed you're interested in {location}. What's got you looking in that area?"
+            # BUYER-focused SMS (default)
+            if 'soon' in timeline or ('immediate' in ctx.timeline.lower() if ctx.timeline else False):
+                sms = f"Hey {ctx.first_name}! {self.agent_name} here. Saw you're looking at {location} - great area! When's a good time to chat about what you're looking for?"
+            elif ctx.timeline and ('12' in ctx.timeline or 'year' in ctx.timeline.lower()):
+                sms = f"Hey {ctx.first_name}! {self.agent_name} here. I see you're exploring {location} for down the road. Happy to be a resource - what questions can I answer for you?"
+            else:
+                sms = f"Hey {ctx.first_name}! {self.agent_name} here. Noticed you're interested in {location}. What's got you looking in that area?"
 
-        # Email subject
-        if ctx.source:
-            email_subject = f"Hey {ctx.first_name}! Quick note from your {ctx.source} inquiry"
+        # ================================================================
+        # EMAIL SUBJECT - CUSTOMIZED BY LEAD TYPE
+        # ================================================================
+        if is_seller:
+            if friendly_source:
+                email_subject = f"{ctx.first_name} - your {location} home valuation from {friendly_source}"
+            else:
+                email_subject = f"{ctx.first_name} - what's your {location} home worth?"
+        elif is_both:
+            if friendly_source:
+                email_subject = f"{ctx.first_name} - coordinating your move from {friendly_source}"
+            else:
+                email_subject = f"{ctx.first_name} - let's coordinate your sale and purchase"
         else:
-            email_subject = f"Hey {ctx.first_name}! Let's find your perfect place in {location}"
+            # Buyer
+            if friendly_source:
+                email_subject = f"Hey {ctx.first_name}! Quick note from your {friendly_source} inquiry"
+            else:
+                email_subject = f"Hey {ctx.first_name}! Let's find your perfect place in {location}"
 
-        # Email body
-        email_body = f"""<p>Hey {ctx.first_name}!</p>
+        # ================================================================
+        # EMAIL BODY - CUSTOMIZED BY LEAD TYPE
+        # ================================================================
+        email_body = f"<p>Hey {ctx.first_name}!</p>\n\n"
 
-<p>I saw you were checking out {location}"""
+        # Opening paragraph - customized by lead type
+        if is_seller:
+            email_body += f"<p>I just shot you a quick text too, but wanted to send more details here.</p>\n\n"
 
-        if ctx.source:
-            email_body += f" through {ctx.source}"
+            # Use specific property address if available!
+            if ctx.property_full_address:
+                if friendly_source:
+                    email_body += f"<p>{friendly_source} connected us because you're thinking about selling your home at <strong>{ctx.property_full_address}</strong>. "
+                else:
+                    email_body += f"<p>I saw you're considering selling your home at <strong>{ctx.property_full_address}</strong>. "
+            else:
+                if friendly_source:
+                    email_body += f"<p>{friendly_source} connected us because you're thinking about selling your home in {location}. "
+                else:
+                    email_body += f"<p>I saw you're considering selling in {location}. "
 
-        email_body += " - great choice!"
+            email_body += f"I'm {self.agent_name} with {self.brokerage_name}, and I know this market really well.</p>\n\n"
 
-        if ctx.get_price_str():
-            email_body += f" Looks like you're looking in the {ctx.get_price_str()} range."
+            # Value prop for sellers - emphasize expertise and guidance (not "free estimate")
+            email_body += "<p><strong>Here's how I can help:</strong></p>\n"
+            email_body += "<ul>\n"
+            if ctx.property_address:
+                email_body += f"<li>Walk you through what's happening in your specific neighborhood (what homes on {ctx.property_address.split()[1] if len(ctx.property_address.split()) > 1 else 'your street'} and nearby have sold for)</li>\n"
+            else:
+                email_body += "<li>Walk you through what's happening in your specific neighborhood</li>\n"
+            email_body += "<li>Talk about timing and market conditions</li>\n"
+            email_body += "<li>Answer any questions about the process</li>\n"
+            email_body += "</ul>\n\n"
 
-        email_body += "</p>"
+            email_body += "<p>No pressure at all - just here to be a resource when you're ready. Selling can feel overwhelming, but I'll make it as smooth as possible.</p>\n\n"
 
-        if timeline:
-            email_body += f"\n<p>Since you're {timeline}, I want to make sure I'm helpful without being pushy. "
+            # CTA for sellers - low pressure
+            email_body += "<p><strong>Just hit reply if you'd like to chat - happy to talk through your options whenever you're ready.</strong></p>\n\n"
+
+        elif is_both:
+            email_body += f"<p>I just shot you a quick text too, but wanted to send more details here since coordinating a sale and purchase is a big deal!</p>\n\n"
+
+            if friendly_source:
+                email_body += f"<p>{friendly_source} connected us because you're making a move in {location} - selling your current home and buying your next one. "
+            else:
+                email_body += f"<p>I saw you're making a move in {location} - selling and buying. "
+
+            email_body += f"I'm {self.agent_name} with {self.brokerage_name}, and I specialize in coordinating both sides of the transaction so you're not stuck in limbo.</p>\n\n"
+
+            # Value prop for both
+            email_body += "<p>Whether you need to sell first or buy first, I'll help you navigate the timing. I can also get you a free market analysis on your current home "
+            email_body += "plus send you listings for your next place - all coordinated perfectly.</p>\n\n"
+
+            # CTA for both
+            email_body += "<p><strong>Just hit reply and tell me your ideal timeline - I'll build a plan around it!</strong></p>\n\n"
+
         else:
-            email_body += "\n<p>"
+            # Buyer-focused email (default)
+            email_body += f"<p>I just shot you a quick text too, but wanted to send more details here.</p>\n\n"
 
-        email_body += "What would be most useful for you right now - market insights, specific listings, or just someone to answer questions when they come up?</p>"
+            if friendly_source:
+                email_body += f"<p>{friendly_source} connected us because you're looking for a home in {location}. "
+            else:
+                email_body += f"<p>I saw you were checking out {location}. "
 
-        email_body += f"\n<p>Looking forward to connecting!</p>\n<p>{self.agent_name}</p>"
+            email_body += f"I'm {self.agent_name} with {self.brokerage_name}, and I've been helping buyers find their perfect homes in this area for years.</p>\n\n"
+
+            # Value prop for buyers
+            if ctx.get_price_str():
+                email_body += f"<p>I see you're looking in the {ctx.get_price_str()} range - I'd love to send you a curated list of homes (including some off-market gems that haven't hit Zillow yet). "
+            else:
+                email_body += "<p>I'd love to send you a curated list of properties that match what you're looking for - including some off-market listings that haven't hit Zillow yet. "
+
+            email_body += "I also have a comprehensive neighborhood guide and market insights that might be helpful.</p>\n\n"
+
+            # CTA for buyers
+            if timeline:
+                email_body += f"<p>Since you're {timeline}, I want to make sure I'm helpful without being pushy. "
+            else:
+                email_body += "<p>"
+
+            email_body += "<strong>Just hit reply and tell me what would be most useful - listings, market data, or someone to answer questions when they come up!</strong></p>\n\n"
+
+        # Sign-off
+        email_body += f"<p>Looking forward to connecting!</p>\n<p>{self.agent_name}</p>\n\n"
+
+        # PS line
+        email_body += "<p><em>P.S. Feel free to call or text anytime - I'm here to help make this process as smooth as possible!</em></p>"
 
         return InitialOutreach(
             sms_message=sms,
@@ -650,6 +831,7 @@ IMPORTANT: The email_body MUST be a complete email with greeting, body paragraph
                 "source": ctx.source,
                 "location": location,
                 "timeline": ctx.timeline,
+                "lead_type": ctx.lead_type,
                 "fallback": True,
             },
             model_used="fallback",
