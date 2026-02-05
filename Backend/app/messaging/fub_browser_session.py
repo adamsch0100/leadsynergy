@@ -508,8 +508,12 @@ class FUBBrowserSession:
         if not self._logged_in:
             raise Exception("Not logged in. Call login() first.")
 
+        logger.warning(f"[SEND {person_id}] Logged in OK, resetting page...")
+
         # Reset page state before operation to avoid stale DOM/JS
         await self._reset_page_state(light=True)
+
+        logger.warning(f"[SEND {person_id}] Page reset OK, navigating...")
 
         # Navigate to lead profile - FUB uses /2/people/view/{id} format
         # Use the captured team subdomain URL to avoid session loss
@@ -520,7 +524,7 @@ class FUBBrowserSession:
             wait_until="domcontentloaded",
             timeout=self.NAVIGATION_TIMEOUT_MS
         )
-        logger.debug(f"Navigation complete for person {person_id}")
+        logger.warning(f"[SEND {person_id}] Navigation complete")
         await self._human_delay(1.5, 2.5)
 
         # Take screenshot for debugging
@@ -528,7 +532,7 @@ class FUBBrowserSession:
         debug_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         screenshot_path = os.path.join(debug_dir, f"debug_fub_person_{person_id}.png")
         await self.page.screenshot(path=screenshot_path)
-        logger.info(f"Debug screenshot saved to: {screenshot_path}")
+        logger.warning(f"[SEND {person_id}] Screenshot saved: {screenshot_path}")
 
         # FUB UI (Jan 2025):
         # 1. Click "Messages" tab at top (has bubble icon, text "Messages")
@@ -572,6 +576,7 @@ class FUBBrowserSession:
 
         # Step 1: Click Messages tab to open the messaging panel
         # Use multiple approaches to ensure we click the right element
+        logger.warning(f"[SEND {person_id}] Clicking Messages tab...")
         messages_clicked = False
 
         # Approach 1: Try using page.locator with text matching (most reliable)
@@ -651,13 +656,17 @@ class FUBBrowserSession:
         if not messages_clicked:
             logger.warning("Could not click Messages tab - compose area may not be visible")
 
+        logger.warning(f"[SEND {person_id}] Messages tab clicked: {messages_clicked}, taking screenshot...")
+
         # Take another screenshot after clicking Messages tab
         await self.page.screenshot(path=os.path.join(debug_dir, f"debug_after_messages_tab_{person_id}.png"))
+
+        logger.warning(f"[SEND {person_id}] Looking for textareas...")
 
         # Debug: Log available textareas
         try:
             textareas = await self.page.query_selector_all('textarea')
-            logger.info(f"Found {len(textareas)} textarea elements on page")
+            logger.warning(f"[SEND {person_id}] Found {len(textareas)} textarea elements on page")
             for i, ta in enumerate(textareas[:5]):
                 placeholder = await ta.get_attribute('placeholder') or 'no placeholder'
                 logger.info(f"  Textarea {i}: placeholder='{placeholder}'")
@@ -665,6 +674,7 @@ class FUBBrowserSession:
             logger.debug(f"Could not enumerate textareas: {e}")
 
         # Find and fill compose area
+        logger.warning(f"[SEND {person_id}] Finding compose area...")
         compose_area = await self._find_element_by_selectors(compose_selectors)
         if not compose_area:
             # Take a debug screenshot
@@ -673,19 +683,70 @@ class FUBBrowserSession:
             logger.error(f"No compose area found. Debug screenshot: {debug_path}")
             raise Exception(f"Could not find message compose area for person {person_id}")
 
-        # Clear any existing text and type new message
-        await compose_area.click()
-        await self._human_delay(0.3, 0.5)
-        await compose_area.fill("")  # Clear first
-        await self._simulated_typing(compose_area, message)
+        logger.warning(f"[SEND {person_id}] Compose area found, typing message...")
+
+        # Use JavaScript to set value directly (fastest and most reliable)
+        await compose_area.evaluate(f"(el) => {{ el.value = {repr(message)}; }}")
+
+        logger.warning(f"[SEND {person_id}] Message typed via JavaScript, triggering input events...")
+
+        # Trigger input event to ensure UI recognizes the text
+        await compose_area.evaluate("""(el) => {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }""")
+
         await self._human_delay(0.5, 1)
 
-        # Click send button
+        logger.warning(f"[SEND {person_id}] Ready to click send button...")
+
+        # Click send button with retry for "not enabled" errors
+        logger.warning(f"[SEND {person_id}] Finding send button...")
         send_button = await self._find_element_by_selectors(send_selectors)
         if not send_button:
             raise Exception(f"Could not find send button for person {person_id}")
 
-        await send_button.click()
+        logger.warning(f"[SEND {person_id}] Send button found, attempting click...")
+
+        # Click send button - try multiple approaches
+        button_clicked = False
+
+        # Approach 1: JavaScript click (bypasses disabled state checks)
+        try:
+            logger.warning(f"[SEND {person_id}] Attempting JavaScript click on send button...")
+            await send_button.evaluate("el => el.click()")
+            button_clicked = True
+            logger.info("JavaScript click succeeded")
+        except Exception as e:
+            logger.warning(f"JavaScript click failed: {e}")
+
+        # Approach 2: Force click (bypasses actionability checks)
+        if not button_clicked:
+            try:
+                logger.info("Attempting force click on send button...")
+                await send_button.click(force=True, timeout=5000)
+                button_clicked = True
+                logger.info("Force click succeeded")
+            except Exception as e:
+                logger.warning(f"Force click failed: {e}")
+
+        # Approach 3: Regular Playwright click
+        if not button_clicked:
+            try:
+                logger.info("Attempting regular click on send button...")
+                await send_button.click(timeout=5000)
+                button_clicked = True
+                logger.info("Regular click succeeded")
+            except Exception as e:
+                logger.warning(f"Regular click failed: {e}")
+
+        if not button_clicked:
+            # Take debug screenshot on failure
+            debug_path = os.path.join(debug_dir, f"debug_send_failed_{person_id}.png")
+            await self.page.screenshot(path=debug_path)
+            logger.error(f"All click approaches failed. Screenshot: {debug_path}")
+            raise Exception(f"Could not click send button for person {person_id}")
+
         await self._human_delay(1.5, 2.5)
 
         # Verify message was sent (check for success indicator or message appearing in thread)
