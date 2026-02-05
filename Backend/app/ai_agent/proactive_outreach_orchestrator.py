@@ -411,6 +411,22 @@ class ProactiveOutreachOrchestrator:
                 if sms_result.get('success'):
                     result["actions"].append("sms_sent")
                     logger.info(f"✅ SMS sent successfully via Playwright")
+
+                    # Log message to ai_message_log for conversation tracking
+                    try:
+                        self.supabase.table('ai_message_log').insert({
+                            'id': str(uuid4()),
+                            'fub_person_id': fub_person_id,
+                            'organization_id': settings.get('organization_id'),
+                            'direction': 'outbound',
+                            'channel': 'sms',
+                            'content': outreach.sms_message,
+                            'sent_at': datetime.now(timezone.utc).isoformat(),
+                            'message_type': 'proactive_initial_outreach',
+                        }).execute()
+                        logger.info(f"✅ Message logged to ai_message_log")
+                    except Exception as log_error:
+                        logger.error(f"Failed to log message to ai_message_log: {log_error}")
                 else:
                     result["errors"].append("SMS send failed")
                     logger.error(f"❌ SMS send failed: {sms_result.get('error', 'Unknown error')}")
