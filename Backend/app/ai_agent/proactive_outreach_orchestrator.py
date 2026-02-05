@@ -483,7 +483,7 @@ class ProactiveOutreachOrchestrator:
     ):
         """Queue a message for later sending."""
         try:
-            self.supabase.table('scheduled_messages').insert({
+            data = {
                 'id': str(uuid4()),
                 'fub_person_id': str(fub_person_id),
                 'message_content': message_content,
@@ -491,8 +491,14 @@ class ProactiveOutreachOrchestrator:
                 'scheduled_for': scheduled_for.isoformat(),
                 'status': 'pending',
                 'message_type': 'proactive_initial_outreach',
-                'email_subject': subject,
-            }).execute()
+            }
+
+            # Only include email_subject for email messages if the column exists
+            # (scheduled_messages table may not have this column)
+            if channel == 'email' and subject:
+                data['subject'] = subject  # Use 'subject' not 'email_subject'
+
+            self.supabase.table('scheduled_messages').insert(data).execute()
 
         except Exception as e:
             logger.error(f"Failed to queue message: {e}")
