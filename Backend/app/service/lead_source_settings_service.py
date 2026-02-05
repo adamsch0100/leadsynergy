@@ -870,9 +870,23 @@ class LeadSourceSettingsService:
             skipped_leads = []
 
             for lead in leads:
-                # Check if lead was recently synced (skip this check if force_sync is True)
+                # Define urgent statuses that should bypass interval check
+                URGENT_STATUSES = [
+                    'Hot Lead', 'Appointment Set', 'Appointment', 'Under Contract',
+                    'Closing', 'Pre-Qualified', 'Active', 'Qualified Lead'
+                ]
+
+                # Check if lead has urgent status
+                is_urgent = lead.status and any(
+                    urgent.lower() in lead.status.lower()
+                    for urgent in URGENT_STATUSES
+                )
+
+                # Check if lead was recently synced (skip this check if force_sync OR urgent)
                 last_synced = None
-                if not force_sync and lead.metadata and isinstance(lead.metadata, dict):
+                should_check_interval = not force_sync and not is_urgent
+
+                if should_check_interval and lead.metadata and isinstance(lead.metadata, dict):
                     last_synced_str = lead.metadata.get("homelight_last_updated")
                     if last_synced_str:
                         try:
@@ -885,8 +899,8 @@ class LeadSourceSettingsService:
                         except Exception as e:
                             last_synced = None
 
-                # Skip if synced recently (only if not force_sync)
-                if not force_sync and last_synced and last_synced > cutoff_time:
+                # Skip if synced recently (only if not force_sync AND not urgent)
+                if should_check_interval and last_synced and last_synced > cutoff_time:
                     hours_since = (now - last_synced).total_seconds() / 3600
                     skipped_leads.append({
                         "lead_id": lead.id,
@@ -895,6 +909,12 @@ class LeadSourceSettingsService:
                         "reason": f"Synced {hours_since:.1f} hours ago (min interval: {min_sync_interval_hours}h)"
                     })
                     continue
+                elif is_urgent and last_synced and last_synced > cutoff_time:
+                    # Log that we're updating despite recent sync because it's urgent
+                    tracker.update_progress(
+                        sync_id,
+                        message=f"Updating {lead.first_name} {lead.last_name} despite recent sync (urgent status: {lead.status})"
+                    )
 
                 # Extract lead type (buyer/seller) from tags for proper mapping
                 lead_type = self._get_lead_type_from_tags(lead)
@@ -1025,11 +1045,50 @@ class LeadSourceSettingsService:
                 message=f"Preparing ReferralExchange bulk sync ({len(leads)} leads)"
             )
 
+            # Filter leads by interval and urgency
+            from datetime import datetime, timedelta, timezone
+            now = datetime.now(timezone.utc)
+            cutoff_time = now - timedelta(hours=min_sync_interval_hours)
+
+            URGENT_STATUSES = [
+                'Hot Lead', 'Appointment Set', 'Appointment', 'Under Contract',
+                'Closing', 'Pre-Qualified', 'Active', 'Qualified Lead'
+            ]
+
             # Build leads_data with mapped stages (filtering happens in the service)
             leads_data = []
             skipped_no_mapping = []
+            skipped_recently_synced = []
 
             for lead in leads:
+                # Check if urgent
+                is_urgent = lead.status and any(
+                    urgent.lower() in lead.status.lower()
+                    for urgent in URGENT_STATUSES
+                )
+
+                # Check last sync time (unless force_sync or urgent)
+                should_check_interval = not force_sync and not is_urgent
+                if should_check_interval and lead.metadata and isinstance(lead.metadata, dict):
+                    last_synced_str = lead.metadata.get("referralexchange_last_updated")
+                    if last_synced_str:
+                        try:
+                            last_synced = datetime.fromisoformat(last_synced_str.replace('Z', '+00:00'))
+                            if last_synced.tzinfo is None:
+                                last_synced = last_synced.replace(tzinfo=timezone.utc)
+
+                            if last_synced > cutoff_time:
+                                hours_since = (now - last_synced).total_seconds() / 3600
+                                skipped_recently_synced.append({
+                                    "lead_id": lead.id,
+                                    "fub_person_id": lead.fub_person_id,
+                                    "name": f"{lead.first_name} {lead.last_name}",
+                                    "reason": f"Synced {hours_since:.1f}h ago (min: {min_sync_interval_hours}h)"
+                                })
+                                continue
+                        except:
+                            pass
+
                 mapped_stage = source_settings.get_mapped_stage(lead.status)
                 if mapped_stage:
                     # Convert to list format for ReferralExchange
@@ -1052,11 +1111,12 @@ class LeadSourceSettingsService:
                         "reason": f"No mapping for FUB status: {lead.status}"
                     })
 
-            self.logger.info(f"[ReferralExchange Sync] Stage mapping check: {len(leads_data)} with mapping, {len(skipped_no_mapping)} without")
-            print(f"!!!! SYNC FUNCTION EXECUTING V5 - {len(leads_data)} leads !!!!")
+            self.logger.info(f"[ReferralExchange Sync] Stage mapping check: {len(leads_data)} with mapping, {len(skipped_recently_synced)} recently synced, {len(skipped_no_mapping)} without mapping")
+            print(f"!!!! SYNC FUNCTION EXECUTING V6 - {len(leads_data)} leads, {len(skipped_recently_synced)} skipped !!!!")
             tracker.update_progress(
                 sync_id,
-                message=f"[SYNC_V5] Found {len(leads_data)} leads to process, {len(skipped_no_mapping)} with no mapping"
+                skipped=len(skipped_recently_synced) + len(skipped_no_mapping),
+                message=f"[SYNC_V6] {len(leads_data)} to process, {len(skipped_recently_synced)} recently synced, {len(skipped_no_mapping)} no mapping"
             )
 
             if not leads_data:
@@ -1150,11 +1210,50 @@ class LeadSourceSettingsService:
                 message=f"Preparing Redfin bulk sync ({len(leads)} leads)"
             )
 
+            # Filter leads by interval and urgency
+            from datetime import datetime, timedelta, timezone
+            now = datetime.now(timezone.utc)
+            cutoff_time = now - timedelta(hours=min_sync_interval_hours)
+
+            URGENT_STATUSES = [
+                'Hot Lead', 'Appointment Set', 'Appointment', 'Under Contract',
+                'Closing', 'Pre-Qualified', 'Active', 'Qualified Lead'
+            ]
+
             # Build leads_data with mapped stages
             leads_data = []
             skipped_no_mapping = []
+            skipped_recently_synced = []
 
             for lead in leads:
+                # Check if urgent
+                is_urgent = lead.status and any(
+                    urgent.lower() in lead.status.lower()
+                    for urgent in URGENT_STATUSES
+                )
+
+                # Check last sync time (unless force_sync or urgent)
+                should_check_interval = not force_sync and not is_urgent
+                if should_check_interval and lead.metadata and isinstance(lead.metadata, dict):
+                    last_synced_str = lead.metadata.get("redfin_last_updated")
+                    if last_synced_str:
+                        try:
+                            last_synced = datetime.fromisoformat(last_synced_str.replace('Z', '+00:00'))
+                            if last_synced.tzinfo is None:
+                                last_synced = last_synced.replace(tzinfo=timezone.utc)
+
+                            if last_synced > cutoff_time:
+                                hours_since = (now - last_synced).total_seconds() / 3600
+                                skipped_recently_synced.append({
+                                    "lead_id": lead.id,
+                                    "fub_person_id": lead.fub_person_id,
+                                    "name": f"{lead.first_name} {lead.last_name}",
+                                    "reason": f"Synced {hours_since:.1f}h ago (min: {min_sync_interval_hours}h)"
+                                })
+                                continue
+                        except:
+                            pass
+
                 mapped_stage = source_settings.get_mapped_stage(lead.status)
                 if mapped_stage:
                     leads_data.append((lead, mapped_stage))
@@ -1168,7 +1267,8 @@ class LeadSourceSettingsService:
 
             tracker.update_progress(
                 sync_id,
-                message=f"Found {len(leads_data)} leads to process, {len(skipped_no_mapping)} with no mapping"
+                skipped=len(skipped_recently_synced) + len(skipped_no_mapping),
+                message=f"Found {len(leads_data)} to process, {len(skipped_recently_synced)} recently synced, {len(skipped_no_mapping)} no mapping"
             )
 
             if not leads_data:
@@ -1177,9 +1277,10 @@ class LeadSourceSettingsService:
                     results={
                         "successful": 0,
                         "failed": 0,
-                        "skipped": 0,
+                        "skipped": len(skipped_recently_synced) + len(skipped_no_mapping),
                         "filter_summary": {
                             "total_leads": len(leads),
+                            "skipped_recently_synced": len(skipped_recently_synced),
                             "skipped_no_mapping": len(skipped_no_mapping),
                             "will_process": 0
                         },
@@ -1531,11 +1632,24 @@ class LeadSourceSettingsService:
             skipped_no_mapping = []
             skipped_recently_synced = []
 
+            # Define urgent statuses
+            URGENT_STATUSES = [
+                'Hot Lead', 'Appointment Set', 'Appointment', 'Under Contract',
+                'Closing', 'Pre-Qualified', 'Active', 'Qualified Lead'
+            ]
+
             for lead in leads:
                 lead_name = f"{lead.first_name} {lead.last_name}"
 
-                # Check if lead was recently synced
-                if lead.metadata:
+                # Check if urgent
+                is_urgent = lead.status and any(
+                    urgent.lower() in lead.status.lower()
+                    for urgent in URGENT_STATUSES
+                )
+
+                # Check if lead was recently synced (skip if force_sync or urgent)
+                should_check_interval = not force_sync and not is_urgent
+                if should_check_interval and lead.metadata:
                     metadata = lead.metadata
                     if isinstance(metadata, str):
                         import json

@@ -340,18 +340,36 @@ class MyAgentFinderService(BaseReferralService):
             self.wis.human_delay(2, 4)
 
             # Find login form elements
-            # Common selectors for login forms
+            # Common selectors for login forms - comprehensive fallbacks
             email_selectors = [
+                'input[type="email"]',  # CORRECT selector as of Feb 2026 (MUI component)
+                'input.MuiInputBase-input[type="email"]',
                 'input[name="email"]',
-                'input[type="email"]',
+                'input[name="Email"]',
+                'input[name="username"]',
+                'input[name="Username"]',
+                'input[type="text"][name*="email" i]',
+                'input[type="text"][name*="username" i]',
                 'input[placeholder*="email" i]',
+                'input[placeholder*="username" i]',
+                'input[placeholder*="Email" i]',
                 'input[id*="email" i]',
+                'input[id*="username" i]',
+                'input[class*="email"]',
+                'input[class*="username"]',
                 '#email',
+                '#Email',
+                '#username',
+                '#Username',
+                'input[autocomplete="email"]',
+                'input[autocomplete="username"]',
+                'input[type="text"]:first-of-type',  # Often first input is email
             ]
 
             password_selectors = [
+                'input[type="password"]',  # CORRECT selector as of Feb 2026 (MUI component)
+                'input.MuiInputBase-input[type="password"]',
                 'input[name="password"]',
-                'input[type="password"]',
                 'input[placeholder*="password" i]',
                 'input[id*="password" i]',
                 '#password',

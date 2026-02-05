@@ -2289,20 +2289,44 @@ class HomelightService(BaseReferralService):
             
             # Wait for search results to load - wait for rows to appear
             self.logger.info("Waiting for search results to load...")
+
+            # Multiple row selectors for better reliability
+            row_selectors = [
+                "a[data-test='referralsList-row']",
+                "a[data-testid='referralsList-row']",
+                "[data-test='referralsList-row']",
+                "[data-testid='referralsList-row']",
+                "a[class*='referral'][class*='row']",
+                "div[class*='referral'][class*='row']",
+                "tr[class*='referral']",
+                "div[role='row']",
+                "a[href*='referral']",
+            ]
+
             try:
                 from selenium.webdriver.support.ui import WebDriverWait
                 from selenium.webdriver.support import expected_conditions as EC
-                wait = WebDriverWait(self.driver_service.driver, 10)
-                # Wait for at least one referral row to appear, or for "no results" message
-                wait.until(
-                    lambda driver: len(driver.find_elements(By.CSS_SELECTOR, "a[data-test='referralsList-row']")) > 0 or
-                    "no results" in driver.page_source.lower() or
-                    "start typing" in driver.page_source.lower()
-                )
-            except:
+                wait = WebDriverWait(self.driver_service.driver, 15)  # Increased to 15s
+
+                # Try each selector until we find rows
+                def check_for_rows(driver):
+                    for selector in row_selectors:
+                        try:
+                            rows = driver.find_elements(By.CSS_SELECTOR, selector)
+                            if len(rows) > 0:
+                                self.logger.info(f"Found {len(rows)} rows with selector: {selector}")
+                                return True
+                        except:
+                            continue
+                    # Also check for "no results" message
+                    return "no results" in driver.page_source.lower() or "start typing" in driver.page_source.lower()
+
+                wait.until(check_for_rows)
+            except Exception as e:
+                self.logger.info(f"Timeout waiting for rows (will try fallback): {e}")
                 # Fallback to fixed delay if explicit wait fails
                 self.wis.human_delay(3, 5)
-            
+
             # Additional delay to ensure results are fully rendered
             self.wis.human_delay(1, 2)
 
@@ -2310,9 +2334,23 @@ class HomelightService(BaseReferralService):
             try:
                 self.logger.info(f"Searching for referral rows containing '{target_name}'...")
 
-                # Use the most direct approach: find all referral rows and check their text
-                referral_rows = self.driver_service.find_elements(By.CSS_SELECTOR, "a[data-test='referralsList-row']")
-                self.logger.info(f"Found {len(referral_rows)} referral rows")
+                # Try multiple selectors to find referral rows - use same list as above
+                referral_rows = []
+                for selector in row_selectors:
+                    try:
+                        rows = self.driver_service.find_elements(By.CSS_SELECTOR, selector)
+                        if rows and len(rows) > 0:
+                            self.logger.info(f"Found {len(rows)} referral rows with selector: {selector}")
+                            referral_rows = rows
+                            break
+                    except:
+                        continue
+
+                if not referral_rows:
+                    self.logger.info("No referral rows found with any selector")
+                    return False
+
+                self.logger.info(f"Using {len(referral_rows)} referral rows for matching")
 
                 matching_rows = []
                 # Split target name for better matching

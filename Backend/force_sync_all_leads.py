@@ -127,14 +127,14 @@ def main():
         print()
 
         try:
-            # Call the sync function with force_sync=True
+            # Call the sync function with smart filtering (urgent leads bypass interval)
             lead_source_service.sync_all_sources_bulk_with_tracker(
                 sync_id=sync_id,
                 source_name=source_name,
                 leads=leads,
                 user_id=user_id,
                 tracker=tracker,
-                force_sync=True  # BYPASS MINIMUM INTERVAL
+                force_sync=False  # Respect interval for normal leads, bypass for urgent
             )
 
             # Wait for sync to complete (poll tracker)

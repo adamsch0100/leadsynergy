@@ -220,7 +220,9 @@ class ProactiveOutreachOrchestrator:
             ).limit(1).execute()
 
             if result.data:
-                return result.data[0]
+                settings = result.data[0]
+                settings['organization_id'] = organization_id  # Ensure org_id is included
+                return settings
 
             # Fallback to org settings
             result = self.supabase.table('ai_agent_settings').select('*').eq(
@@ -228,7 +230,9 @@ class ProactiveOutreachOrchestrator:
             ).limit(1).execute()
 
             if result.data:
-                return result.data[0]
+                settings = result.data[0]
+                settings['organization_id'] = organization_id
+                return settings
 
             # Return defaults
             return {
@@ -239,6 +243,7 @@ class ProactiveOutreachOrchestrator:
                 'timezone': 'America/Denver',
                 'working_hours_start': 8,
                 'working_hours_end': 20,
+                'organization_id': organization_id,
             }
 
         except Exception as e:
@@ -306,13 +311,15 @@ class ProactiveOutreachOrchestrator:
         # Check TCPA compliance
         try:
             compliance_check = await self.compliance.check_sms_compliance(
-                phone=phone,
-                person_id=person_id,
+                fub_person_id=person_id,
+                organization_id=settings.get('organization_id', ''),
+                phone_number=phone,
+                recipient_timezone=settings.get('timezone', 'America/Denver'),
             )
 
-            if not compliance_check.get('can_send'):
+            if not compliance_check.can_send:
                 result["can_send"] = False
-                result["reason"] = compliance_check.get('reason', 'Compliance check failed')
+                result["reason"] = compliance_check.reason or 'Compliance check failed'
                 return result
 
         except Exception as e:
@@ -321,8 +328,22 @@ class ProactiveOutreachOrchestrator:
 
         # Check TCPA hours (8am-8pm local time)
         timezone_str = settings.get('timezone', 'America/Denver')
-        working_hours_start = settings.get('working_hours_start', 8)
-        working_hours_end = settings.get('working_hours_end', 20)
+
+        # Parse working hours (could be int or time string like '08:00:00')
+        wh_start = settings.get('working_hours_start', 8)
+        wh_end = settings.get('working_hours_end', 20)
+
+        if isinstance(wh_start, str) and ':' in wh_start:
+            # Parse time string '08:00:00' -> 8
+            working_hours_start = int(wh_start.split(':')[0])
+        else:
+            working_hours_start = int(wh_start)
+
+        if isinstance(wh_end, str) and ':' in wh_end:
+            # Parse time string '20:00:00' -> 20
+            working_hours_end = int(wh_end.split(':')[0])
+        else:
+            working_hours_end = int(wh_end)
 
         # Get current time in lead's timezone (simplified - would need proper timezone handling)
         now = datetime.now()
@@ -374,7 +395,7 @@ class ProactiveOutreachOrchestrator:
                 # Send immediately
                 logger.info(f"📤 Sending SMS immediately to lead {fub_person_id}")
 
-                sms_result = await self.sms_service.send_text_message(
+                sms_result = await self.sms_service.send_text_message_async(
                     person_id=fub_person_id,
                     message=outreach.sms_message,
                 )

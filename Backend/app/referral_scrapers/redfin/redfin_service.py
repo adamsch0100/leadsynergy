@@ -294,13 +294,23 @@ class RedfinService(BaseReferralService):
 
             # Find "Sign in with Google" button
             google_button_selectors = [
+                'button.googleSignIn',  # CORRECT selector as of Feb 2026
+                'button.bp-Button.googleSignIn',
                 'button[data-rf-test-name="google_login"]',
-                'button[aria-label*="Google"]',
-                '[class*="google"]',
-                '//button[contains(text(), "Google")]',
                 '//button[contains(text(), "Sign in with Google")]',
+                '//button[contains(text(), "Google")]',
+                'button[aria-label*="Google"]',
+                'button[aria-label*="google"]',
+                'a[href*="google"]',
+                '[class*="google"][role="button"]',
+                'button[class*="googleSignIn"]',
+                '[class*="google"]',
+                '[class*="Google"]',
+                '//a[contains(text(), "Google")]',
                 '//div[contains(text(), "Google")]//ancestor::button',
+                '//div[contains(text(), "Google")]//ancestor::a',
                 'button[class*="social"]',
+                'a[class*="social"]',
             ]
 
             google_button = None
