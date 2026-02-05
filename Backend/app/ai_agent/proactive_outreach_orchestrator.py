@@ -348,9 +348,16 @@ class ProactiveOutreachOrchestrator:
         else:
             working_hours_end = int(wh_end)
 
-        # Get current time in lead's timezone (simplified - would need proper timezone handling)
-        now = datetime.now()
-        current_hour = now.hour
+        # Get current time in LEAD'S timezone (CRITICAL for TCPA compliance)
+        import pytz
+        try:
+            lead_tz = pytz.timezone(timezone_str)
+            now = datetime.now(lead_tz)
+            current_hour = now.hour
+        except:
+            # Fallback to UTC if timezone invalid
+            now = datetime.now(pytz.UTC)
+            current_hour = now.hour
 
         if not (working_hours_start <= current_hour < working_hours_end):
             # Outside hours - queue for 8-10am tomorrow
