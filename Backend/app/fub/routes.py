@@ -2662,9 +2662,9 @@ def verify_messages(person_id):
 
         # Get scheduled follow-ups for this lead
         followups = supabase.table('ai_scheduled_followups').select(
-            'id, fub_person_id, message_type, channel, status, scheduled_for, executed_at, error_message'
+            'id, fub_person_id, message_type, channel, status, scheduled_at, executed_at, error_message'
         ).eq('fub_person_id', str(person_id)).order(
-            'scheduled_for', desc=False
+            'scheduled_at', desc=False
         ).execute()
 
         return jsonify({
