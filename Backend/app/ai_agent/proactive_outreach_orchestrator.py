@@ -588,3 +588,64 @@ class ProactiveOutreachOrchestrator:
 
         except Exception as e:
             logger.error(f"Failed to log proactive outreach: {e}")
+
+
+# =========================================================================
+# CONVENIENCE FUNCTION - call from any enable path
+# =========================================================================
+
+async def trigger_proactive_outreach(
+    fub_person_id: int,
+    organization_id: str,
+    user_id: str,
+    trigger_reason: str = "ai_enabled",
+    enable_type: str = "manual",
+    supabase_client=None,
+):
+    """
+    Convenience function to trigger proactive outreach from ANY enable path.
+
+    This handles all the setup (FUB client, compliance, orchestrator) so callers
+    only need to pass the basic identifiers.
+
+    Args:
+        fub_person_id: FUB person ID
+        organization_id: Organization ID
+        user_id: User ID who enabled AI
+        trigger_reason: Why outreach is being triggered
+        enable_type: 'auto' or 'manual'
+        supabase_client: Optional - will create one if not provided
+    """
+    try:
+        from app.database.supabase_client import SupabaseClientSingleton
+        from app.database.fub_api_client import FUBApiClient
+        from app.ai_agent.compliance_checker import ComplianceChecker
+
+        supabase = supabase_client or SupabaseClientSingleton.get_instance()
+        fub_client = FUBApiClient()
+
+        orchestrator = ProactiveOutreachOrchestrator(
+            supabase_client=supabase,
+            fub_client=fub_client,
+            sms_service=None,  # Not used - we use Playwright directly now
+            compliance_checker=ComplianceChecker(supabase_client=supabase),
+        )
+
+        result = await orchestrator.trigger_proactive_outreach(
+            fub_person_id=fub_person_id,
+            organization_id=organization_id,
+            user_id=user_id,
+            trigger_reason=trigger_reason,
+            enable_type=enable_type,
+        )
+
+        if result["success"]:
+            logger.info(f"Proactive outreach triggered for lead {fub_person_id}: {', '.join(result['actions_taken'])}")
+        else:
+            logger.warning(f"Proactive outreach issues for lead {fub_person_id}: {', '.join(result.get('errors', []))}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to trigger proactive outreach for lead {fub_person_id}: {e}", exc_info=True)
+        return {"success": False, "errors": [str(e)]}

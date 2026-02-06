@@ -1536,57 +1536,29 @@ async def process_new_lead(webhook_data: Dict[str, Any], resource_uri: str, reso
         )
 
         # ==================== PROACTIVE AI OUTREACH ====================
-        # Trigger world-class proactive outreach with historical context analysis
+        # Trigger contextual proactive outreach (replaces old generic welcome sequence)
         logger.info(f"🚀 Triggering proactive AI outreach for lead {person_id}")
 
         try:
-            from app.ai_agent.proactive_outreach_orchestrator import ProactiveOutreachOrchestrator
-            from app.messaging.fub_sms_service import FUBSMSService
-            from app.ai_agent.compliance_checker import ComplianceChecker
+            from app.ai_agent.proactive_outreach_orchestrator import trigger_proactive_outreach
 
-            orchestrator = ProactiveOutreachOrchestrator(
-                supabase_client=supabase,
-                fub_client=fub_client,
-                sms_service=FUBSMSService(),
-                compliance_checker=ComplianceChecker(supabase_client=supabase),
-            )
-
-            # Determine if this was manual or auto enable
-            # (Auto-enable comes through this webhook, manual has different flow)
-            enable_type = "auto"
-
-            outreach_result = await orchestrator.trigger_proactive_outreach(
+            outreach_result = await trigger_proactive_outreach(
                 fub_person_id=person_id,
                 organization_id=organization_id,
                 user_id=user_id,
                 trigger_reason="new_lead_ai_enabled",
-                enable_type=enable_type,
+                enable_type="auto",
+                supabase_client=supabase,
             )
 
             if outreach_result["success"]:
                 logger.info(f"✅ Proactive outreach completed: {', '.join(outreach_result['actions_taken'])}")
-                # Continue to Celery sequence - it handles day 1-7 follow-ups intelligently
             else:
-                logger.warning(f"⚠️  Proactive outreach partial/failed: {', '.join(outreach_result.get('errors', []))}")
-                # Continue to Celery as fallback
+                logger.warning(f"⚠️  Proactive outreach issues: {', '.join(outreach_result.get('errors', []))}")
 
         except Exception as outreach_error:
-            logger.error(f"❌ Proactive outreach orchestrator exception: {outreach_error}", exc_info=True)
-            # Continue to Celery welcome sequence as fallback - better than nothing
+            logger.error(f"❌ Proactive outreach failed: {outreach_error}", exc_info=True)
         # ==================== END PROACTIVE OUTREACH ====================
-
-        # Trigger welcome sequence via Celery task
-        try:
-            from app.scheduler.ai_tasks import start_new_lead_sequence
-            start_new_lead_sequence.delay(
-                fub_person_id=person_id,
-                sequence_type="new_lead_24h",
-            )
-            logger.info(f"AI welcome sequence triggered for lead {person_id}")
-        except Exception as celery_error:
-            logger.error(f"Failed to trigger Celery task: {celery_error}")
-            # Fallback to inline scheduling
-            await schedule_welcome_sequence(context, settings)
 
     except Exception as e:
         logger.error(f"Error processing new lead: {e}")
@@ -2582,6 +2554,20 @@ async def process_tag_change(webhook_data: Dict[str, Any], event: str):
             )
             if success:
                 logger.info(f"AI enabled for person {person_id} via FUB tag")
+
+                # Trigger proactive outreach
+                try:
+                    from app.ai_agent.proactive_outreach_orchestrator import trigger_proactive_outreach
+                    await trigger_proactive_outreach(
+                        fub_person_id=int(person_id),
+                        organization_id=organization_id,
+                        user_id=user_id,
+                        trigger_reason="fub_tag_added",
+                        enable_type="manual",
+                        supabase_client=supabase,
+                    )
+                except Exception as outreach_error:
+                    logger.error(f"Proactive outreach failed for {person_id}: {outreach_error}")
             else:
                 logger.error(f"Failed to enable AI for person {person_id}")
                 

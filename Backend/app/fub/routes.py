@@ -1264,6 +1264,29 @@ def toggle_ai_agent():
 
         logger.info(f"AI agent {'enabled' if enabled else 'disabled'} for FUB person {fub_person_id}")
 
+        # Trigger proactive outreach when enabling
+        if enabled and success:
+            try:
+                from app.ai_agent.proactive_outreach_orchestrator import trigger_proactive_outreach
+                loop2 = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop2)
+                try:
+                    loop2.run_until_complete(
+                        trigger_proactive_outreach(
+                            fub_person_id=int(fub_person_id),
+                            organization_id=organization_id or "default",
+                            user_id=user_id,
+                            trigger_reason="embedded_app_toggle",
+                            enable_type="manual",
+                            supabase_client=supabase,
+                        )
+                    )
+                finally:
+                    loop2.close()
+            except Exception as outreach_error:
+                logger.error(f"Proactive outreach failed for {fub_person_id}: {outreach_error}")
+                # Don't fail the toggle if outreach fails
+
         return jsonify({
             "success": True,
             "message": f"AI agent {'enabled' if enabled else 'disabled'}",

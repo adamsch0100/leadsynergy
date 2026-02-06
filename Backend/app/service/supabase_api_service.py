@@ -3721,12 +3721,12 @@ def toggle_lead_ai(person_id):
         
         if not success:
             return jsonify({"success": False, "error": "Failed to update AI settings"}), 500
-        
+
         # Sync with FUB tag
         try:
             from app.database.fub_api_client import FUBApiClient
             fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
-            
+
             if enable:
                 # Add "AI Follow-up" tag
                 fub_client.add_tag(person_id, "AI Follow-up")
@@ -3738,7 +3738,25 @@ def toggle_lead_ai(person_id):
         except Exception as tag_error:
             logger.warning(f"Failed to sync FUB tag: {tag_error}")
             # Don't fail the request if tag sync fails
-        
+
+        # Trigger proactive outreach when enabling
+        if enable:
+            try:
+                from app.ai_agent.proactive_outreach_orchestrator import trigger_proactive_outreach
+                loop.run_until_complete(
+                    trigger_proactive_outreach(
+                        fub_person_id=int(person_id),
+                        organization_id=organization_id,
+                        user_id=user_id,
+                        trigger_reason="frontend_toggle",
+                        enable_type="manual",
+                        supabase_client=supabase,
+                    )
+                )
+            except Exception as outreach_error:
+                logger.error(f"Proactive outreach failed for {person_id}: {outreach_error}")
+                # Don't fail the toggle if outreach fails
+
         return jsonify({
             "success": True,
             "data": {
