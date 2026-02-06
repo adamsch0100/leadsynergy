@@ -810,7 +810,7 @@ async def run_nba_scan(
                     "result": result,
                 })
             else:
-                error = result.get("reason") or result.get("error") or ""
+                error = result.get("error") or result.get("delivery_error") or result.get("reason") or ""
                 # Detect login failures and stop trying follow-ups
                 if any(kw in error.lower() for kw in ["cooldown", "login failed", "suspicious login"]):
                     login_broken = True

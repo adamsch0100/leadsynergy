@@ -611,7 +611,7 @@ async def get_fub_browser_credentials(
             "type": settings.fub_login_type or "email",
             "email": settings.fub_login_email,
             "password": settings.fub_login_password,
-            "agent_id": user_id or organization_id or "default_agent",
+            "agent_id": "default_agent",
         }
 
     # Fallback to environment variables
@@ -624,7 +624,7 @@ async def get_fub_browser_credentials(
             "type": fub_login_type,
             "email": fub_email,
             "password": fub_password,
-            "agent_id": user_id or organization_id or "default_agent",
+            "agent_id": "default_agent",
         }
 
     # No credentials available
