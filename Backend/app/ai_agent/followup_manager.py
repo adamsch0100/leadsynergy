@@ -1782,7 +1782,8 @@ class FollowUpManager:
                     "status": FollowUpStatus.SENT.value,
                     "executed_at": datetime.utcnow().isoformat(),
                 }).eq("id", followup_id).execute()
-                logger.info(f"Follow-up {followup_id} DELIVERED: {message_type.value} via {channel} (AI: {ai_used})")
+                verified = delivery_result.get("verified", "unknown")
+                logger.info(f"Follow-up {followup_id} DELIVERED (verified={verified}): {message_type.value} via {channel} (AI: {ai_used})")
             else:
                 error_msg = delivery_result.get("error", "Delivery failed")
                 # For transient login/cooldown errors, keep as pending for retry
@@ -1810,6 +1811,7 @@ class FollowUpManager:
                 "fub_person_id": fub_person_id,
                 "sequence_day": sequence_day,
                 "delivered": delivery_result.get("success", False),
+                "verified": delivery_result.get("verified", None),
                 "delivery_error": delivery_result.get("error") if not delivery_result.get("success") else None,
             }
 

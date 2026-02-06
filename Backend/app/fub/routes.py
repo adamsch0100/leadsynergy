@@ -2631,6 +2631,74 @@ def reset_failed_followups():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+@fub_bp.route('/ai/verify-messages/<int:person_id>', methods=['GET'])
+def verify_messages(person_id):
+    """
+    Check FUB's actual message history for a lead to verify if messages were delivered.
+
+    This uses the FUB API to pull real text message history and compares against
+    what our system logged as "sent" in ai_message_log.
+
+    Args:
+        person_id: FUB person ID
+    """
+    from app.database.fub_api_client import FUBApiClient
+    from app.database.supabase_client import SupabaseClientSingleton
+
+    try:
+        limit = request.args.get('limit', 10, type=int)
+
+        # Get actual messages from FUB API
+        fub_client = FUBApiClient()
+        fub_messages = fub_client.get_text_messages_for_person(person_id, limit=limit)
+
+        # Get what our system logged as sent
+        supabase = SupabaseClientSingleton.get_instance()
+        our_logs = supabase.table('ai_message_log').select(
+            'id, fub_person_id, message_content, channel, direction, created_at'
+        ).eq('fub_person_id', str(person_id)).order(
+            'created_at', desc=True
+        ).limit(limit).execute()
+
+        # Get scheduled follow-ups for this lead
+        followups = supabase.table('ai_scheduled_followups').select(
+            'id, fub_person_id, message_type, channel, status, scheduled_for, executed_at, error_message'
+        ).eq('fub_person_id', str(person_id)).order(
+            'scheduled_for', desc=False
+        ).execute()
+
+        return jsonify({
+            "success": True,
+            "person_id": person_id,
+            "fub_messages": {
+                "count": len(fub_messages),
+                "messages": [
+                    {
+                        "id": m.get("id"),
+                        "body": m.get("body", "")[:200],
+                        "direction": "outgoing" if m.get("isOutgoing") else "incoming",
+                        "created": m.get("created"),
+                        "person_id": m.get("personId"),
+                    }
+                    for m in fub_messages[:limit]
+                ],
+            },
+            "our_logs": {
+                "count": len(our_logs.data or []),
+                "messages": (our_logs.data or [])[:limit],
+            },
+            "followups": {
+                "total": len(followups.data or []),
+                "by_status": {},
+                "items": (followups.data or []),
+            },
+        })
+
+    except Exception as e:
+        logger.error(f"Verify messages error for person {person_id}: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 # =============================================================================
 # TESTING ENDPOINTS
 # =============================================================================

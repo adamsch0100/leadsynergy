@@ -685,18 +685,31 @@ class FUBBrowserSession:
 
         logger.warning(f"[SEND {person_id}] Compose area found, typing message...")
 
-        # Use JavaScript to set value directly (fastest and most reliable)
-        await compose_area.evaluate(f"(el) => {{ el.value = {repr(message)}; }}")
-
-        logger.warning(f"[SEND {person_id}] Message typed via JavaScript, triggering input events...")
-
-        # Trigger input event to ensure UI recognizes the text
-        await compose_area.evaluate("""(el) => {
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }""")
+        # Use Playwright's fill() method - handles React controlled components properly
+        # This clears the field first, then types the text with proper event dispatching
+        try:
+            await compose_area.fill(message)
+            logger.warning(f"[SEND {person_id}] Message filled via Playwright fill()")
+        except Exception as fill_err:
+            logger.warning(f"[SEND {person_id}] fill() failed ({fill_err}), falling back to React-compatible JS")
+            # React-compatible fallback: use native setter to trigger React state update
+            await compose_area.evaluate("""(el, msg) => {
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLTextAreaElement.prototype, 'value'
+                ).set;
+                nativeSetter.call(el, msg);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }""", message)
 
         await self._human_delay(0.5, 1)
+
+        # Verify the textarea actually contains our message
+        textarea_value = await compose_area.evaluate("el => el.value")
+        if not textarea_value or len(textarea_value.strip()) == 0:
+            logger.error(f"[SEND {person_id}] TEXTAREA IS EMPTY after fill! Message not accepted by UI.")
+            raise Exception(f"Textarea empty after fill - React state not updated for person {person_id}")
+        logger.warning(f"[SEND {person_id}] Textarea has {len(textarea_value)} chars (confirmed)")
 
         logger.warning(f"[SEND {person_id}] Ready to click send button...")
 
@@ -749,8 +762,24 @@ class FUBBrowserSession:
 
         await self._human_delay(1.5, 2.5)
 
-        # Verify message was sent (check for success indicator or message appearing in thread)
-        # This is optional validation - in practice the UI usually shows the sent message
+        # Verify message was sent: check if textarea cleared (FUB clears it on success)
+        send_verified = False
+        try:
+            compose_after = await self._find_element_by_selectors(compose_selectors)
+            if compose_after:
+                remaining_text = await compose_after.evaluate("el => el.value")
+                if not remaining_text or len(remaining_text.strip()) == 0:
+                    send_verified = True
+                    logger.warning(f"[SEND {person_id}] VERIFIED: textarea cleared after send")
+                else:
+                    logger.error(f"[SEND {person_id}] WARNING: textarea still has text ({len(remaining_text)} chars) - send may have failed")
+                    # Take debug screenshot
+                    debug_path = os.path.join(debug_dir, f"debug_send_not_cleared_{person_id}.png")
+                    await self.page.screenshot(path=debug_path)
+            else:
+                logger.warning(f"[SEND {person_id}] Could not re-find textarea for verification")
+        except Exception as verify_err:
+            logger.warning(f"[SEND {person_id}] Verification check failed: {verify_err}")
 
         # Mark operation success for warm session tracking
         self.mark_operation_success()
@@ -760,8 +789,8 @@ class FUBBrowserSession:
         # freeze the page and the entire browser context before the next operation.
         await self._park_page()
 
-        logger.warning(f"[SEND {person_id}] COMPLETE")
-        return {"success": True, "person_id": person_id, "message_length": len(message)}
+        logger.warning(f"[SEND {person_id}] COMPLETE (verified={send_verified})")
+        return {"success": True, "verified": send_verified, "person_id": person_id, "message_length": len(message)}
 
     async def send_email(self, person_id: int, subject: str, body: str) -> dict:
         """
