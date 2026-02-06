@@ -943,7 +943,7 @@ async def send_sms_with_auto_credentials(
         }
 
     # Get agent_id from credentials or generate one
-    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+    agent_id = credentials.get("agent_id") or "default_agent"
 
     service = await PlaywrightSMSServiceSingleton.get_instance()
     return await service.send_sms(agent_id, person_id, message, credentials)
@@ -989,7 +989,7 @@ async def send_email_with_auto_credentials(
                      "Set FUB_LOGIN_EMAIL and FUB_LOGIN_PASSWORD in environment or database settings."
         }
 
-    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+    agent_id = credentials.get("agent_id") or "default_agent"
 
     service = await PlaywrightSMSServiceSingleton.get_instance()
     return await service.send_email(agent_id, person_id, subject, body, credentials)
@@ -1081,7 +1081,7 @@ async def read_call_summaries_with_auto_credentials(
         }
 
     # Get agent_id from credentials or generate one
-    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+    agent_id = credentials.get("agent_id") or "default_agent"
 
     service = await PlaywrightSMSServiceSingleton.get_instance()
     return await service.read_call_summaries(agent_id, person_id, credentials, limit)
@@ -1124,7 +1124,7 @@ async def read_message_with_auto_credentials(
         }
 
     # Get agent_id from credentials or generate one
-    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+    agent_id = credentials.get("agent_id") or "default_agent"
 
     service = await PlaywrightSMSServiceSingleton.get_instance()
     return await service.read_latest_message(agent_id, person_id, credentials)
@@ -1167,7 +1167,7 @@ async def get_fub_phone_numbers_with_auto_credentials(
         }
 
     # Get agent_id from credentials or generate one
-    agent_id = credentials.get("agent_id") or user_id or organization_id or "default_agent"
+    agent_id = credentials.get("agent_id") or "default_agent"
 
     service = await PlaywrightSMSServiceSingleton.get_instance()
 
