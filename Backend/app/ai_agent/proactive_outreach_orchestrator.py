@@ -176,6 +176,7 @@ class ProactiveOutreachOrchestrator:
 
             # Success if at least one message was sent/queued
             result["success"] = len(send_result["actions"]) > 0
+            result["lead_timezone"] = settings.get('timezone', 'America/Denver')
 
             if result["success"]:
                 logger.info(f"✅ Proactive outreach completed for lead {fub_person_id}: {', '.join(result['actions_taken'])}")
@@ -641,6 +642,57 @@ async def trigger_proactive_outreach(
 
         if result["success"]:
             logger.info(f"Proactive outreach triggered for lead {fub_person_id}: {', '.join(result['actions_taken'])}")
+
+            # ================================================================
+            # SCHEDULE FOLLOW-UP SEQUENCE (Day 0-7 intensive + 12-month nurture)
+            # The initial SMS/email was already sent above. Now schedule the
+            # remaining follow-up steps so the AI continues to engage the lead.
+            # ================================================================
+            try:
+                from app.ai_agent.followup_manager import get_followup_manager, FollowUpTrigger
+
+                followup_manager = get_followup_manager(supabase)
+
+                # Use timezone from the orchestrator result (already fetched from settings)
+                lead_timezone = result.get("lead_timezone", "America/Denver")
+
+                sequence_result = await followup_manager.schedule_followup_sequence(
+                    fub_person_id=fub_person_id,
+                    organization_id=organization_id,
+                    trigger=FollowUpTrigger.NEW_LEAD,
+                    start_delay_hours=0,
+                    preferred_channel="sms",
+                    lead_timezone=lead_timezone,
+                )
+
+                total_scheduled = sequence_result.get("total_scheduled", 0)
+                nurture_scheduled = sequence_result.get("nurture_scheduled", 0)
+
+                # Mark initial outreach steps as already sent (steps 0 and 1)
+                # since the orchestrator already handled first contact SMS + email
+                steps_marked = 0
+                for fu in sequence_result.get("followups", []):
+                    msg_type = fu.get("message_type", "")
+                    if msg_type in ("first_contact", "email_welcome"):
+                        try:
+                            supabase.table("ai_scheduled_followups").update({
+                                "status": "sent",
+                            }).eq("id", fu["id"]).execute()
+                            steps_marked += 1
+                        except Exception:
+                            pass
+
+                logger.info(
+                    f"📅 Follow-up sequence scheduled for lead {fub_person_id}: "
+                    f"{total_scheduled} follow-ups + {nurture_scheduled} nurture "
+                    f"({steps_marked} initial steps marked as sent)"
+                )
+                result["followup_sequence_id"] = sequence_result.get("sequence_id")
+                result["followups_scheduled"] = total_scheduled
+
+            except Exception as followup_err:
+                logger.error(f"Failed to schedule follow-up sequence for lead {fub_person_id}: {followup_err}", exc_info=True)
+                # Don't fail the whole outreach just because follow-up scheduling failed
         else:
             logger.warning(f"Proactive outreach issues for lead {fub_person_id}: {', '.join(result.get('errors', []))}")
 
