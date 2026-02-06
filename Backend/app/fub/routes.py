@@ -2453,6 +2453,127 @@ def trigger_lead_followup():
         }), 500
 
 
+@fub_bp.route('/ai/backfill-outreach', methods=['POST'])
+def backfill_proactive_outreach():
+    """
+    Trigger proactive outreach + follow-up sequence for leads missing outreach.
+
+    Auto-discovers leads that have AI enabled but never received proactive outreach.
+    Alternatively, pass specific person_ids to target specific leads.
+
+    Body (all optional):
+        - person_ids: List of FUB person IDs (if empty, auto-discovers)
+        - dry_run: If true, just return which leads would be targeted (default: false)
+
+    Returns:
+        - results: Dict of person_id -> result for each lead
+    """
+    import asyncio
+    import time
+    from app.database.supabase_client import SupabaseClientSingleton
+
+    try:
+        data = request.get_json() or {}
+        person_ids = data.get('person_ids', [])
+        dry_run = data.get('dry_run', False)
+
+        supabase = SupabaseClientSingleton.get_instance()
+
+        # Auto-discover leads needing outreach if no specific IDs provided
+        if not person_ids:
+            # Find AI-enabled leads (have ai_conversations) that never got proactive outreach
+            convos = supabase.table('ai_conversations').select(
+                'fub_person_id, organization_id, user_id, state, proactive_outreach_metadata'
+            ).execute()
+
+            # Get leads that already got outreach
+            outreach_sent = supabase.table('proactive_outreach_log').select(
+                'fub_person_id'
+            ).eq('sms_sent', True).execute()
+            sent_ids = {str(r['fub_person_id']) for r in (outreach_sent.data or [])}
+
+            # Find leads missing outreach
+            leads_needing = []
+            for c in (convos.data or []):
+                pid = str(c['fub_person_id'])
+                metadata = c.get('proactive_outreach_metadata') or {}
+                if pid not in sent_ids and not metadata.get('outreach_sent'):
+                    leads_needing.append({
+                        'fub_person_id': pid,
+                        'organization_id': c.get('organization_id', 'default'),
+                        'user_id': c.get('user_id', 'admin'),
+                        'state': c.get('state'),
+                    })
+
+            if dry_run:
+                return jsonify({
+                    "success": True,
+                    "dry_run": True,
+                    "leads_needing_outreach": leads_needing,
+                    "total": len(leads_needing),
+                })
+
+            logger.info(f"Auto-discovered {len(leads_needing)} leads needing outreach")
+        else:
+            # Use provided person IDs - look up their org/user from conversations
+            leads_needing = []
+            for pid in person_ids:
+                convo = supabase.table('ai_conversations').select(
+                    'organization_id, user_id'
+                ).eq('fub_person_id', int(pid)).limit(1).execute()
+                org_id = convo.data[0]['organization_id'] if convo.data else 'default'
+                uid = convo.data[0]['user_id'] if convo.data else 'admin'
+                leads_needing.append({
+                    'fub_person_id': str(pid),
+                    'organization_id': org_id,
+                    'user_id': uid,
+                })
+
+        from app.ai_agent.proactive_outreach_orchestrator import trigger_proactive_outreach
+
+        results = {}
+        for lead in leads_needing:
+            pid = lead['fub_person_id']
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result = loop.run_until_complete(
+                        trigger_proactive_outreach(
+                            fub_person_id=int(pid),
+                            organization_id=lead['organization_id'],
+                            user_id=lead['user_id'],
+                            trigger_reason="backfill",
+                            enable_type="manual",
+                        )
+                    )
+                    results[pid] = {
+                        "success": result.get("success", False),
+                        "actions": result.get("actions_taken", []),
+                        "followups": result.get("followups_scheduled", 0),
+                        "stage": result.get("lead_stage"),
+                        "errors": result.get("errors", []),
+                    }
+                finally:
+                    loop.close()
+
+                time.sleep(5)  # Stagger to avoid rate limits
+
+            except Exception as e:
+                results[pid] = {"success": False, "error": str(e)}
+                logger.error(f"Backfill failed for {pid}: {e}")
+
+        return jsonify({
+            "success": True,
+            "total": len(leads_needing),
+            "results": results,
+        })
+
+    except Exception as e:
+        logger.error(f"Backfill outreach error: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 # =============================================================================
 # TESTING ENDPOINTS
 # =============================================================================
