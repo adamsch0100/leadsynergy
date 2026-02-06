@@ -791,7 +791,17 @@ async def run_nba_scan(
     skipped = []
 
     if execute:
+        login_broken = False
         for action in recommendations:
+            # Skip remaining follow-ups if browser login is broken
+            if login_broken and action.action_type.value in ("followup_sms", "followup_email"):
+                skipped.append({
+                    "fub_person_id": action.fub_person_id,
+                    "action": action.action_type.value,
+                    "reason": "Skipped - browser login unavailable",
+                })
+                continue
+
             result = await engine.execute_action(action)
             if result.get("success"):
                 executed.append({
@@ -800,10 +810,15 @@ async def run_nba_scan(
                     "result": result,
                 })
             else:
+                error = result.get("reason") or result.get("error") or ""
+                # Detect login failures and stop trying follow-ups
+                if any(kw in error.lower() for kw in ["cooldown", "login failed", "suspicious login"]):
+                    login_broken = True
+                    logger.warning(f"Browser login broken - skipping remaining follow-ups")
                 skipped.append({
                     "fub_person_id": action.fub_person_id,
                     "action": action.action_type.value,
-                    "reason": result.get("reason") or result.get("error"),
+                    "reason": error,
                 })
 
     return {

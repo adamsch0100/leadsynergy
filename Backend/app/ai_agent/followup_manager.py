@@ -1784,12 +1784,20 @@ class FollowUpManager:
                 }).eq("id", followup_id).execute()
                 logger.info(f"Follow-up {followup_id} DELIVERED: {message_type.value} via {channel} (AI: {ai_used})")
             else:
-                self.supabase.table("ai_scheduled_followups").update({
-                    "status": FollowUpStatus.FAILED.value,
-                    "error_message": delivery_result.get("error", "Delivery failed"),
-                    "executed_at": datetime.utcnow().isoformat(),
-                }).eq("id", followup_id).execute()
-                logger.warning(f"Follow-up {followup_id} DELIVERY FAILED: {delivery_result.get('error')}")
+                error_msg = delivery_result.get("error", "Delivery failed")
+                # For transient login/cooldown errors, keep as pending for retry
+                is_transient = any(kw in error_msg.lower() for kw in [
+                    "cooldown", "suspicious login", "login failed", "verification link",
+                ])
+                if is_transient:
+                    logger.warning(f"Follow-up {followup_id} login issue (keeping pending): {error_msg[:100]}")
+                else:
+                    self.supabase.table("ai_scheduled_followups").update({
+                        "status": FollowUpStatus.FAILED.value,
+                        "error_message": error_msg,
+                        "executed_at": datetime.utcnow().isoformat(),
+                    }).eq("id", followup_id).execute()
+                    logger.warning(f"Follow-up {followup_id} DELIVERY FAILED: {error_msg}")
 
             return {
                 "success": delivery_result.get("success", False),
