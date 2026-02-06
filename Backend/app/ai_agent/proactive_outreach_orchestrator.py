@@ -514,7 +514,6 @@ class ProactiveOutreachOrchestrator:
                 'channel': channel,
                 'scheduled_for': scheduled_for.isoformat(),
                 'status': 'pending',
-                'message_type': 'proactive_initial_outreach',
             }
 
             # Only include email_subject for email messages if the column exists
