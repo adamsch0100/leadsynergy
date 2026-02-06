@@ -53,7 +53,6 @@ def send_scheduled_message(
     """
     from app.ai_agent import LeadProfile
     from app.ai_agent.compliance_checker import ComplianceChecker
-    from app.messaging.fub_sms_service import FUBSMSService
     from app.database.supabase_client import SupabaseClientSingleton
 
     logger.info(f"Sending scheduled message {message_id} to person {fub_person_id}")
@@ -68,21 +67,6 @@ def send_scheduled_message(
         ).single().execute()
         organization_id = msg_record.data.get("organization_id")
         user_id = msg_record.data.get("user_id")
-
-        # Get user's FUB API key and user ID for sending SMS
-        user_record = supabase.table("users").select("fub_api_key, fub_user_id").eq(
-            "id", user_id
-        ).single().execute()
-        fub_api_key = user_record.data.get("fub_api_key")
-        fub_user_id = user_record.data.get("fub_user_id")
-
-        if not fub_api_key:
-            logger.error(f"No FUB API key found for user {user_id}")
-            _mark_message_failed(supabase, message_id, "No FUB API key configured")
-            return {"success": False, "error": "No FUB API key configured"}
-
-        # Initialize SMS service with user's API key
-        sms_service = FUBSMSService(api_key=fub_api_key)
 
         # Get lead info from database (not FUB API)
         # Use execute() without .single() to avoid exception on no rows
@@ -177,55 +161,29 @@ def send_scheduled_message(
             _mark_message_failed(supabase, message_id, "No message content")
             return {"success": False, "error": "No message content"}
 
-        # Send the message via browser automation (Playwright)
+        # Send the message via Playwright browser automation
         if channel == "sms":
-            from app.messaging.playwright_sms_service import PlaywrightSMSService
-            from app.utils.constants import Credentials
-
-            creds_config = Credentials()
-
-            # Build FUB login credentials
-            credentials = {
-                "type": creds_config.FUB_LOGIN_TYPE or "email",
-                "email": creds_config.FUB_LOGIN_EMAIL,
-                "password": creds_config.FUB_LOGIN_PASSWORD,
-            }
+            from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
 
             try:
-                # Use browser automation to send SMS through FUB web UI
-                sms_service = PlaywrightSMSService()
-                result = asyncio.run(sms_service.send_sms(
-                    agent_id=user_id,  # Use LeadSynergy user ID as agent identifier
+                result = asyncio.run(send_sms_with_auto_credentials(
                     person_id=fub_person_id,
                     message=final_message,
-                    credentials=credentials,
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    supabase_client=supabase,
                 ))
             except Exception as e:
                 logger.error(f"Browser automation SMS failed: {e}")
                 result = {"success": False, "error": str(e)}
         elif channel == "email":
-            # Email sending via Playwright browser automation
-            from app.messaging.playwright_sms_service import PlaywrightSMSService
-            from app.utils.constants import Credentials
-
-            creds_config = Credentials()
-
-            # Build FUB login credentials
-            credentials = {
-                "type": creds_config.FUB_LOGIN_TYPE or "email",
-                "email": creds_config.FUB_LOGIN_EMAIL,
-                "password": creds_config.FUB_LOGIN_PASSWORD,
-            }
+            from app.messaging.playwright_sms_service import send_email_with_auto_credentials
 
             try:
-                # Use browser automation to send email through FUB web UI
-                email_service = PlaywrightSMSService()
-                result = asyncio.run(email_service.send_email(
-                    agent_id=user_id,
+                result = asyncio.run(send_email_with_auto_credentials(
                     person_id=fub_person_id,
                     subject="From your real estate agent",
                     body=final_message,
-                    credentials=credentials,
                 ))
             except Exception as e:
                 logger.error(f"Browser automation email failed: {e}")

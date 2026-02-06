@@ -1750,12 +1750,14 @@ class FollowUpManager:
 
             try:
                 if channel == "sms":
-                    # Send SMS via FUB Native Texting API
-                    from app.messaging.fub_sms_service import FUBSMSService
-                    fub_sms = FUBSMSService()
-                    delivery_result = await fub_sms.send_text_message_async(
+                    # Send SMS via Playwright browser automation (FUB API returns 403)
+                    from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
+                    organization_id = followup_data.get("organization_id")
+                    delivery_result = await send_sms_with_auto_credentials(
                         person_id=fub_person_id,
                         message=message_content,
+                        organization_id=organization_id,
+                        supabase_client=self.supabase,
                     )
                 elif channel == "email":
                     # Send email via Playwright browser automation (through FUB)

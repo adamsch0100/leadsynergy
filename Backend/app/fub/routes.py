@@ -2574,6 +2574,63 @@ def backfill_proactive_outreach():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+@fub_bp.route('/ai/reset-failed-followups', methods=['POST'])
+def reset_failed_followups():
+    """
+    Reset failed follow-ups back to pending so they can be retried.
+
+    This is needed after fixing the FUB API 403 bug - all follow-ups that
+    failed due to the old FUBSMSService need to be retried via Playwright.
+
+    Body (optional):
+        - dry_run: If true, just return counts (default: false)
+    """
+    from app.database.supabase_client import SupabaseClientSingleton
+
+    try:
+        data = request.get_json() or {}
+        dry_run = data.get('dry_run', False)
+
+        supabase = SupabaseClientSingleton.get_instance()
+
+        # Count failed follow-ups
+        failed = supabase.table('ai_scheduled_followups').select(
+            'id, fub_person_id, message_type, channel, error_message'
+        ).eq('status', 'failed').execute()
+
+        failed_count = len(failed.data or [])
+
+        if dry_run:
+            return jsonify({
+                "success": True,
+                "dry_run": True,
+                "failed_count": failed_count,
+                "sample": (failed.data or [])[:5],
+            })
+
+        if failed_count == 0:
+            return jsonify({"success": True, "message": "No failed follow-ups to reset", "reset_count": 0})
+
+        # Reset all failed follow-ups back to pending
+        supabase.table('ai_scheduled_followups').update({
+            'status': 'pending',
+            'error_message': None,
+            'executed_at': None,
+        }).eq('status', 'failed').execute()
+
+        logger.info(f"Reset {failed_count} failed follow-ups back to pending")
+
+        return jsonify({
+            "success": True,
+            "reset_count": failed_count,
+            "message": f"Reset {failed_count} failed follow-ups to pending. NBA scan will retry them.",
+        })
+
+    except Exception as e:
+        logger.error(f"Reset failed follow-ups error: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 # =============================================================================
 # TESTING ENDPOINTS
 # =============================================================================

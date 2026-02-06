@@ -450,6 +450,8 @@ class ProactiveOutreachOrchestrator:
                     message_content=outreach.sms_message,
                     channel="sms",
                     scheduled_for=queue_time,
+                    organization_id=settings.get('organization_id'),
+                    user_id=settings.get('user_id'),
                 )
 
                 result["actions"].append("sms_queued")
@@ -474,6 +476,8 @@ class ProactiveOutreachOrchestrator:
                             channel="email",
                             scheduled_for=email_time,
                             subject=outreach.email_subject,
+                            organization_id=settings.get('organization_id'),
+                            user_id=settings.get('user_id'),
                         )
 
                         result["actions"].append("email_queued")
@@ -487,6 +491,8 @@ class ProactiveOutreachOrchestrator:
                             channel="email",
                             scheduled_for=email_time,
                             subject=outreach.email_subject,
+                            organization_id=settings.get('organization_id'),
+                            user_id=settings.get('user_id'),
                         )
 
                         result["actions"].append("email_queued")
@@ -504,6 +510,8 @@ class ProactiveOutreachOrchestrator:
         channel: str,
         scheduled_for: datetime,
         subject: str = None,
+        organization_id: str = None,
+        user_id: str = None,
     ):
         """Queue a message for later sending."""
         try:
@@ -515,6 +523,11 @@ class ProactiveOutreachOrchestrator:
                 'scheduled_for': scheduled_for.isoformat(),
                 'status': 'pending',
             }
+
+            if organization_id:
+                data['organization_id'] = organization_id
+            if user_id:
+                data['user_id'] = user_id
 
             # Only include email_subject for email messages if the column exists
             # (scheduled_messages table may not have this column)
