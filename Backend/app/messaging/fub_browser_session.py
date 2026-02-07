@@ -702,7 +702,10 @@ class FUBBrowserSession:
                 el.dispatchEvent(new Event('change', { bubbles: true }));
             }""", message)
 
-        await self._human_delay(0.5, 1)
+        # Press End key to trigger keyboard events - forces React to re-evaluate
+        # the textarea state and enable the Send button
+        await compose_area.press("End")
+        await self._human_delay(0.3, 0.5)
 
         # Verify the textarea actually contains our message
         textarea_value = await compose_area.evaluate("el => el.value")
@@ -711,75 +714,120 @@ class FUBBrowserSession:
             raise Exception(f"Textarea empty after fill - React state not updated for person {person_id}")
         logger.warning(f"[SEND {person_id}] Textarea has {len(textarea_value)} chars (confirmed)")
 
-        logger.warning(f"[SEND {person_id}] Ready to click send button...")
+        # Helper: attempt to click send button and verify
+        async def _click_send_and_verify():
+            """Click the send button and check if textarea cleared."""
+            logger.warning(f"[SEND {person_id}] Finding send button...")
+            btn = await self._find_element_by_selectors(send_selectors)
+            if not btn:
+                raise Exception(f"Could not find send button for person {person_id}")
 
-        # Click send button with retry for "not enabled" errors
-        logger.warning(f"[SEND {person_id}] Finding send button...")
-        send_button = await self._find_element_by_selectors(send_selectors)
-        if not send_button:
-            raise Exception(f"Could not find send button for person {person_id}")
+            # Check if button is disabled before clicking
+            is_disabled = await btn.evaluate("el => el.disabled || el.getAttribute('aria-disabled') === 'true' || el.classList.contains('disabled')")
+            logger.warning(f"[SEND {person_id}] Send button disabled={is_disabled}")
 
-        logger.warning(f"[SEND {person_id}] Send button found, attempting click...")
+            clicked = False
 
-        # Click send button - try multiple approaches
-        button_clicked = False
+            # Approach 1: Regular Playwright click (generates real mouse events in React's event system)
+            if not is_disabled:
+                try:
+                    await btn.click(timeout=5000)
+                    clicked = True
+                    logger.warning(f"[SEND {person_id}] Playwright click succeeded")
+                except Exception as e:
+                    logger.warning(f"[SEND {person_id}] Playwright click failed: {e}")
 
-        # Approach 1: JavaScript click (bypasses disabled state checks)
-        try:
-            logger.warning(f"[SEND {person_id}] Attempting JavaScript click on send button...")
-            await send_button.evaluate("el => el.click()")
-            button_clicked = True
-            logger.info("JavaScript click succeeded")
-        except Exception as e:
-            logger.warning(f"JavaScript click failed: {e}")
+            # Approach 2: Force click (bypasses actionability checks but real mouse event)
+            if not clicked:
+                try:
+                    await btn.click(force=True, timeout=5000)
+                    clicked = True
+                    logger.warning(f"[SEND {person_id}] Force click succeeded")
+                except Exception as e:
+                    logger.warning(f"[SEND {person_id}] Force click failed: {e}")
 
-        # Approach 2: Force click (bypasses actionability checks)
-        if not button_clicked:
-            try:
-                logger.info("Attempting force click on send button...")
-                await send_button.click(force=True, timeout=5000)
-                button_clicked = True
-                logger.info("Force click succeeded")
-            except Exception as e:
-                logger.warning(f"Force click failed: {e}")
+            # Approach 3: JavaScript click (last resort - may not trigger React properly)
+            if not clicked:
+                try:
+                    await btn.evaluate("el => el.click()")
+                    clicked = True
+                    logger.warning(f"[SEND {person_id}] JS click succeeded")
+                except Exception as e:
+                    logger.warning(f"[SEND {person_id}] JS click failed: {e}")
 
-        # Approach 3: Regular Playwright click
-        if not button_clicked:
-            try:
-                logger.info("Attempting regular click on send button...")
-                await send_button.click(timeout=5000)
-                button_clicked = True
-                logger.info("Regular click succeeded")
-            except Exception as e:
-                logger.warning(f"Regular click failed: {e}")
+            if not clicked:
+                debug_path = os.path.join(debug_dir, f"debug_send_failed_{person_id}.png")
+                await self.page.screenshot(path=debug_path)
+                raise Exception(f"Could not click send button for person {person_id}")
 
-        if not button_clicked:
-            # Take debug screenshot on failure
-            debug_path = os.path.join(debug_dir, f"debug_send_failed_{person_id}.png")
-            await self.page.screenshot(path=debug_path)
-            logger.error(f"All click approaches failed. Screenshot: {debug_path}")
-            raise Exception(f"Could not click send button for person {person_id}")
+            await self._human_delay(1.5, 2.5)
 
-        await self._human_delay(1.5, 2.5)
-
-        # Verify message was sent: check if textarea cleared (FUB clears it on success)
-        send_verified = False
-        try:
+            # Check if textarea cleared (FUB clears on successful send)
             compose_after = await self._find_element_by_selectors(compose_selectors)
             if compose_after:
                 remaining_text = await compose_after.evaluate("el => el.value")
                 if not remaining_text or len(remaining_text.strip()) == 0:
-                    send_verified = True
-                    logger.warning(f"[SEND {person_id}] VERIFIED: textarea cleared after send")
-                else:
-                    logger.error(f"[SEND {person_id}] WARNING: textarea still has text ({len(remaining_text)} chars) - send may have failed")
-                    # Take debug screenshot
-                    debug_path = os.path.join(debug_dir, f"debug_send_not_cleared_{person_id}.png")
-                    await self.page.screenshot(path=debug_path)
-            else:
-                logger.warning(f"[SEND {person_id}] Could not re-find textarea for verification")
-        except Exception as verify_err:
-            logger.warning(f"[SEND {person_id}] Verification check failed: {verify_err}")
+                    return True
+                logger.warning(f"[SEND {person_id}] Textarea still has {len(remaining_text)} chars after click")
+                return False
+            # Can't find textarea = page may have changed (could be success)
+            return True
+
+        # Attempt 1: Click send
+        send_verified = await _click_send_and_verify()
+
+        # Attempt 2: If first attempt failed, try typing to force React state update
+        if not send_verified:
+            logger.warning(f"[SEND {person_id}] RETRY: Using keyboard to force React state update...")
+            compose_retry = await self._find_element_by_selectors(compose_selectors)
+            if compose_retry:
+                # Clear and re-type using pressSequentially (triggers all keyboard events)
+                await compose_retry.click()
+                await compose_retry.press("Control+a")
+                await self._human_delay(0.2, 0.3)
+                await compose_retry.press_sequentially(message[:50], delay=10)
+                # Fill the rest fast
+                if len(message) > 50:
+                    current_val = await compose_retry.evaluate("el => el.value")
+                    remaining = message[len(current_val):]
+                    await compose_retry.evaluate("""(el, rest) => {
+                        const nativeSetter = Object.getOwnPropertyDescriptor(
+                            window.HTMLTextAreaElement.prototype, 'value'
+                        ).set;
+                        nativeSetter.call(el, el.value + rest);
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    }""", remaining)
+                await compose_retry.press("End")
+                await self._human_delay(0.5, 0.8)
+
+                # Verify content
+                retry_val = await compose_retry.evaluate("el => el.value")
+                logger.warning(f"[SEND {person_id}] RETRY: Textarea has {len(retry_val or '')} chars after retype")
+
+                # Try clicking send again
+                send_verified = await _click_send_and_verify()
+
+        # Attempt 3: If still failing, use Enter key as send shortcut
+        if not send_verified:
+            logger.warning(f"[SEND {person_id}] RETRY 2: Trying Enter key to send...")
+            compose_enter = await self._find_element_by_selectors(compose_selectors)
+            if compose_enter:
+                await compose_enter.click()
+                await compose_enter.press("Enter")
+                await self._human_delay(1.5, 2.5)
+                # Check one more time
+                compose_final = await self._find_element_by_selectors(compose_selectors)
+                if compose_final:
+                    final_text = await compose_final.evaluate("el => el.value")
+                    if not final_text or len(final_text.strip()) == 0:
+                        send_verified = True
+
+        if send_verified:
+            logger.warning(f"[SEND {person_id}] VERIFIED: message sent successfully")
+        else:
+            logger.error(f"[SEND {person_id}] FAILED: all send attempts failed - textarea not cleared")
+            debug_path = os.path.join(debug_dir, f"debug_send_not_cleared_{person_id}.png")
+            await self.page.screenshot(path=debug_path)
 
         # Mark operation success for warm session tracking
         self.mark_operation_success()
@@ -790,7 +838,9 @@ class FUBBrowserSession:
         await self._park_page()
 
         logger.warning(f"[SEND {person_id}] COMPLETE (verified={send_verified})")
-        return {"success": True, "verified": send_verified, "person_id": person_id, "message_length": len(message)}
+        if not send_verified:
+            return {"success": False, "verified": False, "error": f"Send not verified for person {person_id} - textarea not cleared", "person_id": person_id}
+        return {"success": True, "verified": True, "person_id": person_id, "message_length": len(message)}
 
     async def send_email(self, person_id: int, subject: str, body: str) -> dict:
         """
