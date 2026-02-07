@@ -2631,6 +2631,152 @@ def reset_failed_followups():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+@fub_bp.route('/ai/cancel-lead/<int:person_id>', methods=['POST'])
+def cancel_lead_sequences(person_id):
+    """Cancel ALL pending follow-ups for a specific lead."""
+    from app.database.supabase_client import SupabaseClientSingleton
+
+    try:
+        data = request.get_json() or {}
+        reason = data.get('reason', 'Manual cancellation')
+        supabase = SupabaseClientSingleton.get_instance()
+
+        # Cancel all pending follow-ups
+        pending = supabase.table('ai_scheduled_followups').select('id').eq(
+            'fub_person_id', str(person_id)
+        ).eq('status', 'pending').execute()
+        pending_count = len(pending.data or [])
+
+        if pending_count > 0:
+            supabase.table('ai_scheduled_followups').update({
+                'status': 'cancelled',
+                'error_message': reason,
+            }).eq('fub_person_id', str(person_id)).eq('status', 'pending').execute()
+
+        # Also cancel scheduled_messages
+        sched = supabase.table('scheduled_messages').select('id').eq(
+            'fub_person_id', str(person_id)
+        ).eq('status', 'pending').execute()
+        sched_count = len(sched.data or [])
+
+        if sched_count > 0:
+            supabase.table('scheduled_messages').update({
+                'status': 'cancelled',
+            }).eq('fub_person_id', str(person_id)).eq('status', 'pending').execute()
+
+        # Disable AI for this lead
+        try:
+            from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+            lead_ai = LeadAISettingsServiceSingleton.get_instance(supabase)
+            lead_ai.disable_ai_for_lead(person_id)
+        except Exception as e:
+            logger.warning(f"Could not disable AI for {person_id}: {e}")
+
+        logger.info(f"Cancelled {pending_count} followups + {sched_count} scheduled for lead {person_id}: {reason}")
+
+        return jsonify({
+            "success": True,
+            "person_id": person_id,
+            "cancelled_followups": pending_count,
+            "cancelled_scheduled": sched_count,
+            "message": f"All pending messages cancelled for lead {person_id}",
+        })
+
+    except Exception as e:
+        logger.error(f"Cancel lead error: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@fub_bp.route('/ai/cancel-all-pending', methods=['POST'])
+def cancel_all_pending():
+    """Emergency: Cancel ALL pending follow-ups across all leads."""
+    from app.database.supabase_client import SupabaseClientSingleton
+
+    try:
+        data = request.get_json() or {}
+        reason = data.get('reason', 'Emergency stop')
+        dry_run = data.get('dry_run', False)
+        supabase = SupabaseClientSingleton.get_instance()
+
+        pending = supabase.table('ai_scheduled_followups').select(
+            'id, fub_person_id, message_type, channel'
+        ).eq('status', 'pending').execute()
+        pending_count = len(pending.data or [])
+
+        leads_affected = set(str(p['fub_person_id']) for p in (pending.data or []))
+
+        if dry_run:
+            return jsonify({
+                "success": True,
+                "dry_run": True,
+                "pending_count": pending_count,
+                "leads_affected": len(leads_affected),
+                "lead_ids": sorted(leads_affected),
+            })
+
+        if pending_count > 0:
+            supabase.table('ai_scheduled_followups').update({
+                'status': 'cancelled',
+                'error_message': reason,
+            }).eq('status', 'pending').execute()
+
+        logger.warning(f"EMERGENCY STOP: Cancelled {pending_count} pending followups for {len(leads_affected)} leads")
+
+        return jsonify({
+            "success": True,
+            "cancelled_count": pending_count,
+            "leads_affected": len(leads_affected),
+            "message": f"Emergency stop: cancelled {pending_count} followups",
+        })
+
+    except Exception as e:
+        logger.error(f"Cancel all error: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@fub_bp.route('/ai/search-lead', methods=['GET'])
+def search_lead():
+    """Search for a lead by name via FUB API."""
+    from app.database.fub_api_client import FUBApiClient
+    import requests as req_lib
+    import base64
+
+    try:
+        name = request.args.get('name', '')
+        if not name:
+            return jsonify({"success": False, "message": "name parameter required"}), 400
+
+        fub_client = FUBApiClient()
+        # FUB search endpoint
+        url = f"https://api.followupboss.com/v1/people"
+        params = {"sort": "lastActivity", "limit": 20}
+        resp = req_lib.get(url, headers=fub_client.headers, params=params, timeout=30)
+        resp.raise_for_status()
+        people = resp.json().get("people", [])
+
+        # Filter by name (case-insensitive)
+        name_lower = name.lower()
+        matches = [
+            {
+                "id": p.get("id"),
+                "firstName": p.get("firstName"),
+                "lastName": p.get("lastName"),
+                "email": (p.get("emails") or [{}])[0].get("value") if p.get("emails") else None,
+                "phone": (p.get("phones") or [{}])[0].get("value") if p.get("phones") else None,
+                "stage": p.get("stage"),
+                "source": p.get("source"),
+            }
+            for p in people
+            if name_lower in f"{p.get('firstName', '')} {p.get('lastName', '')}".lower()
+        ]
+
+        return jsonify({"success": True, "query": name, "matches": matches, "total_searched": len(people)})
+
+    except Exception as e:
+        logger.error(f"Search lead error: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 @fub_bp.route('/ai/reset-sent-followups', methods=['POST'])
 def reset_sent_followups():
     """
