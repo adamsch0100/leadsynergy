@@ -1786,9 +1786,10 @@ class FollowUpManager:
                 logger.info(f"Follow-up {followup_id} DELIVERED (verified={verified}): {message_type.value} via {channel} (AI: {ai_used})")
             else:
                 error_msg = delivery_result.get("error", "Delivery failed")
-                # For transient login/cooldown errors, keep as pending for retry
+                # For transient errors, keep as pending for retry on next NBA scan
                 is_transient = any(kw in error_msg.lower() for kw in [
                     "cooldown", "suspicious login", "login failed", "verification link",
+                    "not verified", "textarea not cleared", "textarea empty",
                 ])
                 if is_transient:
                     logger.warning(f"Follow-up {followup_id} login issue (keeping pending): {error_msg[:100]}")
