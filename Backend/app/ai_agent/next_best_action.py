@@ -702,11 +702,29 @@ class NextBestActionEngine:
         """Execute a follow-up action."""
         context = action.message_context or {}
 
+        # Fetch agent settings so messages use real names, not "Your Agent"
+        agent_name = "Your Agent"
+        agent_phone = ""
+        brokerage_name = ""
+        try:
+            settings = self.supabase.table("ai_agent_settings").select(
+                "agent_name, brokerage_name"
+            ).limit(1).execute()
+            if settings.data:
+                s = settings.data[0]
+                agent_name = s.get("agent_name") or "Your Agent"
+                brokerage_name = s.get("brokerage_name") or ""
+        except Exception as e:
+            logger.warning(f"Could not fetch agent settings: {e}")
+
         # If this is a scheduled follow-up, process it
         if context.get("followup_id"):
             return await self.followup_manager.process_scheduled_followup(
                 followup_id=context["followup_id"],
                 agent_service=agent_service,
+                agent_name=agent_name,
+                agent_phone=agent_phone,
+                brokerage_name=brokerage_name,
             )
 
         # Otherwise, schedule a new sequence

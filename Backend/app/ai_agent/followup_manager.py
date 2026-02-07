@@ -1744,6 +1744,73 @@ class FollowUpManager:
                 ai_used = False
 
             # ================================================================
+            # TEMPLATE VARIABLE SUBSTITUTION
+            # Fill in {first_name}, {area}, {agent_name}, etc. in any template
+            # This is a safety net - AI messages shouldn't have these, but
+            # template fallbacks DO have them and MUST be filled in.
+            # ================================================================
+            first_name = (person_data or {}).get("firstName", "there")
+            cities = (person_data or {}).get("cities", "") or "your area"
+            import datetime as dt
+            days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+            today_idx = dt.datetime.now().weekday()
+            suggested_day = days_of_week[(today_idx + 1) % 5] if today_idx < 5 else "Monday"
+
+            template_vars = {
+                "first_name": first_name,
+                "area": cities,
+                "agent_name": agent_name,
+                "agent_phone": agent_phone,
+                "brokerage": brokerage_name,
+                "suggested_day": suggested_day,
+                "suggested_time": "2:00 PM",
+                "trend": "steady",
+                "property_type": "home",
+                "lead_type_action": "find a home",
+                "dom": "30",
+                "price_trend": "remained",
+                "percent_change": "1",
+                "inventory_trend": "stable",
+                "market_insight": "It's a great time to explore options",
+                "timeframe": "a few weeks",
+                "month": dt.datetime.now().strftime("%B"),
+                "bedrooms": "3",
+                "tip": "Getting pre-approved early gives you a big advantage",
+                "interesting_stat": "increased buyer activity",
+                "market_update": "The market is showing steady activity with good opportunities for buyers.",
+                "rate_direction": "shifted",
+                "current_rate": "6.5",
+                "neighborhood_fact_1": "Great schools nearby",
+                "neighborhood_fact_2": "New restaurants and shops opening",
+                "neighborhood_fact_3": "Strong home value appreciation",
+                "slot_1": f"{suggested_day} at 10:00 AM",
+                "slot_2": f"{suggested_day} at 2:00 PM",
+                "slot_3": f"{'Thursday' if suggested_day != 'Thursday' else 'Friday'} at 11:00 AM",
+            }
+
+            # Safely substitute - only replace variables that exist in the template
+            try:
+                # Use safe format that ignores missing keys
+                import string
+                class SafeDict(dict):
+                    def __missing__(self, key):
+                        return f"{{{key}}}"
+                message_content = string.Formatter().vformat(message_content, (), SafeDict(template_vars))
+                if message_subject:
+                    message_subject = string.Formatter().vformat(message_subject, (), SafeDict(template_vars))
+            except Exception as fmt_err:
+                logger.warning(f"Template formatting error: {fmt_err}")
+
+            # CRITICAL: Never send a message with unfilled template variables
+            if "{first_name}" in message_content or "{area}" in message_content or "{agent_name}" in message_content:
+                logger.error(f"BLOCKING message with unfilled template vars for {fub_person_id}: {message_content[:100]}")
+                return {
+                    "success": False,
+                    "error": f"Template variables not filled in for follow-up {followup_id}",
+                    "delivery_error": "unfilled_template",
+                }
+
+            # ================================================================
             # DELIVERY: Actually send the message via the appropriate channel
             # ================================================================
             delivery_result = {"success": False, "error": "No delivery attempted"}
