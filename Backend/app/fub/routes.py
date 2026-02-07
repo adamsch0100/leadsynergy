@@ -2631,6 +2631,72 @@ def reset_failed_followups():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+@fub_bp.route('/ai/reset-sent-followups', methods=['POST'])
+def reset_sent_followups():
+    """
+    Reset follow-ups marked as 'sent' back to 'pending' for re-execution.
+
+    This is needed when the Playwright send appeared successful but messages
+    were not actually delivered (e.g., textarea fill didn't work with React).
+
+    Body (optional):
+        - dry_run: If true, just return counts (default: false)
+        - channels: List of channels to reset (default: ["sms"] - only SMS since that's what was broken)
+    """
+    from app.database.supabase_client import SupabaseClientSingleton
+
+    try:
+        data = request.get_json() or {}
+        dry_run = data.get('dry_run', False)
+        channels = data.get('channels', ['sms'])
+
+        supabase = SupabaseClientSingleton.get_instance()
+
+        # Find sent follow-ups that have executed_at (not the auto-marked first_contact/email_welcome)
+        sent = supabase.table('ai_scheduled_followups').select(
+            'id, fub_person_id, message_type, channel, status, executed_at, scheduled_at'
+        ).eq('status', 'sent').in_('channel', channels).execute()
+
+        sent_items = sent.data or []
+        # Only reset ones that were actually "executed" by the system (have executed_at)
+        to_reset = [s for s in sent_items if s.get('executed_at')]
+        auto_marked = [s for s in sent_items if not s.get('executed_at')]
+
+        if dry_run:
+            return jsonify({
+                "success": True,
+                "dry_run": True,
+                "total_sent": len(sent_items),
+                "to_reset": len(to_reset),
+                "auto_marked_skip": len(auto_marked),
+                "sample": to_reset[:5],
+            })
+
+        if not to_reset:
+            return jsonify({"success": True, "message": "No executed sent follow-ups to reset", "reset_count": 0})
+
+        # Reset each one
+        reset_ids = [s['id'] for s in to_reset]
+        for rid in reset_ids:
+            supabase.table('ai_scheduled_followups').update({
+                'status': 'pending',
+                'executed_at': None,
+                'error_message': None,
+            }).eq('id', rid).execute()
+
+        logger.info(f"Reset {len(reset_ids)} sent follow-ups back to pending for re-delivery")
+
+        return jsonify({
+            "success": True,
+            "reset_count": len(reset_ids),
+            "message": f"Reset {len(reset_ids)} falsely-sent follow-ups to pending. NBA scan will re-execute with fixed Playwright.",
+        })
+
+    except Exception as e:
+        logger.error(f"Reset sent follow-ups error: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 @fub_bp.route('/ai/verify-messages/<int:person_id>', methods=['GET'])
 def verify_messages(person_id):
     """
@@ -2646,53 +2712,98 @@ def verify_messages(person_id):
     from app.database.supabase_client import SupabaseClientSingleton
 
     try:
+        import requests as req_lib
+        import base64
+
         limit = request.args.get('limit', 10, type=int)
+        use_browser = request.args.get('browser', 'false').lower() == 'true'
 
-        # Get actual messages from FUB API
-        fub_client = FUBApiClient()
-        fub_messages = fub_client.get_text_messages_for_person(person_id, limit=limit)
-
-        # Get what our system logged as sent
         supabase = SupabaseClientSingleton.get_instance()
+
+        # --- FUB API check (raw response for debugging) ---
+        fub_api_result = {"count": 0, "messages": [], "raw_keys": [], "api_error": None}
+        try:
+            fub_client = FUBApiClient()
+            url = f"https://api.followupboss.com/v1/textMessages"
+            params = {"personId": person_id, "limit": limit}
+            resp = req_lib.get(url, headers=fub_client.headers, params=params, timeout=30)
+            resp.raise_for_status()
+            raw = resp.json()
+            fub_api_result["raw_keys"] = list(raw.keys())
+            # Try both possible keys
+            messages = raw.get("textmessages") or raw.get("textMessages") or raw.get("messages") or []
+            fub_api_result["count"] = len(messages)
+            fub_api_result["messages"] = [
+                {
+                    "id": m.get("id"),
+                    "body": (m.get("body") or m.get("message") or "")[:200],
+                    "direction": "outgoing" if m.get("isOutgoing") else "incoming",
+                    "created": m.get("created"),
+                }
+                for m in messages[:limit]
+            ]
+        except Exception as api_err:
+            fub_api_result["api_error"] = str(api_err)
+
+        # --- Playwright browser check (if requested) ---
+        browser_result = None
+        if use_browser:
+            try:
+                import asyncio
+                from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
+                from app.messaging.fub_browser_session import FUBBrowserSession
+                from app.ai_agent.settings_service import get_fub_browser_credentials
+
+                creds = get_fub_browser_credentials(supabase)
+                agent_id = creds.get("agent_id") or "default_agent"
+
+                async def _read():
+                    session = FUBBrowserSession(
+                        fub_username=creds["username"],
+                        fub_password=creds["password"],
+                        agent_id=agent_id,
+                        supabase_client=supabase,
+                    )
+                    await session.initialize()
+                    result = await session.read_recent_messages(person_id, limit=limit)
+                    await session.close()
+                    return result
+
+                browser_result = asyncio.run(_read())
+            except Exception as browser_err:
+                browser_result = {"success": False, "error": str(browser_err)}
+
+        # --- Our message logs ---
         our_logs = supabase.table('ai_message_log').select(
             'id, fub_person_id, message_content, channel, direction, created_at'
         ).eq('fub_person_id', str(person_id)).order(
             'created_at', desc=True
         ).limit(limit).execute()
 
-        # Get scheduled follow-ups for this lead
+        # --- Scheduled follow-ups ---
         followups = supabase.table('ai_scheduled_followups').select(
             'id, fub_person_id, message_type, channel, status, scheduled_at, executed_at, error_message'
         ).eq('fub_person_id', str(person_id)).order(
             'scheduled_at', desc=False
         ).execute()
 
-        return jsonify({
+        result = {
             "success": True,
             "person_id": person_id,
-            "fub_messages": {
-                "count": len(fub_messages),
-                "messages": [
-                    {
-                        "id": m.get("id"),
-                        "body": m.get("body", "")[:200],
-                        "direction": "outgoing" if m.get("isOutgoing") else "incoming",
-                        "created": m.get("created"),
-                        "person_id": m.get("personId"),
-                    }
-                    for m in fub_messages[:limit]
-                ],
-            },
+            "fub_api": fub_api_result,
             "our_logs": {
                 "count": len(our_logs.data or []),
                 "messages": (our_logs.data or [])[:limit],
             },
             "followups": {
                 "total": len(followups.data or []),
-                "by_status": {},
                 "items": (followups.data or []),
             },
-        })
+        }
+        if browser_result is not None:
+            result["browser_messages"] = browser_result
+
+        return jsonify(result)
 
     except Exception as e:
         logger.error(f"Verify messages error for person {person_id}: {e}", exc_info=True)
