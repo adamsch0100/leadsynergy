@@ -95,6 +95,18 @@ class ProactiveOutreachOrchestrator:
                 result["errors"].append("Could not load organization settings")
                 return result
 
+            # Step 2b: Check stage eligibility (blocks Sphere, Past Client, Active Client, etc.)
+            stage_name = person_data.get('stageName', '') or person_data.get('stage', '')
+            if stage_name:
+                from app.ai_agent.compliance_checker import ComplianceChecker
+                stage_checker = ComplianceChecker()
+                excluded_stages = settings.get('excluded_stages', [])
+                is_eligible, _, stage_reason = stage_checker.check_stage_eligibility(stage_name, excluded_stages)
+                if not is_eligible:
+                    logger.info(f"⛔ Lead {fub_person_id} stage '{stage_name}' excluded: {stage_reason}")
+                    result["errors"].append(f"Stage '{stage_name}' excluded from AI outreach")
+                    return result
+
             # Step 3: Analyze lead history
             from app.ai_agent.lead_context_analyzer import LeadContextAnalyzer
 

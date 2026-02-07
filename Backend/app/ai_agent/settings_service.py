@@ -57,6 +57,12 @@ class AIAgentSettings:
     max_qualification_questions: int = 8
     auto_schedule_score_threshold: int = 70  # Score to auto-suggest scheduling
 
+    # Stage exclusion - FUB stages that should NEVER receive AI outreach
+    # Users can configure via settings UI; these are sensible defaults
+    excluded_stages: list = field(default_factory=lambda: [
+        "Sphere", "Past Client", "Active Client", "Trash", "Dead"
+    ])
+
     # Feature flags
     is_enabled: bool = False  # AI auto-respond OFF by default - must be explicitly enabled
     auto_enable_new_leads: bool = False  # Auto-enable AI for new leads coming in
@@ -203,6 +209,7 @@ class AIAgentSettings:
             max_ai_messages_per_lead=row.get('max_ai_messages_per_lead') or 15,
             is_enabled=row.get('is_enabled', True),
             auto_enable_new_leads=row.get('auto_enable_new_leads', False),
+            excluded_stages=row.get('excluded_stages') or ["Sphere", "Past Client", "Active Client", "Trash", "Dead"],
             qualification_questions=row.get('qualification_questions') or [],
             custom_scripts=row.get('custom_scripts') or {},
             # Re-engagement settings
@@ -450,6 +457,8 @@ class AIAgentSettingsService:
                 "notification_fub_person_id": settings.notification_fub_person_id,
                 # Phone number filter
                 "ai_respond_to_phone_numbers": settings.ai_respond_to_phone_numbers,
+                # Stage exclusion
+                "excluded_stages": settings.excluded_stages,
             }
 
             # Add user/org ID

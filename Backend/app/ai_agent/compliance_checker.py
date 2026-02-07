@@ -92,7 +92,8 @@ class ComplianceChecker:
         "closed", "sold", "lost", "sphere", "trash",
         "not interested", "dnc", "do not", "archived",
         "inactive", "dead", "junk", "spam", "wrong",
-        "bad number", "duplicate", "deceased"
+        "bad number", "duplicate", "deceased",
+        "past client", "active client",
     ]
 
     # Stage patterns that require human handoff
@@ -205,15 +206,18 @@ class ComplianceChecker:
     def check_stage_eligibility(
         self,
         stage_name: str,
+        excluded_stages: list = None,
     ) -> Tuple[bool, ComplianceStatus, str]:
         """
         Check if lead's FUB stage allows AI contact.
 
         Uses smart pattern matching to handle custom agent-created stages.
         For example, "Closed - Sold" and "CLOSED" both match the "closed" pattern.
+        Also checks user-configured excluded stages (exact match).
 
         Args:
             stage_name: The lead's current FUB stage name
+            excluded_stages: User-configured list of excluded stage names (exact match, case-insensitive)
 
         Returns:
             Tuple of (is_eligible, status, reason)
@@ -227,7 +231,15 @@ class ComplianceChecker:
 
         stage_lower = stage_name.lower().strip()
 
-        # Check 1: Is this a blocked stage?
+        # Check 0: User-configured excluded stages (exact match, case-insensitive)
+        if excluded_stages:
+            for excluded in excluded_stages:
+                if excluded and stage_lower == excluded.lower().strip():
+                    reason = f"Lead stage '{stage_name}' is excluded by user settings"
+                    logger.info(f"Stage eligibility check: BLOCKED (user setting) - {reason}")
+                    return False, ComplianceStatus.BLOCKED_STAGE, reason
+
+        # Check 1: Is this a blocked stage? (hardcoded safety net)
         for pattern in self.BLOCK_STAGE_PATTERNS:
             if pattern in stage_lower:
                 reason = f"Lead stage '{stage_name}' blocks AI contact (matched '{pattern}')"
@@ -251,13 +263,14 @@ class ComplianceChecker:
         phone_number: str,
         stage_name: str = None,
         recipient_timezone: str = None,
+        excluded_stages: list = None,
     ) -> ComplianceResult:
         """
         Perform full eligibility check including stage and SMS compliance.
 
         This is the recommended method for checking if AI should contact a lead.
         It combines:
-        1. Stage eligibility (blocked/handoff stages)
+        1. Stage eligibility (blocked/handoff stages + user-excluded stages)
         2. SMS compliance (hours, rate limits, opt-out status, DNC)
 
         Note: TCPA consent is assumed for all leads in FUB - they consented
@@ -269,6 +282,7 @@ class ComplianceChecker:
             phone_number: Recipient phone number
             stage_name: Lead's current FUB stage (optional but recommended)
             recipient_timezone: Recipient's timezone (optional)
+            excluded_stages: User-configured excluded stages list (optional)
 
         Returns:
             ComplianceResult with full status details
@@ -277,7 +291,7 @@ class ComplianceChecker:
 
         # Check 1: Stage eligibility (if stage provided)
         if stage_name:
-            is_eligible, status, reason = self.check_stage_eligibility(stage_name)
+            is_eligible, status, reason = self.check_stage_eligibility(stage_name, excluded_stages)
 
             if not is_eligible:
                 return ComplianceResult(

@@ -1434,6 +1434,17 @@ async def process_new_lead(webhook_data: Dict[str, Any], resource_uri: str, reso
             logger.info(f"AI agent not enabled for organization {organization_id}")
             return
 
+        # Check stage eligibility BEFORE enabling AI
+        stage_name = person_data.get('stageName', '') or person_data.get('stage', '')
+        if stage_name:
+            from app.ai_agent.compliance_checker import ComplianceChecker
+            stage_checker = ComplianceChecker(supabase_client=supabase)
+            excluded_stages = settings.get('excluded_stages', [])
+            is_eligible, _, stage_reason = stage_checker.check_stage_eligibility(stage_name, excluded_stages)
+            if not is_eligible:
+                logger.info(f"Skipping new lead {person_id} - stage '{stage_name}' excluded: {stage_reason}")
+                return
+
         # Check if auto_enable_new_leads is set
         auto_enable_new_leads = settings.get('auto_enable_new_leads', False)
 
@@ -2544,6 +2555,24 @@ async def process_tag_change(webhook_data: Dict[str, Any], event: str):
         lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
         
         if event == 'tagadded':
+            # Check stage eligibility before enabling AI
+            try:
+                from app.database.fub_api_client import FUBApiClient
+                fub_client = FUBApiClient()
+                person_data = fub_client.get_person(str(person_id))
+                stage_name = person_data.get('stageName', '') or person_data.get('stage', '') if person_data else ''
+                if stage_name:
+                    settings = await get_ai_agent_settings(organization_id, user_id)
+                    excluded_stages = settings.get('excluded_stages', []) if settings else []
+                    from app.ai_agent.compliance_checker import ComplianceChecker
+                    stage_checker = ComplianceChecker(supabase_client=supabase)
+                    is_eligible, _, reason = stage_checker.check_stage_eligibility(stage_name, excluded_stages)
+                    if not is_eligible:
+                        logger.info(f"Skipping AI enable for person {person_id} - stage '{stage_name}' excluded: {reason}")
+                        return
+            except Exception as stage_err:
+                logger.warning(f"Stage check failed for {person_id}, proceeding: {stage_err}")
+
             # Enable AI for this lead
             success = await lead_ai_service.enable_ai_for_lead(
                 fub_person_id=person_id,

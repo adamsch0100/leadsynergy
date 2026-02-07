@@ -1664,6 +1664,32 @@ class FollowUpManager:
             sequence_step = followup_data.get("sequence_step", 0)
             fub_person_id = followup_data["fub_person_id"]
 
+            # Safety net: Re-check lead's current FUB stage before sending
+            # Catches leads whose stage changed after follow-ups were scheduled
+            try:
+                from app.database.fub_api_client import FUBApiClient
+                fub_client = FUBApiClient()
+                if not person_data:
+                    person_data = fub_client.get_person(str(fub_person_id))
+                stage_name = (person_data.get('stageName', '') or person_data.get('stage', '')) if person_data else ''
+                if stage_name:
+                    # Load excluded stages from settings
+                    org_id = followup_data.get('organization_id')
+                    settings_result = self.supabase.table('ai_agent_settings').select('excluded_stages').limit(1).execute()
+                    excluded_stages = settings_result.data[0].get('excluded_stages', []) if settings_result.data else []
+                    from app.ai_agent.compliance_checker import ComplianceChecker
+                    stage_checker = ComplianceChecker()
+                    is_eligible, _, reason = stage_checker.check_stage_eligibility(stage_name, excluded_stages)
+                    if not is_eligible:
+                        # Cancel this and all remaining pending follow-ups for this lead
+                        self.supabase.table('ai_scheduled_followups').update({
+                            'status': 'cancelled',
+                        }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
+                        logger.info(f"Stage changed to '{stage_name}' - cancelled all follow-ups for lead {fub_person_id}")
+                        return {"success": False, "error": f"Lead stage '{stage_name}' excluded", "delivery_error": "stage_excluded"}
+            except Exception as stage_err:
+                logger.warning(f"Stage re-check failed for {fub_person_id}, proceeding: {stage_err}")
+
             # Calculate which day of the sequence this is
             # Based on sequence step, approximate the day
             day_mapping = {

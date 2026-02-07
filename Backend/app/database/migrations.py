@@ -1275,6 +1275,19 @@ MIGRATIONS = [
             """,
         ]
     }
+    {
+        'version': '20250207_add_excluded_stages',
+        'description': 'Add excluded_stages JSONB setting to ai_agent_settings for stage-based AI filtering',
+        'sql_statements': [
+            """
+            ALTER TABLE ai_agent_settings
+                ADD COLUMN IF NOT EXISTS excluded_stages JSONB DEFAULT '["Sphere", "Past Client", "Active Client", "Trash", "Dead"]';
+            """,
+            """
+            NOTIFY pgrst, 'reload schema';
+            """,
+        ]
+    }
 ]
 
 def run_specific_migration(version):

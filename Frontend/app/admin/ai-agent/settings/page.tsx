@@ -40,6 +40,7 @@ import type { User } from "@supabase/supabase-js"
 interface AISettings {
   is_enabled: boolean
   auto_enable_new_leads: boolean
+  excluded_stages: string[]
   agent_name: string
   brokerage_name: string
   team_members: string
@@ -95,6 +96,7 @@ const DEFAULT_FUB_LOGIN: FUBLoginSettings = {
 const DEFAULT_SETTINGS: AISettings = {
   is_enabled: true,
   auto_enable_new_leads: false,
+  excluded_stages: ["Sphere", "Past Client", "Active Client", "Trash", "Dead"],
   agent_name: "Sarah",
   brokerage_name: "",
   team_members: "",  // e.g., "Adam and Mandi"
@@ -170,6 +172,8 @@ export default function AISettingsPage() {
   const [error, setError] = useState<string | null>(null)
   const [newQuestion, setNewQuestion] = useState("")
   const [newPhoneNumber, setNewPhoneNumber] = useState("")
+  const [fubStages, setFubStages] = useState<string[]>([])
+  const [isLoadingStages, setIsLoadingStages] = useState(false)
 
   // FUB Login state
   const [fubLogin, setFubLogin] = useState<FUBLoginSettings>(DEFAULT_FUB_LOGIN)
@@ -227,6 +231,7 @@ export default function AISettingsPage() {
           qualification_questions: data.settings.qualification_questions || [],
           custom_scripts: data.settings.custom_scripts || {},
           ai_respond_to_phone_numbers: data.settings.ai_respond_to_phone_numbers || [],
+          excluded_stages: data.settings.excluded_stages || ["Sphere", "Past Client", "Active Client", "Trash", "Dead"],
         })
         if (data.role) {
           setUserRole(data.role)
@@ -236,6 +241,36 @@ export default function AISettingsPage() {
       console.error('Failed to fetch AI settings:', err)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  // Fetch FUB stages for the excluded stages selector
+  const fetchFubStages = async () => {
+    setIsLoadingStages(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/ai/fub-stages`)
+      const data = await response.json()
+      if (data.success && data.stages) {
+        setFubStages(data.stages)
+      }
+    } catch (err) {
+      console.error('Failed to fetch FUB stages:', err)
+    } finally {
+      setIsLoadingStages(false)
+    }
+  }
+
+  // Load FUB stages on mount
+  useEffect(() => {
+    fetchFubStages()
+  }, [])
+
+  const toggleExcludedStage = (stage: string) => {
+    const current = settings.excluded_stages || []
+    if (current.includes(stage)) {
+      setSettings({ ...settings, excluded_stages: current.filter(s => s !== stage) })
+    } else {
+      setSettings({ ...settings, excluded_stages: [...current, stage] })
     }
   }
 
@@ -837,6 +872,46 @@ export default function AISettingsPage() {
                     </AlertDescription>
                   </Alert>
                 )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5" />
+                  Excluded Stages
+                </CardTitle>
+                <CardDescription>
+                  Leads in these FUB stages will NEVER receive AI messages. This prevents automations from contacting your sphere, past clients, or other groups.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {(fubStages.length > 0 ? fubStages : ["New", "Sphere", "Past Client", "Active Client", "Hot", "Warm", "Watch", "Trash", "Dead"]).map((stage) => {
+                    const isExcluded = (settings.excluded_stages || []).includes(stage)
+                    return (
+                      <button
+                        key={stage}
+                        type="button"
+                        onClick={() => toggleExcludedStage(stage)}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                          isExcluded
+                            ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700'
+                            : 'bg-muted/50 text-muted-foreground border-border hover:bg-muted'
+                        }`}
+                      >
+                        {isExcluded ? <X className="inline h-3 w-3 mr-1" /> : null}
+                        {stage}
+                      </button>
+                    )
+                  })}
+                </div>
+                {isLoadingStages && (
+                  <p className="text-xs text-muted-foreground">Loading stages from FUB...</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Click a stage to toggle it. Red stages are excluded from AI outreach. Stages are pulled from your FUB account.
+                </p>
               </CardContent>
             </Card>
 

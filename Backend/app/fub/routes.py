@@ -1211,6 +1211,27 @@ def toggle_ai_agent():
         except Exception:
             pass
 
+        # Check stage eligibility when ENABLING (not when disabling)
+        if enabled:
+            try:
+                from app.database.fub_api_client import FUBApiClient
+                fub_client = FUBApiClient()
+                person_data = fub_client.get_person(str(fub_person_id))
+                stage_name = (person_data.get('stageName', '') or person_data.get('stage', '')) if person_data else ''
+                if stage_name:
+                    settings_result = supabase.table('ai_agent_settings').select('excluded_stages').limit(1).execute()
+                    excluded_stages = settings_result.data[0].get('excluded_stages', []) if settings_result.data else []
+                    from app.ai_agent.compliance_checker import ComplianceChecker
+                    stage_checker = ComplianceChecker()
+                    is_eligible, _, reason = stage_checker.check_stage_eligibility(stage_name, excluded_stages)
+                    if not is_eligible:
+                        return jsonify({
+                            "success": False,
+                            "message": f"Cannot enable AI: lead stage '{stage_name}' is excluded ({reason})"
+                        }), 400
+            except Exception as stage_err:
+                logger.warning(f"Stage check failed for toggle: {stage_err}")
+
         # Use LeadAISettingsService to properly enable/disable AI for webhooks
         from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
         lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
@@ -2694,6 +2715,49 @@ def audit_sent_messages():
 
     except Exception as e:
         logger.error(f"Audit error: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@fub_bp.route('/ai/fub-stages', methods=['GET'])
+def get_fub_stages():
+    """Fetch all FUB stages for the settings dropdown."""
+    try:
+        from app.database.fub_api_client import FUBApiClient
+        fub_client = FUBApiClient()
+        stages = fub_client.get_stages()
+        stage_names = [s.get('name', '') for s in stages if s.get('name')]
+        return jsonify({"success": True, "stages": stage_names})
+    except Exception as e:
+        logger.error(f"Failed to fetch FUB stages: {e}")
+        return jsonify({"success": False, "message": str(e), "stages": []}), 500
+
+
+@fub_bp.route('/ai/excluded-stages', methods=['GET', 'POST'])
+def manage_excluded_stages():
+    """Get or update excluded stages setting."""
+    from app.database.supabase_client import SupabaseClientSingleton
+
+    try:
+        supabase = SupabaseClientSingleton.get_instance()
+
+        if request.method == 'GET':
+            result = supabase.table('ai_agent_settings').select('excluded_stages').limit(1).execute()
+            excluded = result.data[0].get('excluded_stages', []) if result.data else []
+            return jsonify({"success": True, "excluded_stages": excluded})
+
+        # POST - update
+        data = request.get_json()
+        excluded_stages = data.get('excluded_stages', [])
+        result = supabase.table('ai_agent_settings').update({
+            'excluded_stages': excluded_stages
+        }).limit(1).execute()
+        return jsonify({
+            "success": True,
+            "excluded_stages": result.data[0].get('excluded_stages', []) if result.data else excluded_stages
+        })
+
+    except Exception as e:
+        logger.error(f"Excluded stages error: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 

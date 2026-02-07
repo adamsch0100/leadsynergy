@@ -322,6 +322,9 @@ def update_settings():
         # Phone number filter
         if 'ai_respond_to_phone_numbers' in data:
             current_settings.ai_respond_to_phone_numbers = data['ai_respond_to_phone_numbers'] if isinstance(data['ai_respond_to_phone_numbers'], list) else []
+        # Excluded stages
+        if 'excluded_stages' in data:
+            current_settings.excluded_stages = data['excluded_stages'] if isinstance(data['excluded_stages'], list) else []
 
         # Save settings
         success = run_async(service.save_settings(current_settings, user_id, org_id))

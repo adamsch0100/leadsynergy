@@ -196,6 +196,11 @@ class AgentSettings:
     use_templates_as_fallback: bool = True
     enable_a_b_testing: bool = True
 
+    # Stage exclusion
+    excluded_stages: list = field(default_factory=lambda: [
+        "Sphere", "Past Client", "Active Client", "Trash", "Dead"
+    ])
+
 
 class AIAgentService:
     """
@@ -299,6 +304,7 @@ class AIAgentService:
             self.settings.timezone = settings.timezone
             self.settings.auto_handoff_score_threshold = settings.auto_handoff_score
             self.settings.max_ai_messages_per_lead = settings.max_ai_messages_per_lead
+            self.settings.excluded_stages = settings.excluded_stages or []
 
             # Update response generator with loaded settings
             self.response_generator.personality = settings.personality_tone
@@ -408,12 +414,12 @@ class AIAgentService:
                 channel=channel,
             )
 
-            # Step 0: Stage Eligibility Check (smart pattern matching)
+            # Step 0: Stage Eligibility Check (smart pattern matching + user-excluded stages)
             # This blocks AI contact for stages like "Closed", "Sold", "Sphere", "Trash"
             # and flags handoff stages like "Under Contract", "Showing", "Negotiating"
             if lead_profile.stage_name:
                 is_eligible, stage_status, stage_reason = self.compliance_checker.check_stage_eligibility(
-                    lead_profile.stage_name
+                    lead_profile.stage_name, self.settings.excluded_stages
                 )
 
                 if not is_eligible:
@@ -522,6 +528,25 @@ class AIAgentService:
                 # Update conversation state to handed_off
                 if conversation_context:
                     conversation_context.state = ConversationState.HANDED_OFF
+
+                # Auto-disable AI + cancel pending follow-ups (the follow-up agent's job is done)
+                try:
+                    from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+                    lead_ai_svc = LeadAISettingsServiceSingleton.get_instance(self.supabase)
+                    org_id = getattr(self.settings, 'organization_id', None) or (
+                        conversation_context.organization_id if conversation_context else 'default'
+                    )
+                    await lead_ai_svc.disable_ai_for_lead(
+                        fub_person_id=str(fub_person_id),
+                        organization_id=org_id,
+                    )
+                    # Cancel pending follow-ups
+                    self.supabase.table('ai_scheduled_followups').update({
+                        'status': 'cancelled',
+                    }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
+                    logger.info(f"Auto-disabled AI and cancelled follow-ups for lead {fub_person_id} (handoff)")
+                except Exception as disable_err:
+                    logger.warning(f"Failed to auto-disable AI on handoff for {fub_person_id}: {disable_err}")
 
                 return response
 
@@ -1528,6 +1553,25 @@ ACTION REQUIRED: Respond to this lead promptly!
                 conversation_state=response.conversation_state,
             )
 
+        # Auto-disable AI + cancel follow-ups when handoff fires
+        if response.should_handoff and fub_person_id:
+            try:
+                from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+                lead_ai_svc = LeadAISettingsServiceSingleton.get_instance(self.supabase)
+                org_id = getattr(self.settings, 'organization_id', None) or (
+                    conversation_context.organization_id if conversation_context else 'default'
+                )
+                await lead_ai_svc.disable_ai_for_lead(
+                    fub_person_id=str(fub_person_id),
+                    organization_id=org_id,
+                )
+                self.supabase.table('ai_scheduled_followups').update({
+                    'status': 'cancelled',
+                }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
+                logger.info(f"Auto-disabled AI and cancelled follow-ups for lead {fub_person_id} (handoff from _finalize_response)")
+            except Exception as disable_err:
+                logger.warning(f"Failed to auto-disable AI on handoff for {fub_person_id}: {disable_err}")
+
         return response
 
     async def _sync_to_crm(
@@ -1649,10 +1693,10 @@ ACTION REQUIRED: Respond to this lead promptly!
                 "reason": "AI agent is disabled",
             }
 
-        # Step 0: Stage Eligibility Check
+        # Step 0: Stage Eligibility Check (includes user-excluded stages)
         if lead_profile.stage_name:
             is_eligible, stage_status, stage_reason = self.compliance_checker.check_stage_eligibility(
-                lead_profile.stage_name
+                lead_profile.stage_name, self.settings.excluded_stages
             )
 
             if not is_eligible:
