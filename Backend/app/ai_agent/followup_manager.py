@@ -1725,23 +1725,23 @@ class FollowUpManager:
                 message_subject = ai_result.get("subject", "Following up")
                 ai_used = ai_result.get("ai_used", False)
 
-                # If AI failed, fall back to template
+                # If AI failed, DO NOT send. A bad message is worse than no message.
                 if not ai_used or "[AI" in message_content:
-                    logger.warning(f"AI generation failed, falling back to template")
-                    import random
-                    templates = self.MESSAGE_TEMPLATES.get(message_type, [])
-                    message_content = random.choice(templates) if templates else "Following up - any questions?"
-                    ai_used = False
+                    logger.error(f"AI generation failed for follow-up {followup_id} ({message_type.value}). NOT sending - keeping pending for retry.")
+                    return {
+                        "success": False,
+                        "error": f"AI generation failed for {message_type.value} - refusing to send without AI context",
+                        "delivery_error": "ai_generation_failed",
+                    }
 
             else:
-                # ================================================================
-                # TEMPLATE: Use random template for this message type
-                # ================================================================
-                import random
-                templates = self.MESSAGE_TEMPLATES.get(message_type, [])
-                message_content = random.choice(templates) if templates else "Following up - any questions?"
-                message_subject = "Following up"
-                ai_used = False
+                # AI not available for this step type - skip, don't send garbage
+                logger.error(f"AI not configured for {message_type.value} follow-up {followup_id}. NOT sending.")
+                return {
+                    "success": False,
+                    "error": f"AI not available for {message_type.value} - refusing to send without AI",
+                    "delivery_error": "ai_not_available",
+                }
 
             # ================================================================
             # TEMPLATE VARIABLE SUBSTITUTION
@@ -1857,6 +1857,7 @@ class FollowUpManager:
                 is_transient = any(kw in error_msg.lower() for kw in [
                     "cooldown", "suspicious login", "login failed", "verification link",
                     "not verified", "textarea not cleared", "textarea empty",
+                    "ai generation failed", "ai not available", "unfilled_template",
                 ])
                 if is_transient:
                     logger.warning(f"Follow-up {followup_id} login issue (keeping pending): {error_msg[:100]}")
