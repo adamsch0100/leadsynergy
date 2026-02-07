@@ -2631,6 +2631,72 @@ def reset_failed_followups():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+@fub_bp.route('/ai/audit-sent', methods=['GET'])
+def audit_sent_messages():
+    """Get all follow-ups that were actually executed (sent via Playwright) with lead names."""
+    from app.database.supabase_client import SupabaseClientSingleton
+    from app.database.fub_api_client import FUBApiClient
+
+    try:
+        supabase = SupabaseClientSingleton.get_instance()
+
+        # Get all sent follow-ups that have executed_at (actually processed by the system)
+        sent = supabase.table('ai_scheduled_followups').select(
+            'id, fub_person_id, message_type, channel, status, executed_at, scheduled_at'
+        ).eq('status', 'sent').not_.is_('executed_at', 'null').order(
+            'executed_at', desc=True
+        ).execute()
+
+        # Get unique person IDs and look up names via FUB
+        sent_items = sent.data or []
+        person_ids = list(set(str(s['fub_person_id']) for s in sent_items))
+
+        # Look up names for each person
+        fub_client = FUBApiClient()
+        names = {}
+        for pid in person_ids:
+            try:
+                import requests as req_lib
+                resp = req_lib.get(
+                    f"https://api.followupboss.com/v1/people/{pid}",
+                    headers=fub_client.headers, timeout=10
+                )
+                if resp.status_code == 200:
+                    p = resp.json()
+                    names[pid] = f"{p.get('firstName', '?')} {p.get('lastName', '?')}"
+                else:
+                    names[pid] = f"(person {pid})"
+            except Exception:
+                names[pid] = f"(person {pid})"
+
+        # Group by person
+        by_person = {}
+        for s in sent_items:
+            pid = str(s['fub_person_id'])
+            if pid not in by_person:
+                by_person[pid] = {
+                    "name": names.get(pid, f"person {pid}"),
+                    "person_id": pid,
+                    "messages": [],
+                }
+            by_person[pid]["messages"].append({
+                "type": s['message_type'],
+                "channel": s['channel'],
+                "executed_at": s['executed_at'],
+            })
+
+        return jsonify({
+            "success": True,
+            "total_sent": len(sent_items),
+            "leads_affected": len(person_ids),
+            "by_lead": list(by_person.values()),
+        })
+
+    except Exception as e:
+        logger.error(f"Audit error: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 @fub_bp.route('/ai/cancel-lead/<int:person_id>', methods=['POST'])
 def cancel_lead_sequences(person_id):
     """Cancel ALL pending follow-ups for a specific lead."""
