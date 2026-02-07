@@ -785,7 +785,7 @@ class FUBBrowserSession:
                 await compose_retry.click()
                 await compose_retry.press("Control+a")
                 await self._human_delay(0.2, 0.3)
-                await compose_retry.press_sequentially(message[:50], delay=10)
+                await compose_retry.type(message[:50], delay=10)
                 # Fill the rest fast
                 if len(message) > 50:
                     current_val = await compose_retry.evaluate("el => el.value")
