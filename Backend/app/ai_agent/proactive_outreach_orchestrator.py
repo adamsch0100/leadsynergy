@@ -447,12 +447,10 @@ class ProactiveOutreachOrchestrator:
         if email_enabled and email and outreach.email_body:
             try:
                 if compliance_result["send_immediately"]:
-                    # Queue email for 10 min after SMS so they don't arrive simultaneously
-                    email_time = datetime.now() + timedelta(minutes=10)
-                    logger.info(f"📧 Queuing welcome email for 10 min after SMS")
+                    email_time = datetime.now()
+                    logger.info(f"📧 Queuing welcome email immediately with SMS")
                 else:
-                    # Queue for same offset as SMS + 10 min
-                    email_time = compliance_result["queue_for"] + timedelta(minutes=10)
+                    email_time = compliance_result["queue_for"]
                     logger.info(f"📧 Queuing welcome email for {email_time}")
 
                 await self._queue_message(
