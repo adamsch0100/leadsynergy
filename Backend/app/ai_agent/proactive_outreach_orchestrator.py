@@ -83,6 +83,22 @@ class ProactiveOutreachOrchestrator:
         try:
             logger.info(f"🚀 Starting proactive outreach for lead {fub_person_id} (trigger: {trigger_reason}, type: {enable_type})")
 
+            # Step 0: Check if outreach was already sent (prevent duplicate texts)
+            try:
+                conv_check = self.supabase.table('ai_conversations').select(
+                    'proactive_outreach_metadata'
+                ).eq('fub_person_id', fub_person_id).single().execute()
+
+                if conv_check.data:
+                    metadata = conv_check.data.get('proactive_outreach_metadata') or {}
+                    if metadata.get('outreach_sent'):
+                        logger.info(f"⏭️ Lead {fub_person_id} already received proactive outreach on {metadata.get('sent_at', 'unknown')} - skipping")
+                        result["errors"].append("Proactive outreach already sent to this lead")
+                        return result
+            except Exception as dedup_err:
+                # If no conversation exists yet, that's fine - proceed
+                logger.debug(f"Outreach dedup check: {dedup_err}")
+
             # Step 1: Fetch & validate lead data
             person_data = await self._fetch_and_validate_lead(fub_person_id)
             if not person_data:
