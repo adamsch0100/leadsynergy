@@ -61,12 +61,13 @@ def send_scheduled_message(
         supabase = SupabaseClientSingleton.get_instance()
         compliance = ComplianceChecker(supabase)
 
-        # Get message record to retrieve organization_id and user_id
-        msg_record = supabase.table("scheduled_messages").select("organization_id, user_id").eq(
+        # Get message record to retrieve organization_id, user_id, and subject
+        msg_record = supabase.table("scheduled_messages").select("organization_id, user_id, subject").eq(
             "id", message_id
         ).single().execute()
         organization_id = msg_record.data.get("organization_id")
         user_id = msg_record.data.get("user_id")
+        email_subject = msg_record.data.get("subject")
 
         # Get lead info from database (not FUB API)
         # Use execute() without .single() to avoid exception on no rows
@@ -182,8 +183,11 @@ def send_scheduled_message(
             try:
                 result = asyncio.run(send_email_with_auto_credentials(
                     person_id=fub_person_id,
-                    subject="From your real estate agent",
+                    subject=email_subject or "From your real estate agent",
                     body=final_message,
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    supabase_client=supabase,
                 ))
             except Exception as e:
                 logger.error(f"Browser automation email failed: {e}")

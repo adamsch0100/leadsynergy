@@ -1287,6 +1287,19 @@ MIGRATIONS = [
             NOTIFY pgrst, 'reload schema';
             """,
         ]
+    },
+    {
+        'version': '20250209_add_scheduled_messages_subject',
+        'description': 'Add subject column to scheduled_messages for email sending',
+        'sql_statements': [
+            """
+            ALTER TABLE scheduled_messages
+                ADD COLUMN IF NOT EXISTS subject TEXT;
+            """,
+            """
+            NOTIFY pgrst, 'reload schema';
+            """,
+        ]
     }
 ]
 

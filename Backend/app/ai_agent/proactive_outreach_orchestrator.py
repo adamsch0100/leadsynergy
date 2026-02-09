@@ -441,46 +441,34 @@ class ProactiveOutreachOrchestrator:
             logger.error(f"Error sending/queuing SMS: {e}")
             result["errors"].append(f"SMS error: {str(e)}")
 
-        # Send or queue Email (if email service available)
-        if self.email_service:
-            email = person_data.get('emails', [{}])[0].get('value', '')
-            if email:
-                try:
-                    if compliance_result["send_immediately"]:
-                        # Add 10-minute delay after SMS
-                        email_time = datetime.now() + timedelta(minutes=10)
-                        logger.info(f"📧 Queuing email for 10 min after SMS")
+        # Send or queue welcome email via Playwright (with delay after SMS)
+        email_enabled = settings.get('sequence_email_enabled', True)
+        email = person_data.get('emails', [{}])[0].get('value', '') if person_data.get('emails') else ''
+        if email_enabled and email and outreach.email_body:
+            try:
+                if compliance_result["send_immediately"]:
+                    # Queue email for 10 min after SMS so they don't arrive simultaneously
+                    email_time = datetime.now() + timedelta(minutes=10)
+                    logger.info(f"📧 Queuing welcome email for 10 min after SMS")
+                else:
+                    # Queue for same offset as SMS + 10 min
+                    email_time = compliance_result["queue_for"] + timedelta(minutes=10)
+                    logger.info(f"📧 Queuing welcome email for {email_time}")
 
-                        await self._queue_message(
-                            fub_person_id=fub_person_id,
-                            message_content=outreach.email_body,
-                            channel="email",
-                            scheduled_for=email_time,
-                            subject=outreach.email_subject,
-                            organization_id=settings.get('organization_id'),
-                            user_id=settings.get('user_id'),
-                        )
+                await self._queue_message(
+                    fub_person_id=fub_person_id,
+                    message_content=outreach.email_body,
+                    channel="email",
+                    scheduled_for=email_time,
+                    subject=outreach.email_subject,
+                    organization_id=settings.get('organization_id'),
+                    user_id=settings.get('user_id'),
+                )
+                result["actions"].append("email_queued")
 
-                        result["actions"].append("email_queued")
-                    else:
-                        # Queue for same time as SMS + 10 min
-                        email_time = compliance_result["queue_for"] + timedelta(minutes=10)
-
-                        await self._queue_message(
-                            fub_person_id=fub_person_id,
-                            message_content=outreach.email_body,
-                            channel="email",
-                            scheduled_for=email_time,
-                            subject=outreach.email_subject,
-                            organization_id=settings.get('organization_id'),
-                            user_id=settings.get('user_id'),
-                        )
-
-                        result["actions"].append("email_queued")
-
-                except Exception as e:
-                    logger.error(f"Error queuing email: {e}")
-                    result["errors"].append(f"Email error: {str(e)}")
+            except Exception as e:
+                logger.error(f"Error queuing email: {e}")
+                result["errors"].append(f"Email error: {str(e)}")
 
         return result
 
