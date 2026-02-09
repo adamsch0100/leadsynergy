@@ -267,38 +267,10 @@ class ProactiveOutreachOrchestrator:
             return None
 
     def _build_lead_context(self, person_data: Dict, settings: Dict) -> 'LeadContext':
-        """Build LeadContext from FUB person data."""
+        """Build LeadContext from FUB person data using full extraction logic."""
         from app.ai_agent.initial_outreach_generator import LeadContext
 
-        # Extract basic info
-        first_name = person_data.get('firstName', person_data.get('name', 'there'))
-        last_name = person_data.get('lastName', '')
-        email = person_data.get('emails', [{}])[0].get('value', '') if person_data.get('emails') else ''
-        phone = person_data.get('phones', [{}])[0].get('value', '') if person_data.get('phones') else ''
-
-        # Extract source
-        source = person_data.get('source', '')
-
-        # Extract location
-        city = person_data.get('city', '')
-        state = person_data.get('state', '')
-        zip_code = person_data.get('zip', '')
-
-        # Extract timeline, financing, etc. from custom fields or events
-        # (Simplified - you'd parse these from FUB events/custom fields in production)
-
-        return LeadContext(
-            first_name=first_name,
-            last_name=last_name,
-            email=email,
-            phone=phone,
-            fub_person_id=person_data.get('id', 0),
-            source=source,
-            city=city,
-            state=state,
-            zip_code=zip_code,
-            tags=person_data.get('tags', []),
-        )
+        return LeadContext.from_fub_data(person_data)
 
     async def _check_compliance_and_timing(
         self,
@@ -437,12 +409,9 @@ class ProactiveOutreachOrchestrator:
                         self.supabase.table('ai_message_log').insert({
                             'id': str(uuid4()),
                             'fub_person_id': fub_person_id,
-                            'organization_id': settings.get('organization_id'),
                             'direction': 'outbound',
                             'channel': 'sms',
-                            'content': outreach.sms_message,
-                            'sent_at': datetime.now(timezone.utc).isoformat(),
-                            'message_type': 'proactive_initial_outreach',
+                            'message_content': outreach.sms_message,
                         }).execute()
                         logger.info(f"✅ Message logged to ai_message_log")
                     except Exception as log_error:
