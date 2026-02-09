@@ -441,31 +441,62 @@ class ProactiveOutreachOrchestrator:
             logger.error(f"Error sending/queuing SMS: {e}")
             result["errors"].append(f"SMS error: {str(e)}")
 
-        # Send or queue welcome email via Playwright (with delay after SMS)
+        # Send welcome email via Playwright (immediately or queued for off-hours)
         email_enabled = settings.get('sequence_email_enabled', True)
         email = person_data.get('emails', [{}])[0].get('value', '') if person_data.get('emails') else ''
         if email_enabled and email and outreach.email_body:
             try:
                 if compliance_result["send_immediately"]:
-                    email_time = datetime.now()
-                    logger.info(f"📧 Queuing welcome email immediately with SMS")
-                else:
-                    email_time = compliance_result["queue_for"]
-                    logger.info(f"📧 Queuing welcome email for {email_time}")
+                    # Send immediately via Playwright - same as SMS
+                    logger.info(f"📧 Sending welcome email immediately to lead {fub_person_id}")
 
-                await self._queue_message(
-                    fub_person_id=fub_person_id,
-                    message_content=outreach.email_body,
-                    channel="email",
-                    scheduled_for=email_time,
-                    subject=outreach.email_subject,
-                    organization_id=settings.get('organization_id'),
-                    user_id=settings.get('user_id'),
-                )
-                result["actions"].append("email_queued")
+                    from app.messaging.playwright_sms_service import send_email_with_auto_credentials
+
+                    email_result = await send_email_with_auto_credentials(
+                        person_id=fub_person_id,
+                        subject=outreach.email_subject or "Welcome from your real estate team",
+                        body=outreach.email_body,
+                        user_id=settings.get('user_id'),
+                        organization_id=settings.get('organization_id'),
+                        supabase_client=self.supabase,
+                    )
+
+                    if email_result.get('success'):
+                        result["actions"].append("email_sent")
+                        logger.info(f"✅ Welcome email sent successfully via Playwright")
+
+                        # Log email to ai_message_log
+                        try:
+                            self.supabase.table('ai_message_log').insert({
+                                'id': str(uuid4()),
+                                'fub_person_id': fub_person_id,
+                                'direction': 'outbound',
+                                'channel': 'email',
+                                'message_content': outreach.email_body,
+                            }).execute()
+                        except Exception as log_error:
+                            logger.error(f"Failed to log email to ai_message_log: {log_error}")
+                    else:
+                        result["errors"].append("Email send failed")
+                        logger.error(f"❌ Email send failed: {email_result.get('error', 'Unknown error')}")
+                else:
+                    # Off-hours: queue for later
+                    queue_time = compliance_result["queue_for"]
+                    logger.info(f"📧 Queuing welcome email for {queue_time}")
+
+                    await self._queue_message(
+                        fub_person_id=fub_person_id,
+                        message_content=outreach.email_body,
+                        channel="email",
+                        scheduled_for=queue_time,
+                        subject=outreach.email_subject,
+                        organization_id=settings.get('organization_id'),
+                        user_id=settings.get('user_id'),
+                    )
+                    result["actions"].append("email_queued")
 
             except Exception as e:
-                logger.error(f"Error queuing email: {e}")
+                logger.error(f"Error sending/queuing email: {e}")
                 result["errors"].append(f"Email error: {str(e)}")
 
         return result
