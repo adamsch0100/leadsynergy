@@ -1690,6 +1690,26 @@ class FollowUpManager:
             except Exception as stage_err:
                 logger.warning(f"Stage re-check failed for {fub_person_id}, proceeding: {stage_err}")
 
+            # Safety net: Check if lead has been actively conversing
+            # If the lead sent an inbound message recently, the reactive AI is handling
+            # the conversation and scheduled follow-ups should NOT fire
+            try:
+                from datetime import timezone
+                recent_cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+                recent_msgs = self.supabase.table('ai_message_log').select('id,direction').eq(
+                    'fub_person_id', fub_person_id
+                ).gte('created_at', recent_cutoff).eq('direction', 'inbound').limit(1).execute()
+
+                if recent_msgs.data:
+                    # Lead has been texting recently - cancel all pending follow-ups
+                    self.supabase.table('ai_scheduled_followups').update({
+                        'status': 'cancelled',
+                    }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
+                    logger.info(f"Lead {fub_person_id} has active conversation (inbound msg within 4h) - cancelled all follow-ups")
+                    return {"success": False, "error": "Active conversation detected - follow-ups cancelled", "delivery_error": "active_conversation"}
+            except Exception as conv_err:
+                logger.warning(f"Active conversation check failed for {fub_person_id}: {conv_err}")
+
             # Calculate which day of the sequence this is
             # Based on sequence step, approximate the day
             day_mapping = {

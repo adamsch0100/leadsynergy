@@ -570,32 +570,28 @@ def cancel_lead_sequences(self, fub_person_id: int, reason: str = None):
     try:
         result = supabase.table("scheduled_messages").update({
             "status": "cancelled",
-            "cancelled_reason": reason or "lead_responded",
-            "cancelled_at": datetime.utcnow().isoformat(),
         }).eq("fub_person_id", fub_person_id).eq("status", "pending").execute()
 
         count = len(result.data) if result.data else 0
         total_cancelled += count
         if count > 0:
-            logger.info(f"[CANCEL] Cancelled {count} scheduled_messages for person {fub_person_id}")
+            logger.info(f"[CANCEL] Cancelled {count} scheduled_messages for person {fub_person_id} (reason: {reason})")
     except Exception as e:
-        logger.warning(f"[CANCEL] Error cancelling scheduled_messages: {e}")
+        logger.error(f"[CANCEL] FAILED to cancel scheduled_messages for {fub_person_id}: {e}")
 
-    # Also cancel from ai_scheduled_followups table if it exists
+    # Also cancel from ai_scheduled_followups table
     try:
         result = supabase.table("ai_scheduled_followups").update({
             "status": "cancelled",
-            "cancelled_reason": reason or "lead_responded",
             "cancelled_at": datetime.utcnow().isoformat(),
         }).eq("fub_person_id", fub_person_id).eq("status", "pending").execute()
 
         count = len(result.data) if result.data else 0
         total_cancelled += count
         if count > 0:
-            logger.info(f"[CANCEL] Cancelled {count} ai_scheduled_followups for person {fub_person_id}")
+            logger.info(f"[CANCEL] Cancelled {count} ai_scheduled_followups for person {fub_person_id} (reason: {reason})")
     except Exception as e:
-        # Table might not exist, that's OK
-        logger.debug(f"[CANCEL] ai_scheduled_followups table: {e}")
+        logger.error(f"[CANCEL] FAILED to cancel ai_scheduled_followups for {fub_person_id}: {e}")
 
     logger.info(f"[CANCEL] Total cancelled: {total_cancelled} pending follow-ups for person {fub_person_id}")
 
