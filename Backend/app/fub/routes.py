@@ -1232,6 +1232,17 @@ def toggle_ai_agent():
             except Exception as stage_err:
                 logger.warning(f"Stage check failed for toggle: {stage_err}")
 
+        # Ensure we have a valid organization_id (UUID, not "default")
+        if not organization_id:
+            try:
+                settings_result = supabase.table('ai_agent_settings').select('organization_id, user_id').limit(1).execute()
+                if settings_result.data:
+                    organization_id = settings_result.data[0].get('organization_id')
+                    if not user_id:
+                        user_id = settings_result.data[0].get('user_id')
+            except Exception:
+                pass
+
         # Use LeadAISettingsService to properly enable/disable AI for webhooks
         from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
         lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
@@ -1243,7 +1254,7 @@ def toggle_ai_agent():
                 success = loop.run_until_complete(
                     lead_ai_service.enable_ai_for_lead(
                         fub_person_id=str(fub_person_id),
-                        organization_id=organization_id or "default",
+                        organization_id=organization_id or "8b8c289e-bccd-481b-98ca-2389a4b6648e",
                         user_id=user_id,
                         reason="embedded_app_toggle",
                         enabled_by=user_id or "embedded_app",
@@ -1253,7 +1264,7 @@ def toggle_ai_agent():
                 success = loop.run_until_complete(
                     lead_ai_service.disable_ai_for_lead(
                         fub_person_id=str(fub_person_id),
-                        organization_id=organization_id or "default",
+                        organization_id=organization_id or "8b8c289e-bccd-481b-98ca-2389a4b6648e",
                     )
                 )
         finally:
