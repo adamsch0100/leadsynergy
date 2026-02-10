@@ -976,18 +976,24 @@ class FUBBrowserSession:
 
         # ---- Step 3: Fill the email body ----
         body_selectors = [
+            # FUB uses Draft.js rich text editor for email compose
+            '.DraftEditor-root [contenteditable="true"]',
+            '.DraftEditor-editorContainer [contenteditable="true"]',
+            '[class*="DraftEditor"] [contenteditable="true"]',
+            # Generic contenteditable in email compose area
+            '[class*="compose-email"] [contenteditable="true"]',
+            '[class*="ComposeEmail"] [contenteditable="true"]',
+            '[contenteditable="true"][role="textbox"]',
+            '[contenteditable="true"][class*="email"]',
+            '[class*="email-compose"] [contenteditable="true"]',
+            # Broader contenteditable fallback
+            '[contenteditable="true"]',
+            # Traditional textarea fallbacks
             '[class*="email-compose"] textarea',
             '[class*="email"] textarea',
             'textarea[placeholder*="Write your message"]',
             'textarea[placeholder*="Write your email"]',
             'textarea[placeholder*="Message"]',
-            'textarea[placeholder*="message"]',
-            # FUB may use a contenteditable div for rich text
-            '[contenteditable="true"][class*="email"]',
-            '[contenteditable="true"][role="textbox"]',
-            '[class*="email-compose"] [contenteditable="true"]',
-            # Fallback: any textarea that's NOT the SMS one
-            'textarea:not([placeholder*="text"])',
             'textarea',
         ]
 
@@ -995,12 +1001,14 @@ class FUBBrowserSession:
         if not body_field:
             # Enumerate available form elements for debugging
             try:
-                elements = await self.page.query_selector_all('textarea, [contenteditable="true"], input')
-                for i, el in enumerate(elements[:10]):
+                elements = await self.page.query_selector_all('textarea, [contenteditable="true"], input, .DraftEditor-root, [class*="DraftEditor"], [class*="compose"]')
+                for i, el in enumerate(elements[:15]):
                     tag = await el.evaluate('el => el.tagName')
                     placeholder = await el.get_attribute('placeholder') or ''
                     classes = await el.get_attribute('class') or ''
-                    logger.info(f"[EMAIL {person_id}] Form element {i}: <{tag}> placeholder='{placeholder}' class='{classes[:60]}'")
+                    editable = await el.get_attribute('contenteditable') or ''
+                    role = await el.get_attribute('role') or ''
+                    logger.info(f"[EMAIL {person_id}] Form element {i+1}: <{tag}> placeholder='{placeholder}' class='{classes[:80]}' contenteditable='{editable}' role='{role}'")
             except Exception:
                 pass
 
