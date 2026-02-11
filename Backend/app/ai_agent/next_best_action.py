@@ -481,7 +481,19 @@ class NextBestActionEngine:
                 due_before=due_before,
             )
 
+            # Only allow ONE followup per lead per scan cycle to prevent
+            # sending multiple messages within the same 15-min window
+            seen_leads = set()
+
             for followup in pending:
+                if followup.fub_person_id in seen_leads:
+                    logger.debug(
+                        f"Skipping extra followup for lead {followup.fub_person_id} "
+                        f"(already queued one this scan cycle)"
+                    )
+                    continue
+                seen_leads.add(followup.fub_person_id)
+
                 # Determine action type based on channel
                 if followup.channel == "sms":
                     action_type = ActionType.FOLLOWUP_SMS
@@ -719,12 +731,40 @@ class NextBestActionEngine:
 
         # If this is a scheduled follow-up, process it
         if context.get("followup_id"):
+            # Fetch previous outbound messages so AI knows what was already said
+            previous_messages = None
+            try:
+                prev_result = self.supabase.table('ai_message_log').select(
+                    'message_content, channel, created_at'
+                ).eq(
+                    'fub_person_id', action.fub_person_id
+                ).eq(
+                    'direction', 'outbound'
+                ).order('created_at', desc=True).limit(5).execute()
+
+                if prev_result.data:
+                    # Reverse so oldest first, and format for the AI prompt
+                    previous_messages = []
+                    for msg in reversed(prev_result.data):
+                        content = msg.get('message_content', '')
+                        # Truncate long emails to keep prompt reasonable
+                        if len(content) > 200:
+                            content = content[:200] + '...'
+                        previous_messages.append({
+                            'content': content,
+                            'channel': msg.get('channel', 'sms'),
+                            'day': '?',  # We don't track day in message log
+                        })
+            except Exception as e:
+                logger.warning(f"Could not fetch previous messages for {action.fub_person_id}: {e}")
+
             return await self.followup_manager.process_scheduled_followup(
                 followup_id=context["followup_id"],
                 agent_service=agent_service,
                 agent_name=agent_name,
                 agent_phone=agent_phone,
                 brokerage_name=brokerage_name,
+                previous_messages=previous_messages,
             )
 
         # Otherwise, schedule a new sequence

@@ -786,6 +786,44 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                     logger.error(f"Failed to queue message for person {person_id}: {queue_result.get('error')}")
                 return  # Exit after queueing
 
+            # ============================================
+            # HUMAN-LIKE RESPONSE DELAY
+            # Instant replies feel robotic. Real agents need time to read, think, and type.
+            # - First reply to a new lead: 5-15 seconds (speed-to-lead matters)
+            # - Ongoing conversation: 15-45 seconds base + typing simulation
+            # - Longer messages = longer "typing" time
+            # ============================================
+            import random as _random
+            response_text = agent_response.response_text
+            msg_length = len(response_text)
+
+            # Check if this is an early reply (first couple messages) or ongoing
+            outbound_count = context.message_count if context else 0
+
+            if outbound_count <= 1:
+                # First reply - speed to lead matters, but don't be instant
+                think_delay = _random.uniform(8, 20)
+            elif outbound_count <= 3:
+                # Early conversation - still responsive but natural
+                think_delay = _random.uniform(15, 40)
+            else:
+                # Ongoing conversation - more relaxed, human pacing
+                think_delay = _random.uniform(25, 55)
+
+            # Add typing simulation: ~4 chars/sec like a real person on a phone
+            typing_delay = msg_length / _random.uniform(3.5, 5.0)
+
+            total_delay = think_delay + typing_delay
+            # Cap at 90 seconds - don't make them wait too long
+            total_delay = min(total_delay, 90)
+
+            logger.info(
+                f"Human-like delay for person {person_id}: "
+                f"{think_delay:.0f}s think + {typing_delay:.0f}s typing = {total_delay:.0f}s total "
+                f"(msg #{outbound_count + 1}, {msg_length} chars)"
+            )
+            await asyncio.sleep(total_delay)
+
             # Send response via Playwright browser automation
             # We use Playwright instead of FUB Native Texting API because we don't have
             # System-level API credentials (which would be required for the API endpoint)

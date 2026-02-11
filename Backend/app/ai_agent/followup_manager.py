@@ -366,18 +366,18 @@ class FollowUpManager:
             message_type=MessageType.RVM_INTRO,
             skip_if_disabled="voice_enabled",  # Skip if voice OFF
         ),
-        # Step 4: Day 0, 30 min - Value SMS + appointment CTA
+        # Step 4: Day 0, 3 hours - Value SMS + appointment CTA
         FollowUpStep(
             delay_days=0,
-            delay_minutes=30,
+            delay_minutes=180,
             channel="sms",
             message_type=MessageType.VALUE_WITH_CTA,
             skip_if_disabled=None,  # Always send
         ),
-        # Step 5: Day 0, 2 hours - Call check-in (if voice enabled)
+        # Step 5: Day 0, 6 hours - Call check-in (if voice enabled)
         FollowUpStep(
             delay_days=0,
-            delay_minutes=120,
+            delay_minutes=360,
             channel="call",
             message_type=MessageType.CALL_CHECKIN,
             skip_if_disabled="voice_enabled",  # Skip if voice OFF
@@ -415,7 +415,6 @@ class FollowUpManager:
             skip_if_disabled=None,
         ),
         # Step 9b: Day 2, PM - Afternoon appointment CTA SMS
-        # Closes the 24h gap between Day 2 and Day 3
         FollowUpStep(
             delay_days=2,
             delay_minutes=420,  # 7 hours after morning = afternoon ~4 PM
@@ -1710,17 +1709,44 @@ class FollowUpManager:
             except Exception as conv_err:
                 logger.warning(f"Active conversation check failed for {fub_person_id}: {conv_err}")
 
+            # Safety net: Per-lead outbound cooldown
+            # Prevents sending multiple follow-ups to the same lead within 2 hours
+            # This catches clustering caused by engagement-window nudging and retry cascades
+            MINIMUM_GAP_HOURS = 3
+            try:
+                from datetime import timezone as tz_mod
+                gap_cutoff = (datetime.now(tz_mod.utc) - timedelta(hours=MINIMUM_GAP_HOURS)).isoformat()
+                recent_outbound = self.supabase.table('ai_message_log').select('id,created_at').eq(
+                    'fub_person_id', fub_person_id
+                ).gte('created_at', gap_cutoff).eq('direction', 'outbound').order(
+                    'created_at', desc=True
+                ).limit(1).execute()
+
+                if recent_outbound.data:
+                    last_sent = recent_outbound.data[0].get('created_at', '')
+                    logger.info(
+                        f"Lead {fub_person_id} received outbound message at {last_sent} "
+                        f"(within {MINIMUM_GAP_HOURS}h) - deferring follow-up {followup_id} to next scan"
+                    )
+                    return {
+                        "success": False,
+                        "error": f"Outbound cooldown - last message within {MINIMUM_GAP_HOURS}h",
+                        "delivery_error": "outbound_cooldown",
+                    }
+            except Exception as cooldown_err:
+                logger.warning(f"Outbound cooldown check failed for {fub_person_id}: {cooldown_err}")
+
             # Calculate which day of the sequence this is
             # Based on sequence step, approximate the day
             day_mapping = {
                 0: 0, 1: 0, 2: 0, 3: 0, 4: 0,  # Day 0 steps
                 5: 1, 6: 1, 7: 1,  # Day 1 steps
-                8: 2,  # Day 2
-                9: 3,  # Day 3
-                10: 4,  # Day 4
-                11: 5, 12: 5,  # Day 5 steps
-                13: 6,  # Day 6
-                14: 7, 15: 7,  # Day 7 steps
+                8: 2, 9: 2,  # Day 2 steps
+                10: 3,  # Day 3
+                11: 4,  # Day 4
+                12: 5, 13: 5,  # Day 5 steps
+                14: 6,  # Day 6
+                15: 7, 16: 7,  # Day 7 steps
             }
             sequence_day = day_mapping.get(sequence_step, sequence_step // 2)
 
@@ -1895,6 +1921,20 @@ class FollowUpManager:
                     "status": FollowUpStatus.SENT.value,
                     "executed_at": datetime.utcnow().isoformat(),
                 }).eq("id", followup_id).execute()
+
+                # Log to ai_message_log so future follow-ups know what was already said
+                try:
+                    import uuid as _uuid
+                    self.supabase.table('ai_message_log').insert({
+                        'id': str(_uuid.uuid4()),
+                        'fub_person_id': fub_person_id,
+                        'direction': 'outbound',
+                        'channel': channel,
+                        'message_content': message_content,
+                    }).execute()
+                except Exception as log_err:
+                    logger.warning(f"Failed to log followup to ai_message_log: {log_err}")
+
                 verified = delivery_result.get("verified", "unknown")
                 logger.info(f"Follow-up {followup_id} DELIVERED (verified={verified}): {message_type.value} via {channel} (AI: {ai_used})")
             else:
@@ -2216,20 +2256,22 @@ This makes you feel like a helpful human, not a robotic automation.
 
 You're following up with {first_name} who hasn't responded yet. This is Day {sequence_day} of your outreach.
 
-CRITICAL RULES:
-1. If Day > 0, DO NOT repeat your introduction - they already know who you are
-2. DO NOT ask "are you buying or selling?" - we ALREADY KNOW: {lead_type_str}
-3. Reference their situation specifically: looking to {lead_action} in {cities}
-4. Source: They came from {friendly_source}
-5. Be substantive - acknowledge context, add value, ask one question
-6. For email, be concise but substantive (2-3 short paragraphs). Reference what you know.
-7. Be human, not robotic. Vary your approach each day.
-8. Never guilt trip about no response
-9. Always leave the door open
-10. Each follow-up MUST take a DIFFERENT angle — don't rehash the same approach or message
-11. Lead with something useful (market insight, neighborhood tip, timing advantage) before asking a question
-12. If previous messages were SMS and this is email (or vice versa), transition channels naturally
-13. After 3+ no-responses, switch to lower-pressure approaches: share a resource, mention availability, provide a market update — stop asking direct questions
+ABSOLUTE RULES - VIOLATING THESE MAKES THE MESSAGE FEEL LIKE SPAM:
+1. NEVER start with "Hi {first_name}!" or "Hey {first_name}!" if a previous message already did - READ the previous messages below and use a DIFFERENT opening
+2. NEVER re-introduce yourself if you already did in a previous message. They know who you are.
+3. NEVER ask "are you buying or selling?" - we ALREADY KNOW: {lead_type_str}
+4. NEVER repeat the same talking points from a previous message - read them and do something DIFFERENT
+5. Each message must CONTINUE a conversation, not restart one. If your last SMS said "I'd love to help you find a home in {cities}", your next one should NOT say the same thing.
+
+TONE & STYLE:
+- You are warm, genuine, and helpful - NOT salesy or pushy
+- Write like a real person texting, not a marketing template
+- Vary your opening every single time: sometimes start with a question, sometimes a market observation, sometimes jump straight to value
+- Reference {first_name}'s specific situation: looking to {lead_action} in {cities} (came from {friendly_source})
+- After Day 1+, assume they saw your previous messages. Don't act like it's the first time.
+- After 3+ messages with no response, back off the pressure - share a resource, mention you're around, provide a market stat. Don't keep asking questions.
+- Never guilt-trip about not responding
+- Always leave the door open
 
 MESSAGE TYPE: {message_type.value}
 GUIDANCE: {type_guidance}
@@ -2248,8 +2290,12 @@ Type: {message_type.value}
 {type_guidance}
 {prev_context}
 
-Respond with ONLY the SMS text. No JSON, no explanation. Just the message.
-Be natural and human. Substantive but concise."""
+CRITICAL: Read the previous messages above carefully. Your message must:
+- Use a DIFFERENT opening than any previous message (no repeated "Hi {first_name}!")
+- Take a DIFFERENT angle than any previous message
+- Feel like the natural next message in a conversation, not a fresh cold outreach
+
+Respond with ONLY the SMS text. No JSON, no explanation, no quotation marks. Just the message itself."""
     else:
         user_prompt = f"""Generate a follow-up EMAIL for Day {sequence_day}.
 
@@ -2257,13 +2303,16 @@ Type: {message_type.value}
 {type_guidance}
 {prev_context}
 
+CRITICAL: Read the previous messages above carefully. Your email must:
+- Use a DIFFERENT subject line and opening than any previous email
+- Take a DIFFERENT angle than any previous message
+- Feel like a natural continuation, not a fresh cold outreach
+
 Respond in this JSON format:
 {{
     "subject": "Short, personal subject line",
     "body": "Short email body in plain text. 2-3 paragraphs max. Sign with {agent_name} and phone {agent_phone}."
-}}
-
-Be concise but substantive — reference what you know about them. Don't repeat previous messages — try a fresh angle."""
+}}"""
 
     # Get API key
     openrouter_key = os.environ.get('OPENROUTER_API_KEY')
