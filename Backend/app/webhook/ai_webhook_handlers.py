@@ -788,30 +788,38 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
 
             # ============================================
             # HUMAN-LIKE RESPONSE DELAY
+            # Uses settings from ai_agent_settings table (configurable in frontend)
             # Instant replies feel robotic. Real agents need time to read, think, and type.
-            # - First reply to a new lead: 5-15 seconds (speed-to-lead matters)
-            # - Ongoing conversation: 15-45 seconds base + typing simulation
-            # - Longer messages = longer "typing" time
             # ============================================
             import random as _random
             response_text = agent_response.response_text
             msg_length = len(response_text)
+
+            # Load timing settings from database (ai_settings loaded earlier at line ~602)
+            first_delay_min = ai_settings.first_message_delay_min if ai_settings else 8
+            first_delay_max = ai_settings.first_message_delay_max if ai_settings else 20
+            ongoing_delay_min = ai_settings.response_delay_min_seconds if ai_settings else 15
+            ongoing_delay_max = ai_settings.response_delay_max_seconds if ai_settings else 45
+            typing_speed = ai_settings.typing_speed_chars_per_second if ai_settings else 4.0
 
             # Check if this is an early reply (first couple messages) or ongoing
             outbound_count = context.message_count if context else 0
 
             if outbound_count <= 1:
                 # First reply - speed to lead matters, but don't be instant
-                think_delay = _random.uniform(8, 20)
+                think_delay = _random.uniform(first_delay_min, first_delay_max)
             elif outbound_count <= 3:
-                # Early conversation - still responsive but natural
-                think_delay = _random.uniform(15, 40)
+                # Early conversation - blend between first and ongoing
+                blend_min = (first_delay_max + ongoing_delay_min) / 2
+                blend_max = ongoing_delay_max
+                think_delay = _random.uniform(blend_min, blend_max)
             else:
                 # Ongoing conversation - more relaxed, human pacing
-                think_delay = _random.uniform(25, 55)
+                think_delay = _random.uniform(ongoing_delay_min, ongoing_delay_max)
 
-            # Add typing simulation: ~4 chars/sec like a real person on a phone
-            typing_delay = msg_length / _random.uniform(3.5, 5.0)
+            # Add typing simulation based on message length
+            typing_speed_varied = _random.uniform(typing_speed * 0.8, typing_speed * 1.2)
+            typing_delay = msg_length / max(typing_speed_varied, 1.0)
 
             total_delay = think_delay + typing_delay
             # Cap at 90 seconds - don't make them wait too long
@@ -820,7 +828,8 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             logger.info(
                 f"Human-like delay for person {person_id}: "
                 f"{think_delay:.0f}s think + {typing_delay:.0f}s typing = {total_delay:.0f}s total "
-                f"(msg #{outbound_count + 1}, {msg_length} chars)"
+                f"(msg #{outbound_count + 1}, {msg_length} chars, "
+                f"settings: first={first_delay_min}-{first_delay_max}s, ongoing={ongoing_delay_min}-{ongoing_delay_max}s)"
             )
             await asyncio.sleep(total_delay)
 

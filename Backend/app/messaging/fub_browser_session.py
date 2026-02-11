@@ -975,40 +975,191 @@ class FUBBrowserSession:
             logger.warning(f"[EMAIL {person_id}] No subject field found - some email views may not have one")
 
         # ---- Step 3: Fill the email body ----
-        body_selectors = [
-            # FUB uses Draft.js rich text editor for email compose
-            '.DraftEditor-root [contenteditable="true"]',
-            '.DraftEditor-editorContainer [contenteditable="true"]',
-            '[class*="DraftEditor"] [contenteditable="true"]',
-            # Generic contenteditable in email compose area
-            '[class*="compose-email"] [contenteditable="true"]',
-            '[class*="ComposeEmail"] [contenteditable="true"]',
-            '[contenteditable="true"][role="textbox"]',
-            '[contenteditable="true"][class*="email"]',
-            '[class*="email-compose"] [contenteditable="true"]',
-            # Broader contenteditable fallback
-            '[contenteditable="true"]',
-            # Traditional textarea fallbacks
-            '[class*="email-compose"] textarea',
-            '[class*="email"] textarea',
-            'textarea[placeholder*="Write your message"]',
-            'textarea[placeholder*="Write your email"]',
-            'textarea[placeholder*="Message"]',
-            'textarea',
-        ]
+        # Wait extra time for the rich text editor to fully initialize
+        await self._human_delay(2.0, 3.0)
 
-        body_field = await self._find_element_by_selectors(body_selectors)
+        body_field = None
+        body_frame = None  # Track if we switched into an iframe
+
+        # --- Approach 1: Check for iframe-based editor (TinyMCE, CKEditor) ---
+        try:
+            iframes = await self.page.query_selector_all('iframe')
+            logger.info(f"[EMAIL {person_id}] Found {len(iframes)} iframe(s) on page")
+            for i, iframe_el in enumerate(iframes):
+                iframe_id = await iframe_el.get_attribute('id') or ''
+                iframe_class = await iframe_el.get_attribute('class') or ''
+                iframe_src = await iframe_el.get_attribute('src') or ''
+                logger.info(f"[EMAIL {person_id}] iframe {i}: id='{iframe_id}' class='{iframe_class[:80]}' src='{iframe_src[:80]}'")
+
+                # TinyMCE/CKEditor/generic email body iframes
+                is_editor_iframe = any(hint in (iframe_id + iframe_class + iframe_src).lower() for hint in [
+                    'mce', 'tinymce', 'ckeditor', 'editor', 'compose', 'email', 'body', 'content'
+                ])
+                if is_editor_iframe or len(iframes) == 1:
+                    frame = await iframe_el.content_frame()
+                    if frame:
+                        # Look for body or contenteditable inside the iframe
+                        try:
+                            iframe_body = await frame.wait_for_selector('body', timeout=3000)
+                            if iframe_body:
+                                editable_attr = await iframe_body.get_attribute('contenteditable')
+                                logger.info(f"[EMAIL {person_id}] iframe {i} body contenteditable='{editable_attr}'")
+                                if editable_attr is not None:  # contenteditable="" or "true" both work
+                                    body_field = iframe_body
+                                    body_frame = frame
+                                    logger.info(f"[EMAIL {person_id}] ✅ Found email body in iframe {i}")
+                                    break
+                        except Exception:
+                            pass
+                        # Also check for contenteditable divs inside iframe
+                        try:
+                            ce_el = await frame.query_selector('[contenteditable]')
+                            if ce_el:
+                                body_field = ce_el
+                                body_frame = frame
+                                logger.info(f"[EMAIL {person_id}] ✅ Found contenteditable element in iframe {i}")
+                                break
+                        except Exception:
+                            pass
+        except Exception as iframe_err:
+            logger.debug(f"[EMAIL {person_id}] iframe check error: {iframe_err}")
+
+        # --- Approach 2: Main DOM selectors (contenteditable with any value) ---
         if not body_field:
-            # Enumerate available form elements for debugging
+            body_selectors = [
+                # contenteditable with any value (catches "" and "true")
+                '[class*="compose-email"] [contenteditable]',
+                '[class*="ComposeEmail"] [contenteditable]',
+                '.DraftEditor-root [contenteditable]',
+                '.DraftEditor-editorContainer [contenteditable]',
+                '[class*="DraftEditor"] [contenteditable]',
+                '[contenteditable][role="textbox"]',
+                # Explicit "true" value
+                '[contenteditable="true"]',
+                # TinyMCE selectors (non-iframe mode)
+                '.tox-edit-area [contenteditable]',
+                '.mce-content-body',
+                # Quill editor
+                '.ql-editor',
+                # Slate editor
+                '[data-slate-editor="true"]',
+                # ProseMirror
+                '.ProseMirror',
+                # Generic contenteditable (broad)
+                '[contenteditable]',
+                # Traditional textarea fallbacks
+                'textarea[placeholder*="message" i]',
+                'textarea[placeholder*="email" i]',
+                'textarea',
+            ]
+            body_field = await self._find_element_by_selectors(body_selectors)
+
+        # --- Approach 3: Click in the compose area to trigger lazy loading ---
+        if not body_field:
+            logger.info(f"[EMAIL {person_id}] Body not found yet, trying to click compose area to trigger editor load")
             try:
-                elements = await self.page.query_selector_all('textarea, [contenteditable="true"], input, .DraftEditor-root, [class*="DraftEditor"], [class*="compose"]')
-                for i, el in enumerate(elements[:15]):
-                    tag = await el.evaluate('el => el.tagName')
-                    placeholder = await el.get_attribute('placeholder') or ''
-                    classes = await el.get_attribute('class') or ''
-                    editable = await el.get_attribute('contenteditable') or ''
-                    role = await el.get_attribute('role') or ''
-                    logger.info(f"[EMAIL {person_id}] Form element {i+1}: <{tag}> placeholder='{placeholder}' class='{classes[:80]}' contenteditable='{editable}' role='{role}'")
+                # Click between the subject and footer to activate the body editor
+                compose_area = await self.page.query_selector('[class*="compose-email"], [class*="ComposeEmail"], [class*="compose"]')
+                if compose_area:
+                    await compose_area.click()
+                    await self._human_delay(2.0, 3.0)
+                    # Retry all approaches after click
+                    body_field = await self._find_element_by_selectors(body_selectors)
+                    if not body_field:
+                        # Re-check iframes (editor might have loaded into an iframe after click)
+                        iframes = await self.page.query_selector_all('iframe')
+                        for iframe_el in iframes:
+                            frame = await iframe_el.content_frame()
+                            if frame:
+                                try:
+                                    ce_el = await frame.query_selector('[contenteditable], body[contenteditable]')
+                                    if ce_el:
+                                        body_field = ce_el
+                                        body_frame = frame
+                                        logger.info(f"[EMAIL {person_id}] ✅ Found body in iframe after compose click")
+                                        break
+                                except Exception:
+                                    pass
+            except Exception as click_err:
+                logger.debug(f"[EMAIL {person_id}] Compose click error: {click_err}")
+
+        # --- Approach 4: JS-based deep search as last resort ---
+        if not body_field:
+            logger.info(f"[EMAIL {person_id}] Trying JS-based deep search for email body")
+            try:
+                found_selector = await self.page.evaluate("""() => {
+                    // Check all elements with contenteditable attribute (any value)
+                    const ceElements = document.querySelectorAll('[contenteditable]');
+                    for (const el of ceElements) {
+                        // Skip inputs and small elements
+                        if (el.tagName === 'INPUT') continue;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.height > 50 && rect.width > 100) {
+                            // Found a sizable contenteditable element
+                            el.setAttribute('data-pw-email-body', 'true');
+                            return `[data-pw-email-body="true"]`;
+                        }
+                    }
+                    // Check shadow DOMs
+                    const allEls = document.querySelectorAll('*');
+                    for (const el of allEls) {
+                        if (el.shadowRoot) {
+                            const shadowCe = el.shadowRoot.querySelector('[contenteditable]');
+                            if (shadowCe) {
+                                return 'shadow:' + el.tagName;
+                            }
+                        }
+                    }
+                    return null;
+                }""")
+                if found_selector and not found_selector.startswith('shadow:'):
+                    body_field = await self.page.query_selector(found_selector)
+                    if body_field:
+                        logger.info(f"[EMAIL {person_id}] ✅ Found body via JS deep search")
+                elif found_selector:
+                    logger.warning(f"[EMAIL {person_id}] Body found in shadow DOM: {found_selector}")
+            except Exception as js_err:
+                logger.debug(f"[EMAIL {person_id}] JS deep search error: {js_err}")
+
+        if not body_field:
+            # Comprehensive debug dump
+            try:
+                debug_info = await self.page.evaluate("""() => {
+                    const info = { iframes: [], contenteditable: [], textareas: [], large_divs: [] };
+                    // Iframes
+                    document.querySelectorAll('iframe').forEach(f => {
+                        info.iframes.push({ id: f.id, class: f.className, src: f.src?.substring(0, 100) });
+                    });
+                    // Any contenteditable
+                    document.querySelectorAll('[contenteditable]').forEach(el => {
+                        const r = el.getBoundingClientRect();
+                        info.contenteditable.push({
+                            tag: el.tagName, ce: el.getAttribute('contenteditable'),
+                            class: el.className?.substring?.(0, 80) || '',
+                            w: Math.round(r.width), h: Math.round(r.height)
+                        });
+                    });
+                    // Textareas
+                    document.querySelectorAll('textarea').forEach(t => {
+                        info.textareas.push({ placeholder: t.placeholder, class: t.className?.substring?.(0, 80) || '' });
+                    });
+                    // Large divs in compose area that could be editors
+                    document.querySelectorAll('[class*="compose"] div, [class*="Compose"] div').forEach(d => {
+                        const r = d.getBoundingClientRect();
+                        if (r.height > 80 && r.width > 200) {
+                            info.large_divs.push({
+                                class: d.className?.substring?.(0, 80) || '',
+                                h: Math.round(r.height), w: Math.round(r.width),
+                                children: d.children.length
+                            });
+                        }
+                    });
+                    return info;
+                }""")
+                logger.error(f"[EMAIL {person_id}] DEBUG DUMP - iframes: {debug_info.get('iframes')}")
+                logger.error(f"[EMAIL {person_id}] DEBUG DUMP - contenteditable: {debug_info.get('contenteditable')}")
+                logger.error(f"[EMAIL {person_id}] DEBUG DUMP - textareas: {debug_info.get('textareas')}")
+                logger.error(f"[EMAIL {person_id}] DEBUG DUMP - large_divs: {debug_info.get('large_divs', [])[:10]}")
             except Exception:
                 pass
 
@@ -1016,15 +1167,21 @@ class FUBBrowserSession:
             await self.page.screenshot(path=debug_path)
             raise Exception(f"Could not find email compose area for person {person_id}. Screenshot: {debug_path}")
 
+        # --- Fill the body ---
         await body_field.click()
-        await self._human_delay(0.2, 0.4)
+        await self._human_delay(0.3, 0.5)
 
         # Check if it's a contenteditable div or a textarea
         tag_name = await body_field.evaluate('el => el.tagName.toLowerCase()')
-        if tag_name in ('div', 'span', 'p'):
-            # Contenteditable element - use keyboard typing
-            await body_field.evaluate('el => el.textContent = ""')
-            await self.page.keyboard.type(body, delay=50)
+        logger.info(f"[EMAIL {person_id}] Body field tag: <{tag_name}>")
+
+        if tag_name in ('body', 'div', 'span', 'p'):
+            # Contenteditable element - clear and type
+            await body_field.evaluate('el => el.innerHTML = ""')
+            await body_field.click()  # Ensure focus is on the body field
+            # Always use self.page.keyboard - Frame objects don't have .keyboard
+            # Keyboard input goes to the focused element regardless
+            await self.page.keyboard.type(body, delay=30)
         else:
             # Standard textarea
             await body_field.fill("")
@@ -1033,9 +1190,11 @@ class FUBBrowserSession:
         await self._human_delay(0.5, 1.0)
         logger.info(f"[EMAIL {person_id}] Body filled ({len(body)} chars)")
 
-        # ---- Step 4: Click send button ----
+        # ---- Step 4: Click send button (always in main page, not iframe) ----
         send_selectors = [
+            '.composeEmailSend-FSSelector',
             '.sendEmailButton-FSSelector',
+            '[class*="composeEmailSend"]',
             '[class*="sendEmailButton"]',
             '[class*="sendEmail"]',
             'button:has-text("Send Email")',
@@ -1044,6 +1203,7 @@ class FUBBrowserSession:
             'button[type="submit"]',
         ]
 
+        # Always search in main page (send button is outside the iframe)
         send_button = await self._find_element_by_selectors(send_selectors)
         if not send_button:
             # JS fallback
