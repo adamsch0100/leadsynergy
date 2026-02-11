@@ -1140,6 +1140,7 @@ class FollowUpManager:
         self,
         trigger: FollowUpTrigger,
         lead_source: Optional[str] = None,
+        day_0_aggression: str = "aggressive",
     ) -> List[FollowUpStep]:
         """
         Get the follow-up sequence for a trigger type, optionally adjusted
@@ -1220,7 +1221,20 @@ class FollowUpManager:
             FollowUpTrigger.RESUME_SCHEDULING: self.SEQUENCE_RESUME_SCHEDULING,
             FollowUpTrigger.RESUME_OBJECTION: self.SEQUENCE_RESUME_OBJECTION,
         }
-        return sequences.get(trigger, self.SEQUENCE_STANDARD)
+        result = sequences.get(trigger, self.SEQUENCE_STANDARD)
+
+        # Apply day_0_aggression setting to filter Day 0 touches
+        # aggressive (default): all Day 0 steps (current behavior)
+        # moderate: max 2 Day 0 steps (first SMS + welcome email only)
+        # conservative: max 1 Day 0 step (first SMS only)
+        if day_0_aggression != "aggressive" and trigger == FollowUpTrigger.NEW_LEAD:
+            day_0_steps = [s for s in result if s.delay_days == 0]
+            other_steps = [s for s in result if s.delay_days > 0]
+            max_day0 = 2 if day_0_aggression == "moderate" else 1
+            result = day_0_steps[:max_day0] + other_steps
+            logger.info(f"day_0_aggression={day_0_aggression}: limited Day 0 to {max_day0} touches")
+
+        return result
 
     def get_qualification_skip_types(self, lead_profile: Any) -> set:
         """
@@ -1364,7 +1378,11 @@ class FollowUpManager:
         Returns:
             Dict with sequence_id and scheduled follow-ups
         """
-        sequence = self.get_sequence(trigger, lead_source=lead_source)
+        # Get day_0_aggression from settings (default: "aggressive" = current behavior)
+        aggression = "aggressive"
+        if settings and hasattr(settings, 'day_0_aggression'):
+            aggression = getattr(settings, 'day_0_aggression', 'aggressive') or 'aggressive'
+        sequence = self.get_sequence(trigger, lead_source=lead_source, day_0_aggression=aggression)
         sequence_id = str(uuid.uuid4())
         scheduled_followups = []
         skipped_count = 0
@@ -1454,7 +1472,11 @@ class FollowUpManager:
         nurture_scheduled = 0
         if trigger == FollowUpTrigger.NEW_LEAD:
             # Schedule nurture starting Day 30 (after Day 7 intensive ends)
-            nurture_base_time = base_time + timedelta(days=7)  # Start counting from Day 7
+            # Use long_term_nurture_after_days from settings (default: 7)
+            nurture_days = 7
+            if settings and hasattr(settings, 'long_term_nurture_after_days'):
+                nurture_days = getattr(settings, 'long_term_nurture_after_days', 7) or 7
+            nurture_base_time = base_time + timedelta(days=nurture_days)
             nurture_followups = []
 
             for step_index, step in enumerate(self.SEQUENCE_NURTURE):

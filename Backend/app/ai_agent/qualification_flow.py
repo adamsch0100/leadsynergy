@@ -755,8 +755,9 @@ class QualificationFlowManager:
         if not progress.critical_complete:
             return True
 
-        # If we've asked a lot already, stop
-        if len(self.data.questions_asked) >= 8:
+        # If we've asked a lot already, stop (configurable via max_qualification_questions setting)
+        max_questions = getattr(self, 'max_qualification_questions', 8)
+        if len(self.data.questions_asked) >= max_questions:
             return False
 
         # If minimally qualified and asked at least 3, can stop

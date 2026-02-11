@@ -825,7 +825,11 @@ class AIAgentService:
     ) -> QualificationFlowManager:
         """Get or create qualification flow manager for a lead."""
         if lead_id not in self._qualification_managers:
-            self._qualification_managers[lead_id] = QualificationFlowManager()
+            qm = QualificationFlowManager()
+            # Wire max_qualification_questions from settings (default: 8)
+            if self.settings and hasattr(self.settings, 'max_qualification_questions'):
+                qm.max_qualification_questions = getattr(self.settings, 'max_qualification_questions', 8)
+            self._qualification_managers[lead_id] = qm
         return self._qualification_managers[lead_id]
 
     def _should_immediate_handoff(

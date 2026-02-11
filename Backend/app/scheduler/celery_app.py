@@ -39,6 +39,10 @@ celery.conf.beat_schedule = {
         'schedule': crontab(minute='*/5', hour='15-17'),  # 8-10 AM MT = 15-17 UTC
     },
     # NBA scan: find new leads, silent leads, dormant leads, stale handoffs
+    # Note: nba_hot/cold_lead_scan_interval_minutes settings exist in DB but
+    # Celery beat schedules are static at module load. This runs at */15 which
+    # matches the cold lead default. The per-lead 3-hour cooldown in
+    # followup_manager.py prevents over-messaging regardless of scan frequency.
     'run_nba_scan': {
         'task': 'app.scheduler.ai_tasks.run_nba_scan_task',
         'schedule': crontab(minute='*/15'),  # Every 15 minutes
