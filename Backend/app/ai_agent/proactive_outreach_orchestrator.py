@@ -225,17 +225,26 @@ class ProactiveOutreachOrchestrator:
             person_data = self.fub_client.get_person(str(fub_person_id), include_all_fields=True)
 
             # Validate at least one contact method exists (phone OR email)
-            phones = person_data.get('phones', [])
+            # Filter out invalid phone entries like "Email Preferred" placeholders
+            raw_phones = person_data.get('phones', [])
+            valid_phones = [
+                p for p in raw_phones
+                if p.get('value', '').strip()
+                and p.get('status') != 'Invalid'
+                and not any(word in p.get('value', '').lower() for word in ['email', 'preferred', 'n/a', 'none'])
+            ]
             emails = person_data.get('emails', [])
 
-            if not phones and not emails:
-                logger.warning(f"Lead {fub_person_id} has no phone AND no email - cannot reach")
+            if not valid_phones and not emails:
+                logger.warning(f"Lead {fub_person_id} has no valid phone AND no email - cannot reach")
                 return None
 
             # Flag email-only leads for downstream handling
-            if not phones:
+            if not valid_phones:
                 person_data['_is_email_only'] = True
-                logger.info(f"Lead {fub_person_id} is email-only (no phone number)")
+                # Remove invalid phone entries so downstream code doesn't try to SMS them
+                person_data['phones'] = []
+                logger.info(f"Lead {fub_person_id} is email-only (no valid phone number, had: {[p.get('value') for p in raw_phones]})")
             else:
                 person_data['_is_email_only'] = False
                 if not emails:
@@ -327,9 +336,16 @@ class ProactiveOutreachOrchestrator:
                 )
 
                 if not compliance_check.can_send:
-                    result["can_send"] = False
-                    result["reason"] = compliance_check.reason or 'Compliance check failed'
-                    return result
+                    reason = compliance_check.reason or 'Compliance check failed'
+                    # "Outside hours" is NOT a hard block - queue for morning instead
+                    if 'hours' in reason.lower() or 'time' in reason.lower():
+                        logger.info(f"TCPA hours block for lead {person_id} - will queue for morning")
+                        # Fall through to the working hours check below which queues properly
+                    else:
+                        # Real compliance block (DNC, opted out, etc.) - hard block
+                        result["can_send"] = False
+                        result["reason"] = reason
+                        return result
 
             except Exception as e:
                 logger.warning(f"Compliance check failed: {e}")
