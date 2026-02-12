@@ -384,9 +384,12 @@ class ProactiveOutreachOrchestrator:
             current_hour = now.hour
 
         if not (working_hours_start <= current_hour < working_hours_end):
-            # Outside hours - queue for 8-10am tomorrow
+            # Outside hours - queue for morning with random delay (looks human)
+            import random
             result["send_immediately"] = False
-            tomorrow_8am = now.replace(hour=8, minute=0, second=0) + timedelta(days=1)
+            # Random time between 8:07 AM and 9:43 AM - avoids :00/:30 round numbers
+            random_minutes = random.randint(7, 103)  # 7 min to 1h43m after 8 AM
+            tomorrow_8am = now.replace(hour=8, minute=0, second=0) + timedelta(days=1) + timedelta(minutes=random_minutes)
             result["queue_for"] = tomorrow_8am
             logger.info(f"Outside TCPA hours - queuing for {tomorrow_8am}")
             return result
