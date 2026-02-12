@@ -205,6 +205,7 @@ class ProactiveOutreachOrchestrator:
             # Success if at least one message was sent/queued
             result["success"] = len(send_result["actions"]) > 0
             result["lead_timezone"] = settings.get('timezone', 'America/Denver')
+            result["_is_email_only"] = person_data.get('_is_email_only', False)
 
             if result["success"]:
                 logger.info(f"✅ Proactive outreach completed for lead {fub_person_id}: {', '.join(result['actions_taken'])}")
@@ -223,16 +224,22 @@ class ProactiveOutreachOrchestrator:
         try:
             person_data = self.fub_client.get_person(str(fub_person_id), include_all_fields=True)
 
-            # Validate phone exists
+            # Validate at least one contact method exists (phone OR email)
             phones = person_data.get('phones', [])
-            if not phones:
-                logger.warning(f"Lead {fub_person_id} has no phone number")
+            emails = person_data.get('emails', [])
+
+            if not phones and not emails:
+                logger.warning(f"Lead {fub_person_id} has no phone AND no email - cannot reach")
                 return None
 
-            # Validate email exists (nice to have, not required)
-            emails = person_data.get('emails', [])
-            if not emails:
-                logger.info(f"Lead {fub_person_id} has no email (will send SMS only)")
+            # Flag email-only leads for downstream handling
+            if not phones:
+                person_data['_is_email_only'] = True
+                logger.info(f"Lead {fub_person_id} is email-only (no phone number)")
+            else:
+                person_data['_is_email_only'] = False
+                if not emails:
+                    logger.info(f"Lead {fub_person_id} has no email (will send SMS only)")
 
             return person_data
 
@@ -302,33 +309,33 @@ class ProactiveOutreachOrchestrator:
             "queue_for": None,
         }
 
-        # Get phone for compliance check
+        # Get phone for compliance check (email-only leads skip TCPA phone checks)
         phones = person_data.get('phones', [])
-        if not phones:
-            result["can_send"] = False
-            result["reason"] = "No phone number"
-            return result
-
-        phone = phones[0].get('value', '')
+        is_email_only = person_data.get('_is_email_only', False)
         person_id = person_data.get('id')
 
-        # Check TCPA compliance
-        try:
-            compliance_check = await self.compliance.check_sms_compliance(
-                fub_person_id=person_id,
-                organization_id=settings.get('organization_id', ''),
-                phone_number=phone,
-                recipient_timezone=settings.get('timezone', 'America/Denver'),
-            )
+        if not is_email_only and phones:
+            phone = phones[0].get('value', '')
 
-            if not compliance_check.can_send:
-                result["can_send"] = False
-                result["reason"] = compliance_check.reason or 'Compliance check failed'
-                return result
+            # Check TCPA compliance (only for leads with phone numbers)
+            try:
+                compliance_check = await self.compliance.check_sms_compliance(
+                    fub_person_id=person_id,
+                    organization_id=settings.get('organization_id', ''),
+                    phone_number=phone,
+                    recipient_timezone=settings.get('timezone', 'America/Denver'),
+                )
 
-        except Exception as e:
-            logger.warning(f"Compliance check failed: {e}")
-            # Continue with caution
+                if not compliance_check.can_send:
+                    result["can_send"] = False
+                    result["reason"] = compliance_check.reason or 'Compliance check failed'
+                    return result
+
+            except Exception as e:
+                logger.warning(f"Compliance check failed: {e}")
+                # Continue with caution
+        elif is_email_only:
+            logger.info(f"Lead {person_id} is email-only - skipping TCPA phone compliance")
 
         # Check TCPA hours (8am-8pm local time)
         timezone_str = settings.get('timezone', 'America/Denver')
@@ -398,64 +405,68 @@ class ProactiveOutreachOrchestrator:
             "errors": [],
         }
 
-        phone = person_data.get('phones', [{}])[0].get('value', '')
+        is_email_only = person_data.get('_is_email_only', False)
+        phone = person_data.get('phones', [{}])[0].get('value', '') if not is_email_only else ''
 
-        # Send or queue SMS
-        try:
-            if compliance_result["send_immediately"]:
-                # Send immediately via Playwright
-                logger.info(f"📤 Sending SMS immediately to lead {fub_person_id}")
+        # Send or queue SMS (skip for email-only leads)
+        if is_email_only:
+            logger.info(f"Lead {fub_person_id} is email-only - skipping SMS outreach")
+        else:
+            try:
+                if compliance_result["send_immediately"]:
+                    # Send immediately via Playwright
+                    logger.info(f"📤 Sending SMS immediately to lead {fub_person_id}")
 
-                from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
+                    from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
 
-                sms_result = await send_sms_with_auto_credentials(
-                    person_id=fub_person_id,
-                    message=outreach.sms_message,
-                    user_id=settings.get('user_id'),
-                    organization_id=settings.get('organization_id'),
-                    supabase_client=self.supabase,
-                )
+                    sms_result = await send_sms_with_auto_credentials(
+                        person_id=fub_person_id,
+                        message=outreach.sms_message,
+                        user_id=settings.get('user_id'),
+                        organization_id=settings.get('organization_id'),
+                        supabase_client=self.supabase,
+                    )
 
-                if sms_result.get('success'):
-                    result["actions"].append("sms_sent")
-                    logger.info(f"✅ SMS sent successfully via Playwright")
+                    if sms_result.get('success'):
+                        result["actions"].append("sms_sent")
+                        logger.info(f"✅ SMS sent successfully via Playwright")
 
-                    # Log message to ai_message_log for conversation tracking
-                    try:
-                        self.supabase.table('ai_message_log').insert({
-                            'id': str(uuid4()),
-                            'fub_person_id': fub_person_id,
-                            'direction': 'outbound',
-                            'channel': 'sms',
-                            'message_content': outreach.sms_message,
-                        }).execute()
-                        logger.info(f"✅ Message logged to ai_message_log")
-                    except Exception as log_error:
-                        logger.error(f"Failed to log message to ai_message_log: {log_error}")
+                        # Log message to ai_message_log for conversation tracking
+                        try:
+                            self.supabase.table('ai_message_log').insert({
+                                'id': str(uuid4()),
+                                'fub_person_id': fub_person_id,
+                                'direction': 'outbound',
+                                'channel': 'sms',
+                                'message_content': outreach.sms_message,
+                            }).execute()
+                            logger.info(f"✅ Message logged to ai_message_log")
+                        except Exception as log_error:
+                            logger.error(f"Failed to log message to ai_message_log: {log_error}")
+                    else:
+                        result["errors"].append("SMS send failed")
+                        logger.error(f"❌ SMS send failed: {sms_result.get('error', 'Unknown error')}")
+
                 else:
-                    result["errors"].append("SMS send failed")
-                    logger.error(f"❌ SMS send failed: {sms_result.get('error', 'Unknown error')}")
+                    # Queue for later
+                    queue_time = compliance_result["queue_for"]
+                    logger.info(f"⏰ Queuing SMS for {queue_time}")
 
-            else:
-                # Queue for later
-                queue_time = compliance_result["queue_for"]
-                logger.info(f"⏰ Queuing SMS for {queue_time}")
+                    # Insert into scheduled_messages table
+                    await self._queue_message(
+                        fub_person_id=fub_person_id,
+                        message_content=outreach.sms_message,
+                        channel="sms",
+                        scheduled_for=queue_time,
+                        organization_id=settings.get('organization_id'),
+                        user_id=settings.get('user_id'),
+                    )
 
-                # Insert into scheduled_messages table
-                await self._queue_message(
-                    fub_person_id=fub_person_id,
-                    message_content=outreach.sms_message,
-                    channel="sms",
-                    scheduled_for=queue_time,
-                    organization_id=settings.get('organization_id'),
-                    user_id=settings.get('user_id'),
-                )
+                    result["actions"].append("sms_queued")
 
-                result["actions"].append("sms_queued")
-
-        except Exception as e:
-            logger.error(f"Error sending/queuing SMS: {e}")
-            result["errors"].append(f"SMS error: {str(e)}")
+            except Exception as e:
+                logger.error(f"Error sending/queuing SMS: {e}")
+                result["errors"].append(f"SMS error: {str(e)}")
 
         # Send welcome email via Playwright (immediately or queued for off-hours)
         email_enabled = settings.get('sequence_email_enabled', True)
@@ -682,24 +693,31 @@ async def trigger_proactive_outreach(
                 # Use timezone from the orchestrator result (already fetched from settings)
                 lead_timezone = result.get("lead_timezone", "America/Denver")
 
+                # Detect email-only leads and adapt channel strategy
+                is_email_only = result.get("_is_email_only", False)
+                preferred_ch = "email" if is_email_only else "sms"
+
                 sequence_result = await followup_manager.schedule_followup_sequence(
                     fub_person_id=fub_person_id,
                     organization_id=organization_id,
                     trigger=FollowUpTrigger.NEW_LEAD,
                     start_delay_hours=0,
-                    preferred_channel="sms",
+                    preferred_channel=preferred_ch,
                     lead_timezone=lead_timezone,
+                    email_only=is_email_only,
                 )
 
                 total_scheduled = sequence_result.get("total_scheduled", 0)
                 nurture_scheduled = sequence_result.get("nurture_scheduled", 0)
 
-                # Mark initial outreach steps as already sent (steps 0 and 1)
-                # since the orchestrator already handled first contact SMS + email
+                # Mark initial outreach steps as already sent
+                # For SMS leads: first_contact SMS + email_welcome already sent by orchestrator
+                # For email-only: email_welcome + first_contact (converted to email) already sent
+                initial_types = ("first_contact", "email_welcome")
                 steps_marked = 0
                 for fu in sequence_result.get("followups", []):
                     msg_type = fu.get("message_type", "")
-                    if msg_type in ("first_contact", "email_welcome"):
+                    if msg_type in initial_types:
                         try:
                             supabase.table("ai_scheduled_followups").update({
                                 "status": "sent",

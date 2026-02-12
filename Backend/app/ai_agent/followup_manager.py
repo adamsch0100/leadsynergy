@@ -1356,6 +1356,7 @@ class FollowUpManager:
         settings: Any = None,  # AIAgentSettings object for channel toggles
         lead_profile: Any = None,  # LeadProfile for intelligent skip logic
         lead_source: str = None,  # Lead source for sequence length selection
+        email_only: bool = False,  # True for leads with no phone number
     ) -> Dict[str, Any]:
         """
         Schedule a follow-up sequence for a lead.
@@ -1378,6 +1379,28 @@ class FollowUpManager:
         Returns:
             Dict with sequence_id and scheduled follow-ups
         """
+        # ================================================================
+        # DEDUP: Cancel any existing pending followups before scheduling
+        # Prevents duplicate sequences when AI is toggled on/off or
+        # when multiple events trigger scheduling for the same lead.
+        # ================================================================
+        if self.supabase:
+            try:
+                existing = self.supabase.table('ai_scheduled_followups').select(
+                    'id', count='exact'
+                ).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
+
+                if existing.count and existing.count > 0:
+                    self.supabase.table('ai_scheduled_followups').update({
+                        'status': 'cancelled',
+                    }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
+                    logger.info(
+                        f"Cancelled {existing.count} existing pending followups for person "
+                        f"{fub_person_id} before scheduling new sequence"
+                    )
+            except Exception as dedup_err:
+                logger.warning(f"Dedup check failed for person {fub_person_id}: {dedup_err}")
+
         # Get day_0_aggression from settings (default: "aggressive" = current behavior)
         aggression = "aggressive"
         if settings and hasattr(settings, 'day_0_aggression'):
@@ -1400,6 +1423,17 @@ class FollowUpManager:
         skip_types = self.get_qualification_skip_types(lead_profile) if lead_profile else set()
 
         for step_index, step in enumerate(sequence):
+            # ================================================================
+            # EMAIL-ONLY: Skip voice/call steps, convert SMS to email
+            # ================================================================
+            if email_only and step.channel in ("rvm", "call"):
+                logger.debug(
+                    f"Skipping step {step_index} ({step.message_type.value}) - "
+                    f"email-only lead, no {step.channel} equivalent"
+                )
+                skipped_count += 1
+                continue
+
             # ================================================================
             # Check if this step should be skipped based on channel toggle
             # ================================================================
@@ -1447,6 +1481,10 @@ class FollowUpManager:
 
             # Resolve channel (primary/secondary to actual channel)
             actual_channel = self._resolve_channel(step.channel, preferred_channel)
+
+            # EMAIL-ONLY: Force all channels to email (SMS steps become email)
+            if email_only and actual_channel == "sms":
+                actual_channel = "email"
 
             followup = ScheduledFollowUp(
                 id=str(uuid.uuid4()),
@@ -1803,6 +1841,10 @@ class FollowUpManager:
                         logger.warning(f"Could not fetch person data: {e}")
                         person_data = {"firstName": "there"}
 
+                # Detect if lead has a phone (for email-only AI prompt awareness)
+                lead_phones = (person_data or {}).get('phones', [])
+                has_phone = bool(lead_phones)
+
                 # Generate AI message
                 ai_result = await generate_followup_message(
                     person_data=person_data,
@@ -1813,6 +1855,7 @@ class FollowUpManager:
                     brokerage_name=brokerage_name,
                     previous_messages=previous_messages,
                     sequence_day=sequence_day,
+                    lead_has_phone=has_phone,
                 )
 
                 message_content = ai_result.get("content", "")
@@ -1911,6 +1954,26 @@ class FollowUpManager:
 
             try:
                 if channel == "sms":
+                    # Guard: Check if lead has a phone number before attempting SMS
+                    lead_phones = (person_data or {}).get('phones', [])
+                    if not lead_phones:
+                        # Try FUB lookup if person_data doesn't have phones
+                        try:
+                            from app.database.fub_api_client import FUBApiClient
+                            fub = FUBApiClient()
+                            fub_person = fub.get_person(str(fub_person_id))
+                            lead_phones = fub_person.get('phones', []) if fub_person else []
+                        except Exception:
+                            lead_phones = []
+
+                    if not lead_phones:
+                        logger.warning(f"Lead {fub_person_id} has no phone - cannot send SMS followup {followup_id}")
+                        return {
+                            "success": False,
+                            "error": "Lead has no phone number - cannot send SMS",
+                            "delivery_error": "no_phone_number",
+                        }
+
                     # Send SMS via Playwright browser automation (FUB API returns 403)
                     from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
                     organization_id = followup_data.get("organization_id")
@@ -1923,10 +1986,13 @@ class FollowUpManager:
                 elif channel == "email":
                     # Send email via Playwright browser automation (through FUB)
                     from app.messaging.playwright_sms_service import send_email_with_auto_credentials
+                    organization_id = followup_data.get("organization_id")
                     delivery_result = await send_email_with_auto_credentials(
                         person_id=fub_person_id,
                         subject=message_subject,
                         body=message_content,
+                        organization_id=organization_id,
+                        supabase_client=self.supabase,
                     )
                 else:
                     # RVM, call, etc. — can't auto-deliver, create task instead
@@ -2162,6 +2228,7 @@ async def generate_followup_message(
     previous_messages: List[Dict[str, Any]] = None,
     sequence_day: int = 0,
     conversation_summary: Dict[str, Any] = None,
+    lead_has_phone: bool = True,
 ) -> Dict[str, Any]:
     """
     Generate an AI-powered follow-up message with full lead context.
@@ -2303,6 +2370,17 @@ LEAD TYPE: {lead_type_str}
 LOCATION: {cities}
 SOURCE: {friendly_source}
 {conversation_context_section}"""
+
+    # Add email-only awareness when lead has no phone
+    if not lead_has_phone:
+        system_prompt += """
+
+EMAIL-ONLY LEAD: This person prefers email communication and has no phone on file.
+- NEVER suggest calling, texting, or any phone-based contact
+- NEVER include your phone number in the message
+- Use email-appropriate CTAs: "just reply to this email", "hit reply", "let me know via email"
+- Emails can be slightly longer and more detailed than SMS
+- Include a clear subject line that stands out in their inbox"""
 
     # Build the user prompt based on channel
     if channel == "sms":

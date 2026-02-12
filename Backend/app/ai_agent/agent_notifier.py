@@ -159,12 +159,20 @@ async def send_sms_to_agent(
             fub_link=fub_link,
         )
 
+        # Get Supabase client for credential lookup
+        try:
+            from app.database.supabase_client import SupabaseClientSingleton
+            supabase = SupabaseClientSingleton.get_instance()
+        except Exception:
+            supabase = None
+
         # Send via Playwright (to the notification person ID)
         result = await send_sms_with_auto_credentials(
             person_id=notification_person_id,
             message=message,
             user_id=user_id,
             organization_id=organization_id,
+            supabase_client=supabase,
         )
 
         if result.get('success'):
@@ -230,6 +238,13 @@ https://app.followupboss.com/2/people/view/{fub_person_id}
 This is an automated handoff notification from your AI agent.
 Powered by LeadSynergy AI"""
 
+        # Get Supabase client for credential lookup
+        try:
+            from app.database.supabase_client import SupabaseClientSingleton
+            supabase = SupabaseClientSingleton.get_instance()
+        except Exception:
+            supabase = None
+
         # Send email via Playwright
         result = await send_email_with_auto_credentials(
             person_id=fub_person_id,
@@ -237,6 +252,7 @@ Powered by LeadSynergy AI"""
             body=body,
             user_id=user_id,
             organization_id=organization_id,
+            supabase_client=supabase,
         )
 
         if result.get('success'):

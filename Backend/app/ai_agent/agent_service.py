@@ -1576,6 +1576,34 @@ ACTION REQUIRED: Respond to this lead promptly!
             except Exception as disable_err:
                 logger.warning(f"Failed to auto-disable AI on handoff for {fub_person_id}: {disable_err}")
 
+            # Send immediate notifications to the agent (SMS + Email)
+            # This covers score-based, appointment-scheduling, and AI-recommended handoffs
+            # that flow through _finalize_response (smart triggers and immediate handoffs
+            # have their own notification calls and return before reaching here).
+            try:
+                from app.ai_agent.agent_notifier import notify_agent_of_handoff
+                notification_settings = self._db_settings
+                if notification_settings:
+                    lead_name = f"{lead_profile.first_name} {lead_profile.last_name or ''}".strip()
+                    notify_result = await notify_agent_of_handoff(
+                        fub_person_id=fub_person_id,
+                        lead_name=lead_name,
+                        lead_phone=lead_profile.phone or "Unknown",
+                        lead_email=lead_profile.email or "Unknown",
+                        handoff_reason=response.handoff_reason or "Lead qualified for human agent",
+                        last_message=detected.raw_message if detected else "N/A",
+                        assigned_agent_email=getattr(lead_profile, 'assigned_agent_email', None),
+                        settings=notification_settings,
+                    )
+                    if notify_result.get('success'):
+                        logger.info(f"Agent notifications sent for score-based handoff: {notify_result['notifications_sent']}")
+                    else:
+                        logger.warning(f"Agent notification failed for score-based handoff: {notify_result.get('errors')}")
+                else:
+                    logger.warning(f"No DB settings available - cannot send handoff notification for lead {fub_person_id}")
+            except Exception as notify_err:
+                logger.warning(f"Failed to send handoff notification for {fub_person_id}: {notify_err}")
+
         return response
 
     async def _sync_to_crm(
