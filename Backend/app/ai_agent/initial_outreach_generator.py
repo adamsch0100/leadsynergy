@@ -404,6 +404,10 @@ SMS RULES:
 - Warm and substantive
 - Can mention you're also sending an email with more info
 - DO NOT ask buyer/seller if Lead Type is known!
+- If "Human Team Members" are listed in context, naturally mention they may also reach out:
+  * Example: "Adam from our team may also give you a call to say hi!"
+  * Keep it casual and warm - it's a heads-up, not a warning
+  * Place it after your intro, before the question at the end
 
 TONE GUIDE by timeline:
 - Immediate/ASAP: Enthusiastic, "Let's find you something this weekend!"
@@ -457,12 +461,14 @@ ABSOLUTE DON'TS WITH HISTORICAL CONTEXT:
         agent_phone: str = "",
         brokerage_name: str = "",
         api_key: str = None,
+        team_members: str = "",
     ):
         self.agent_name = agent_name
         self.agent_email = agent_email
         self.agent_phone = agent_phone
         self.brokerage_name = brokerage_name
         self.api_key = api_key or os.environ.get('ANTHROPIC_API_KEY')
+        self.team_members = team_members
 
     async def generate_outreach(
         self,
@@ -605,6 +611,9 @@ ABSOLUTE DON'TS WITH HISTORICAL CONTEXT:
         parts.append(f"\nAgent Name: {self.agent_name}")
         if self.brokerage_name:
             parts.append(f"Brokerage: {self.brokerage_name}")
+        if self.team_members:
+            parts.append(f"Human Team Members: {self.team_members}")
+            parts.append(f"NOTE: {self.team_members} from the team may also give the lead a call to personally introduce themselves.")
 
         return "\n".join(parts)
 

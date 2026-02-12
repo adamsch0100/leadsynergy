@@ -146,6 +146,7 @@ class ProactiveOutreachOrchestrator:
                 agent_email=settings.get('agent_email', ''),
                 agent_phone=settings.get('agent_phone', ''),
                 brokerage_name=settings.get('brokerage_name', 'our team'),
+                team_members=settings.get('team_members', ''),
             )
 
             outreach = await generator.generate_outreach(
