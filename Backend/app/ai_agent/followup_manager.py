@@ -1897,7 +1897,7 @@ class FollowUpManager:
                 "first_name": first_name,
                 "area": cities,
                 "agent_name": agent_name,
-                "agent_phone": agent_phone,
+                "agent_phone": agent_phone or "",
                 "brokerage": brokerage_name,
                 "suggested_day": suggested_day,
                 "suggested_time": "2:00 PM",
@@ -1935,6 +1935,10 @@ class FollowUpManager:
                 message_content = string.Formatter().vformat(message_content, (), SafeDict(template_vars))
                 if message_subject:
                     message_subject = string.Formatter().vformat(message_subject, (), SafeDict(template_vars))
+                # Clean up empty phone number lines (e.g., "\n\n" where phone was)
+                if not agent_phone:
+                    import re
+                    message_content = re.sub(r'\n\s*\n\s*$', '', message_content)
             except Exception as fmt_err:
                 logger.warning(f"Template formatting error: {fmt_err}")
 
@@ -2361,6 +2365,7 @@ TONE & STYLE:
 - After 3+ messages with no response, back off the pressure - share a resource, mention you're around, provide a market stat. Don't keep asking questions.
 - Never guilt-trip about not responding
 - Always leave the door open
+- NEVER fabricate or invent a phone number. If no phone number is provided, do NOT include one in your sign-off.
 
 MESSAGE TYPE: {message_type.value}
 GUIDANCE: {type_guidance}
@@ -2411,7 +2416,7 @@ CRITICAL: Read the previous messages above carefully. Your email must:
 Respond in this JSON format:
 {{
     "subject": "Short, personal subject line",
-    "body": "Short email body in plain text. 2-3 paragraphs max. Sign with {agent_name} and phone {agent_phone}."
+    "body": "Short email body in plain text. 2-3 paragraphs max. Sign with {agent_name}, {brokerage_name}.{' Include phone: ' + agent_phone if agent_phone else ' Do NOT include any phone number - you do not have one.'}"
 }}"""
 
     # Get API key
