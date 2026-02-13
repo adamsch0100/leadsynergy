@@ -69,29 +69,47 @@ def send_scheduled_message(
         user_id = msg_record.data.get("user_id")
         email_subject = msg_record.data.get("subject")
 
-        # Get lead info from database (not FUB API)
-        # Use execute() without .single() to avoid exception on no rows
+        # Get lead info from local database, fall back to FUB API
         lead_query = supabase.table("leads").select("*").eq(
             "fub_person_id", fub_person_id
         ).execute()
 
-        if not lead_query.data or len(lead_query.data) == 0:
-            logger.error(f"Person {fub_person_id} not found in database")
-            _mark_message_failed(supabase, message_id, "Person not found in database")
-            return {"success": False, "error": "Person not found"}
-
-        lead_data = lead_query.data[0]  # Get first result
-
-        # Build lead profile from database data
-        lead_profile = LeadProfile(
-            fub_person_id=fub_person_id,
-            first_name=lead_data.get("first_name", ""),
-            last_name=lead_data.get("last_name", ""),
-            phone=lead_data.get("phone", ""),
-            email=lead_data.get("email", ""),
-            source=lead_data.get("source", ""),
-            stage=lead_data.get("stage", ""),
-        )
+        if lead_query.data and len(lead_query.data) > 0:
+            lead_data = lead_query.data[0]
+            lead_profile = LeadProfile(
+                fub_person_id=fub_person_id,
+                first_name=lead_data.get("first_name", ""),
+                last_name=lead_data.get("last_name", ""),
+                phone=lead_data.get("phone", ""),
+                email=lead_data.get("email", ""),
+                source=lead_data.get("source", ""),
+                stage=lead_data.get("stage", ""),
+            )
+        else:
+            # Fallback: fetch from FUB API directly
+            logger.info(f"Person {fub_person_id} not in local DB, fetching from FUB API")
+            try:
+                from app.database.fub_api_client import FUBApiClient
+                fub = FUBApiClient()
+                person_data = fub.get_person(str(fub_person_id))
+                if not person_data:
+                    _mark_message_failed(supabase, message_id, "Person not found in FUB API")
+                    return {"success": False, "error": "Person not found"}
+                phones = person_data.get("phones", [])
+                emails = person_data.get("emails", [])
+                lead_profile = LeadProfile(
+                    fub_person_id=fub_person_id,
+                    first_name=person_data.get("firstName", ""),
+                    last_name=person_data.get("lastName", ""),
+                    phone=phones[0].get("value", "") if phones else "",
+                    email=emails[0].get("value", "") if emails else "",
+                    source=person_data.get("source", ""),
+                    stage=person_data.get("stage", ""),
+                )
+            except Exception as fub_err:
+                logger.error(f"FUB API fallback failed for {fub_person_id}: {fub_err}")
+                _mark_message_failed(supabase, message_id, f"Person lookup failed: {fub_err}")
+                return {"success": False, "error": str(fub_err)}
 
         # Check compliance
         if channel == "sms":
