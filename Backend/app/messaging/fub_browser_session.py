@@ -1176,12 +1176,15 @@ class FUBBrowserSession:
         logger.info(f"[EMAIL {person_id}] Body field tag: <{tag_name}>")
 
         if tag_name in ('body', 'div', 'span', 'p'):
-            # Contenteditable element - clear and type
-            await body_field.evaluate('el => el.innerHTML = ""')
-            await body_field.click()  # Ensure focus is on the body field
-            # Always use self.page.keyboard - Frame objects don't have .keyboard
-            # Keyboard input goes to the focused element regardless
-            await self.page.keyboard.type(body, delay=30)
+            # Contenteditable element - set innerHTML directly so HTML renders properly
+            # Using keyboard.type() would insert raw HTML tags as visible text
+            await body_field.evaluate('(el, html) => { el.innerHTML = html; }', body)
+            await body_field.click()  # Ensure focus after setting content
+            # Dispatch input event so FUB detects the content change
+            await body_field.evaluate('''el => {
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+                el.dispatchEvent(new Event("change", { bubbles: true }));
+            }''')
         else:
             # Standard textarea
             await body_field.fill("")
