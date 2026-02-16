@@ -4,15 +4,20 @@ import Link from "next/link";
 import {
   ArrowRight,
   BarChart3,
+  Bot,
+  Brain,
   Check,
   Clock,
   DollarSign,
   FileSearch,
   Home,
   Mail,
+  MessageSquare,
   Phone,
   Search,
   Shield,
+  Sparkles,
+  Target,
   UserCheck,
   Users,
   Zap,
@@ -57,6 +62,12 @@ export default function HomePage() {
                 Features
               </button>
               <button
+                onClick={() => document.getElementById("ai-agent")?.scrollIntoView({ behavior: "smooth" })}
+                className="text-sm font-medium hover:text-primary"
+              >
+                AI Agent
+              </button>
+              <button
                 onClick={() => document.getElementById("enrichment")?.scrollIntoView({ behavior: "smooth" })}
                 className="text-sm font-medium hover:text-primary"
               >
@@ -95,19 +106,20 @@ export default function HomePage() {
           <div className="container relative pt-20 pb-24 md:pt-32 md:pb-36">
             <div className="grid gap-8 md:grid-cols-2 items-center">
               <div className="flex flex-col gap-6">
-                <div className="inline-flex items-center rounded-full border px-3 py-1 text-sm w-fit">
-                  <span className="font-medium">Lead Organization & Enhancement Platform</span>
+                <div className="inline-flex items-center rounded-full border px-3 py-1 text-sm w-fit gap-2">
+                  <Sparkles className="h-3.5 w-3.5 text-blue-600" />
+                  <span className="font-medium">AI-Powered Lead Management for Real Estate</span>
                 </div>
                 <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight">
-                  Organize, Enrich & Convert{" "}
+                  Your AI Agent That{" "}
                   <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-                    More Leads
+                    Never Sleeps
                   </span>
                 </h1>
                 <p className="text-lg text-muted-foreground md:text-xl">
-                  The complete platform for real estate professionals. Aggregate leads from
-                  all referral sources, enrich contact data instantly, and stay compliant
-                  with DNC regulations - all integrated with Follow Up Boss.
+                  Aggregate leads from every referral source, enrich contacts instantly,
+                  and let your AI agent engage new leads in under 60 seconds &mdash; 24/7.
+                  All integrated with Follow Up Boss.
                 </p>
                 <div className="flex flex-col sm:flex-row gap-4">
                   <Button size="lg" asChild>
@@ -116,8 +128,18 @@ export default function HomePage() {
                     </Link>
                   </Button>
                   <Button size="lg" variant="outline" asChild>
-                    <Link href="#features">See How It Works</Link>
+                    <Link href="#ai-agent">See the AI Agent</Link>
                   </Button>
+                </div>
+                <div className="flex items-center gap-6 text-sm text-muted-foreground">
+                  <div className="flex items-center gap-1.5">
+                    <Check className="h-4 w-4 text-green-600" />
+                    <span>No credit card required</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Check className="h-4 w-4 text-green-600" />
+                    <span>Works with Follow Up Boss</span>
+                  </div>
                 </div>
               </div>
               <div className="relative hidden md:block">
@@ -126,7 +148,18 @@ export default function HomePage() {
                   <div className="space-y-4">
                     <div className="flex items-center gap-4">
                       <div className="h-10 w-10 rounded-full bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center">
-                        <Zap className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                        <Bot className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                      </div>
+                      <div>
+                        <h3 className="font-medium">AI Lead Agent</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Instant outreach + 17-step follow-up sequences
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="h-10 w-10 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center">
+                        <Zap className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
                       </div>
                       <div>
                         <h3 className="font-medium">Lead Aggregation</h3>
@@ -136,8 +169,8 @@ export default function HomePage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
-                      <div className="h-10 w-10 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center">
-                        <Search className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
+                      <div className="h-10 w-10 rounded-full bg-green-100 dark:bg-green-900/50 flex items-center justify-center">
+                        <Search className="h-5 w-5 text-green-600 dark:text-green-400" />
                       </div>
                       <div>
                         <h3 className="font-medium">Contact Enrichment</h3>
@@ -147,8 +180,8 @@ export default function HomePage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
-                      <div className="h-10 w-10 rounded-full bg-green-100 dark:bg-green-900/50 flex items-center justify-center">
-                        <Shield className="h-5 w-5 text-green-600 dark:text-green-400" />
+                      <div className="h-10 w-10 rounded-full bg-purple-100 dark:bg-purple-900/50 flex items-center justify-center">
+                        <Shield className="h-5 w-5 text-purple-600 dark:text-purple-400" />
                       </div>
                       <div>
                         <h3 className="font-medium">DNC Compliance</h3>
@@ -157,18 +190,114 @@ export default function HomePage() {
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <div className="h-10 w-10 rounded-full bg-purple-100 dark:bg-purple-900/50 flex items-center justify-center">
-                        <Users className="h-5 w-5 text-purple-600 dark:text-purple-400" />
-                      </div>
-                      <div>
-                        <h3 className="font-medium">FUB Integration</h3>
-                        <p className="text-sm text-muted-foreground">
-                          Seamless Follow Up Boss embedded app and webhooks
-                        </p>
-                      </div>
-                    </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Speed-to-Lead Stats Banner */}
+        <section className="border-y bg-muted/30">
+          <div className="container py-10">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+              <div>
+                <div className="text-3xl md:text-4xl font-bold text-primary">&lt;60s</div>
+                <p className="text-sm text-muted-foreground mt-1">Average response time</p>
+              </div>
+              <div>
+                <div className="text-3xl md:text-4xl font-bold text-primary">21x</div>
+                <p className="text-sm text-muted-foreground mt-1">More likely to qualify</p>
+              </div>
+              <div>
+                <div className="text-3xl md:text-4xl font-bold text-primary">24/7</div>
+                <p className="text-sm text-muted-foreground mt-1">Always-on engagement</p>
+              </div>
+              <div>
+                <div className="text-3xl md:text-4xl font-bold text-primary">17</div>
+                <p className="text-sm text-muted-foreground mt-1">Automated follow-up steps</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* AI Agent Section */}
+        <section id="ai-agent" className="relative py-16 md:py-24 overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-b from-violet-50/50 to-blue-50/50 dark:from-violet-950/10 dark:to-blue-950/10" />
+          <div className="container relative">
+            <div className="text-center mb-14">
+              <div className="inline-flex items-center gap-2 mb-4">
+                <Bot className="h-5 w-5 text-violet-600" />
+                <span className="text-sm font-medium text-violet-600 uppercase tracking-wide">
+                  AI Lead Agent
+                </span>
+              </div>
+              <h2 className="text-3xl font-bold tracking-tight md:text-4xl">
+                Your Tireless AI Sales Assistant
+              </h2>
+              <p className="mt-4 text-lg text-muted-foreground max-w-3xl mx-auto">
+                The moment a new lead comes in, your AI agent sends a personalized
+                SMS &mdash; then runs an intelligent 17-step follow-up sequence of texts
+                and emails over weeks, all while you focus on closing deals.
+              </p>
+            </div>
+
+            {/* AI Feature Grid */}
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 max-w-6xl mx-auto">
+              {aiFeatures.map((feature) => (
+                <div
+                  key={feature.title}
+                  className="rounded-xl border bg-background p-6 shadow-sm transition-all hover:shadow-md hover:border-violet-500/50"
+                >
+                  <div className="mb-4 h-12 w-12 rounded-lg bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center">
+                    <feature.icon className="h-6 w-6 text-violet-600 dark:text-violet-400" />
+                  </div>
+                  <h3 className="text-lg font-semibold">{feature.title}</h3>
+                  <p className="mt-2 text-sm text-muted-foreground">{feature.description}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* AI How It Works */}
+            <div className="mt-16 max-w-5xl mx-auto">
+              <h3 className="text-2xl font-bold text-center mb-10">How the AI Agent Works</h3>
+              <div className="grid md:grid-cols-4 gap-6">
+                {aiSteps.map((step, index) => (
+                  <div key={step.title} className="relative text-center">
+                    {index < aiSteps.length - 1 && (
+                      <div className="hidden md:block absolute top-8 left-[60%] w-[80%] border-t-2 border-dashed border-violet-300 dark:border-violet-700" />
+                    )}
+                    <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-violet-100 dark:bg-violet-900/40 mb-4 relative">
+                      <step.icon className="h-7 w-7 text-violet-600 dark:text-violet-400" />
+                      <span className="absolute -top-1 -right-1 h-6 w-6 rounded-full bg-violet-600 text-white text-xs font-bold flex items-center justify-center">
+                        {index + 1}
+                      </span>
+                    </div>
+                    <h4 className="font-semibold mb-1">{step.title}</h4>
+                    <p className="text-sm text-muted-foreground">{step.description}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* AI Differentiator Callout */}
+            <div className="mt-14 max-w-4xl mx-auto rounded-xl border-2 border-violet-200 dark:border-violet-800 bg-violet-50/50 dark:bg-violet-950/20 p-8">
+              <div className="flex flex-col md:flex-row items-start gap-6">
+                <div className="flex-shrink-0">
+                  <div className="h-14 w-14 rounded-full bg-violet-100 dark:bg-violet-900/50 flex items-center justify-center">
+                    <Brain className="h-7 w-7 text-violet-600 dark:text-violet-400" />
+                  </div>
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold mb-2">Not Just Templates &mdash; Real AI Conversations</h3>
+                  <p className="text-muted-foreground">
+                    Unlike drip campaigns that send the same canned message to everyone,
+                    LeadSynergy&apos;s AI agent analyzes each lead&apos;s context &mdash; their inquiry,
+                    property interests, location, and stage &mdash; to craft genuinely personalized
+                    messages. It adapts tone and content for each follow-up, knows when to push
+                    and when to back off, and automatically hands off to your team when a lead
+                    is ready to talk.
+                  </p>
                 </div>
               </div>
             </div>
@@ -329,7 +458,7 @@ export default function HomePage() {
             </h2>
             <p className="mt-4 text-lg text-muted-foreground max-w-2xl mx-auto">
               Choose the plan that fits your needs. All plans include lead aggregation,
-              enrichment credits, and DNC checking.
+              enrichment credits, DNC checking, and AI agent access.
             </p>
           </div>
 
@@ -397,11 +526,12 @@ export default function HomePage() {
           <div className="container py-16 md:py-24">
             <div className="flex flex-col items-center text-center">
               <h2 className="text-3xl font-bold tracking-tight text-white md:text-4xl">
-                Ready to Organize & Enrich Your Leads?
+                Stop Losing Leads to Slow Response Times
               </h2>
               <p className="mt-4 text-lg text-white/80 max-w-2xl">
-                Streamline your referral lead management and close more deals
-                with automated status syncing and enriched data.
+                Every minute you wait to respond, the chance of qualifying a lead drops
+                dramatically. Let your AI agent respond instantly while you focus on
+                closing deals.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 mt-8">
                 <Button size="lg" variant="secondary" asChild>
@@ -430,7 +560,7 @@ export default function HomePage() {
                 <span className="text-xl font-bold">LeadSynergy</span>
               </div>
               <p className="mt-4 text-sm text-muted-foreground">
-                The complete lead organization and enhancement platform for real
+                AI-powered lead management and follow-up platform for real
                 estate professionals.
               </p>
             </div>
@@ -438,6 +568,11 @@ export default function HomePage() {
             <div>
               <h4 className="font-semibold mb-4">Product</h4>
               <ul className="space-y-2 text-sm text-muted-foreground">
+                <li>
+                  <Link href="/#ai-agent" className="hover:text-foreground">
+                    AI Agent
+                  </Link>
+                </li>
                 <li>
                   <Link href="/#features" className="hover:text-foreground">
                     Lead Aggregation
@@ -507,6 +642,70 @@ export default function HomePage() {
     </div>
   );
 }
+
+// AI Agent Features
+const aiFeatures = [
+  {
+    icon: Zap,
+    title: "Instant Lead Response",
+    description:
+      "New lead comes in? Your AI agent sends a personalized SMS within seconds. Research shows responding in under 5 minutes makes you 21x more likely to qualify a lead.",
+  },
+  {
+    icon: MessageSquare,
+    title: "17-Step Follow-Up Sequences",
+    description:
+      "Automated SMS and email sequences over weeks that adapt to each lead. No more leads slipping through the cracks because you forgot to follow up.",
+  },
+  {
+    icon: Brain,
+    title: "Contextual AI Messages",
+    description:
+      "Not canned templates. The AI analyzes each lead's inquiry, property interests, and stage to craft personalized messages that feel human.",
+  },
+  {
+    icon: Target,
+    title: "Smart Lead Qualification",
+    description:
+      "The AI scores and qualifies leads based on their responses and engagement. When they're ready, it hands off to your team with full context.",
+  },
+  {
+    icon: Clock,
+    title: "TCPA-Compliant Scheduling",
+    description:
+      "Messages are only sent during legal hours in the lead's timezone. Automatic cooldown periods prevent message clustering.",
+  },
+  {
+    icon: Sparkles,
+    title: "Customizable Personality",
+    description:
+      "Set your agent's tone — friendly casual, professional, enthusiastic, or consultative. It represents your brand, your way.",
+  },
+];
+
+// AI How It Works Steps
+const aiSteps = [
+  {
+    icon: Zap,
+    title: "Lead Arrives",
+    description: "New lead synced from any referral platform or FUB",
+  },
+  {
+    icon: Bot,
+    title: "AI Engages",
+    description: "Personalized SMS sent within seconds of arrival",
+  },
+  {
+    icon: MessageSquare,
+    title: "Follow-Up",
+    description: "17-step sequence of texts and emails over weeks",
+  },
+  {
+    icon: UserCheck,
+    title: "Handoff",
+    description: "Qualified lead handed to your team, ready to close",
+  },
+];
 
 // Lead Aggregation Features
 const aggregationFeatures = [
@@ -597,6 +796,7 @@ const plans = [
     description: "For agents starting with one referral platform",
     features: [
       "1 lead source connection",
+      "AI agent with SMS & email follow-ups",
       "Unlimited leads synced to FUB",
       "Bi-directional status updates",
       "Stage mapping",
@@ -612,6 +812,7 @@ const plans = [
     popular: true,
     features: [
       "3 lead source connections",
+      "AI agent with SMS & email follow-ups",
       "Custom stage mapping",
       "Commission tracking",
       "FUB embedded app",
@@ -626,6 +827,7 @@ const plans = [
     description: "For teams using all major referral platforms",
     features: [
       "5 lead source connections",
+      "AI agent with SMS & email follow-ups",
       "Advanced stage mapping",
       "Advanced commission tracking",
       "Team analytics dashboard",
