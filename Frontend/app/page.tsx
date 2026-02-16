@@ -3,6 +3,7 @@
 import Link from "next/link";
 import {
   ArrowRight,
+  ArrowLeftRight,
   BarChart3,
   Bot,
   Brain,
@@ -10,10 +11,13 @@ import {
   Clock,
   DollarSign,
   FileSearch,
+  Globe,
   Home,
+  Layers,
   Mail,
   MessageSquare,
   Phone,
+  RefreshCw,
   Search,
   Shield,
   Sparkles,
@@ -304,17 +308,122 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* Lead Aggregation Features */}
+        {/* Lead Sync & Aggregation Section */}
         <section id="features" className="container py-16 md:py-24">
-          <div className="text-center mb-12">
+          <div className="text-center mb-14">
+            <div className="inline-flex items-center gap-2 mb-4">
+              <RefreshCw className="h-5 w-5 text-blue-600" />
+              <span className="text-sm font-medium text-blue-600 uppercase tracking-wide">
+                Bi-Directional Sync
+              </span>
+            </div>
             <h2 className="text-3xl font-bold tracking-tight md:text-4xl">
-              Lead Aggregation & Automation
+              Every Referral Platform. One Dashboard. Always in Sync.
             </h2>
             <p className="mt-4 text-lg text-muted-foreground max-w-3xl mx-auto">
-              Centralize leads from all your referral sources and keep them synced with Follow Up Boss
+              LeadSynergy automatically pulls new leads from your referral platforms into
+              Follow Up Boss, then pushes status updates back &mdash; so your partners always
+              see the latest and you never miss a lead.
             </p>
           </div>
-          <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-3">
+
+          {/* Visual Sync Flow */}
+          <div className="max-w-5xl mx-auto mb-16">
+            <div className="grid md:grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-4 md:gap-2">
+              {/* Lead Sources */}
+              <div className="rounded-xl border-2 border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <Globe className="h-5 w-5 text-blue-600" />
+                  <h3 className="font-semibold text-blue-700 dark:text-blue-400">Referral Platforms</h3>
+                </div>
+                <div className="space-y-2.5">
+                  {["Homelight", "Redfin", "Referral Exchange", "Agent Pronto", "My Agent Finder"].map((source) => (
+                    <div key={source} className="flex items-center gap-2 text-sm">
+                      <div className="h-2 w-2 rounded-full bg-blue-500" />
+                      <span>{source}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Arrow */}
+              <div className="hidden md:flex flex-col items-center gap-1">
+                <ArrowLeftRight className="h-6 w-6 text-muted-foreground" />
+                <span className="text-[10px] text-muted-foreground font-medium">AUTO SYNC</span>
+              </div>
+
+              {/* LeadSynergy Hub */}
+              <div className="rounded-xl border-2 border-primary bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 p-6 shadow-md">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="h-8 w-8 rounded-md bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center">
+                    <span className="text-white font-bold text-xs">LS</span>
+                  </div>
+                  <h3 className="font-semibold">LeadSynergy</h3>
+                </div>
+                <div className="space-y-2.5 text-sm">
+                  <div className="flex items-center gap-2">
+                    <Layers className="h-3.5 w-3.5 text-primary" />
+                    <span>Aggregation</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Bot className="h-3.5 w-3.5 text-primary" />
+                    <span>AI Agent</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Search className="h-3.5 w-3.5 text-primary" />
+                    <span>Enrichment</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Shield className="h-3.5 w-3.5 text-primary" />
+                    <span>DNC Compliance</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <BarChart3 className="h-3.5 w-3.5 text-primary" />
+                    <span>Analytics</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Arrow */}
+              <div className="hidden md:flex flex-col items-center gap-1">
+                <ArrowLeftRight className="h-6 w-6 text-muted-foreground" />
+                <span className="text-[10px] text-muted-foreground font-medium">AUTO SYNC</span>
+              </div>
+
+              {/* FUB */}
+              <div className="rounded-xl border-2 border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <Users className="h-5 w-5 text-emerald-600" />
+                  <h3 className="font-semibold text-emerald-700 dark:text-emerald-400">Follow Up Boss</h3>
+                </div>
+                <div className="space-y-2.5 text-sm">
+                  <div className="flex items-center gap-2">
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>Leads auto-created</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>Stages mapped</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>Notes &amp; tags synced</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>Embedded app inside FUB</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>Status updates pushed back</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Sync Feature Details */}
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 max-w-6xl mx-auto">
             {aggregationFeatures.map((feature) => (
               <div
                 key={feature.title}
@@ -711,39 +820,39 @@ const aiSteps = [
 const aggregationFeatures = [
   {
     icon: Zap,
-    title: "Multi-Platform Aggregation",
+    title: "5+ Platform Aggregation",
     description:
-      "Pull leads from Homelight, Redfin, Referral Exchange, Agent Pronto, and more into one dashboard.",
+      "Automatically pull new leads from Homelight, Redfin, Referral Exchange, Agent Pronto, My Agent Finder, and more — no manual entry.",
   },
   {
-    icon: ArrowRight,
-    title: "FUB Auto-Sync",
+    icon: RefreshCw,
+    title: "Bi-Directional Status Sync",
     description:
-      "Automatically push lead status updates to all connected referral platforms in real-time.",
+      "Update a lead stage in FUB and it pushes back to the referral platform. Update it on the platform and it syncs to FUB. Always in sync, both directions.",
   },
   {
-    icon: Clock,
-    title: "Real-Time Updates",
+    icon: Layers,
+    title: "Stage Mapping",
     description:
-      "Instant synchronization ensures partners always have the latest lead information.",
+      "Map each platform's unique statuses to your FUB stages. \"Active\" on Homelight becomes \"New Lead\" in FUB — you define the rules.",
   },
   {
     icon: DollarSign,
     title: "Commission Tracking",
     description:
-      "Track referral fees and commissions across all your pay-per-close partnerships.",
+      "Track referral fees and commissions across all your pay-per-close partnerships. Know exactly what you owe and what you're earning.",
   },
   {
     icon: Users,
     title: "Team Management",
     description:
-      "Assign leads to team members with customizable round-robin and rule-based distribution.",
+      "Assign leads to team members with customizable round-robin and rule-based distribution. Everyone sees their own pipeline.",
   },
   {
     icon: BarChart3,
     title: "Performance Analytics",
     description:
-      "Track lead conversion rates, response times, and team performance metrics.",
+      "See which referral sources convert best, track response times, and measure team performance across all platforms.",
   },
 ];
 
