@@ -8,7 +8,7 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException, InvalidSessionIdException
 from datetime import datetime, timedelta, timezone
 import time
 import random
@@ -609,14 +609,9 @@ class MyAgentFinderService(BaseReferralService):
                     elements = self.driver_service.driver.find_elements(By.CSS_SELECTOR, selector)
                     for elem in elements:
                         if elem.is_displayed():
-                            # Check if it looks like a search box (not a status dropdown)
+                            # Check if it looks like a search box
                             placeholder = elem.get_attribute('placeholder') or ''
                             elem_type = elem.get_attribute('type') or ''
-                            role = elem.get_attribute('role') or ''
-
-                            # Skip autocomplete dropdowns (status selector)
-                            if role == 'combobox':
-                                continue
 
                             if 'search' in placeholder.lower() or elem_type == 'search':
                                 search_box = elem
@@ -653,43 +648,43 @@ class MyAgentFinderService(BaseReferralService):
                 search_term = lead_name.split()[0] if ' ' in lead_name else lead_name
                 logger.info(f"Searching for '{search_term}' (from full name '{lead_name}')")
 
-                # Clear existing text
-                search_box.clear()
-                self.wis.human_delay(0.5, 1)
+                # Clear existing text using Select All + Delete for React compatibility
+                from selenium.webdriver.common.keys import Keys
+                search_box.click()
+                self.wis.human_delay(0.3, 0.5)
+                search_box.send_keys(Keys.CONTROL + "a")
+                search_box.send_keys(Keys.DELETE)
+                self.wis.human_delay(0.3, 0.5)
 
-                # Type the search term
+                # Type the search term character by character (triggers React onChange)
                 self.wis.simulated_typing(search_box, search_term)
 
-                # Dispatch input event for React/MUI components
+                # Dispatch React-compatible events to ensure state updates
                 self.driver_service.driver.execute_script("""
                     var el = arguments[0];
-                    var event = new Event('input', { bubbles: true });
-                    el.dispatchEvent(event);
-                    var changeEvent = new Event('change', { bubbles: true });
-                    el.dispatchEvent(changeEvent);
-                """, search_box)
-                logger.info(f"Dispatched input/change events for React")
+                    // Set the native value setter to trigger React's onChange
+                    var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    ).set;
+                    nativeInputValueSetter.call(el, arguments[1]);
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                """, search_box, search_term)
+                logger.info(f"Dispatched React-compatible input/change events")
 
-                # Small delay to let the filter process
-                self.wis.human_delay(1, 2)
+                # Wait for the client-side filter to process (DO NOT press Enter -
+                # MAF uses client-side filtering and Enter may cause form submission)
+                logger.info(f"Waiting for filter to process...")
+                self.wis.human_delay(3, 5)
 
-                # Press Enter to trigger search (some sites require this)
-                from selenium.webdriver.common.keys import Keys
-                search_box.send_keys(Keys.RETURN)
-                logger.info(f"Sent Enter key to trigger search")
-
-                # Wait for search results to load - look for table rows to appear
-                logger.info(f"Waiting for search results...")
-                self.wis.human_delay(2, 3)
-
-                # Wait for table to load (additional wait for dynamic content)
+                # Wait for table to load with filtered results
                 try:
                     WebDriverWait(self.driver_service.driver, 10).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "tbody tr"))
                     )
                     logger.info("Table rows found after search")
                 except TimeoutException:
-                    logger.warning("Timeout waiting for table rows after search")
+                    logger.warning("Timeout waiting for table rows after search - filter may have returned no results")
 
                 # Additional short delay for any animations/filtering
                 self.wis.human_delay(1, 2)
@@ -1733,6 +1728,27 @@ class MyAgentFinderService(BaseReferralService):
                             )
                         continue
 
+                    # Session health check - re-login if session died
+                    if not self.driver_service.is_alive():
+                        logger.warning(f"[{i+1}/{len(leads_data)}] Browser session died - re-initializing...")
+                        try:
+                            if self.driver_service.driver:
+                                self.driver_service.driver.quit()
+                        except Exception:
+                            pass
+                        self.driver_service.driver = None
+                        if not self.login():
+                            logger.error("Re-login failed after session death - aborting remaining leads")
+                            for remaining_lead, _ in leads_data[i:]:
+                                results["failed"] += 1
+                                results["details"].append({
+                                    "name": f"{remaining_lead.first_name} {remaining_lead.last_name}",
+                                    "status": "failed",
+                                    "error": "Session died and re-login failed"
+                                })
+                            break
+                        logger.info("Re-login successful - continuing sync")
+
                     # Navigate to All Active referrals page between leads
                     if i > 0:
                         self.driver_service.get_page(REFERRALS_URL)
@@ -1799,6 +1815,31 @@ class MyAgentFinderService(BaseReferralService):
                                 skipped=results["skipped"],
                                 message=error_msg
                             )
+
+                except (InvalidSessionIdException, WebDriverException) as e:
+                    error_str = str(e)
+                    is_session_dead = "invalid session id" in error_str.lower() or isinstance(e, InvalidSessionIdException)
+                    results["failed"] += 1
+                    results["details"].append({
+                        "name": lead_name,
+                        "status": "failed",
+                        "error": f"Session error: {error_str[:100]}"
+                    })
+                    logger.error(f"Session error processing {lead_name}: {error_str[:100]}")
+
+                    if is_session_dead:
+                        logger.warning("Session is dead - will attempt re-login on next lead")
+                        # Don't try to do anything with the dead driver here,
+                        # the health check at top of loop will handle re-login
+
+                    if tracker and sync_id:
+                        tracker.update_progress(
+                            sync_id,
+                            successful=results["successful"],
+                            failed=results["failed"],
+                            skipped=results["skipped"],
+                            message=f"Session error on {lead_name}, will retry session"
+                        )
 
                 except Exception as e:
                     results["failed"] += 1

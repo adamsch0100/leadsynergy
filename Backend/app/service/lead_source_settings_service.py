@@ -1569,7 +1569,8 @@ class LeadSourceSettingsService:
                 status=template_status,
                 organization_id=getattr(template_lead, 'organization_id', None),
                 min_sync_interval_hours=min_sync_interval_hours,
-                same_status_note=same_status_note
+                same_status_note=same_status_note,
+                force_sync=force_sync
             )
 
             tracker.update_progress(sync_id, message="Starting Agent Pronto login (magic link)...")
@@ -1856,6 +1857,15 @@ class LeadSourceSettingsService:
     ) -> None:
         """Generic sync method for all lead sources with progress tracking"""
         try:
+            # Initialize tracker status so update_progress/complete_sync calls work
+            tracker.start_sync(
+                sync_id=sync_id,
+                source_id="",
+                source_name=source_name,
+                total_leads=len(leads),
+                user_id=user_id
+            )
+
             # Get the lead source settings
             source_settings = self.get_by_source_name(source_name)
             if not source_settings or not source_settings.is_active:

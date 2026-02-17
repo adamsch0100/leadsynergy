@@ -8,6 +8,7 @@ from app.referral_scrapers.utils.web_interaction_simulator import (
 )
 from selenium.common.exceptions import TimeoutException
 from datetime import datetime, timedelta, timezone
+import os
 import time
 import random
 import logging
@@ -201,11 +202,93 @@ class RedfinService(BaseReferralService):
             self.is_logged_in = False
             return False
 
+    def _get_cookie_path(self):
+        """Get path for storing session cookies."""
+        import tempfile
+        cookie_dir = os.path.join(tempfile.gettempdir(), "leadsynergy_cookies")
+        os.makedirs(cookie_dir, exist_ok=True)
+        return os.path.join(cookie_dir, "redfin_cookies.json")
+
+    def _save_cookies(self):
+        """Save browser cookies to file for session reuse."""
+        try:
+            import json
+            cookies = self.driver_service.driver.get_cookies()
+            cookie_path = self._get_cookie_path()
+            with open(cookie_path, 'w') as f:
+                json.dump(cookies, f)
+            print(f"[Cookies] Saved {len(cookies)} cookies to {cookie_path}")
+        except Exception as e:
+            print(f"[Cookies] Failed to save cookies: {e}")
+
+    def _try_cookie_login(self) -> bool:
+        """Try to login using saved cookies from a previous session."""
+        try:
+            import json
+            cookie_path = self._get_cookie_path()
+            if not os.path.exists(cookie_path):
+                print("[Cookies] No saved cookies found")
+                return False
+
+            # Check cookie file age (expire after 24 hours)
+            file_age = time.time() - os.path.getmtime(cookie_path)
+            if file_age > 86400:  # 24 hours
+                print(f"[Cookies] Cookies expired ({file_age/3600:.1f} hours old)")
+                os.remove(cookie_path)
+                return False
+
+            with open(cookie_path, 'r') as f:
+                cookies = json.load(f)
+
+            if not cookies:
+                return False
+
+            print(f"[Cookies] Loading {len(cookies)} saved cookies ({file_age/60:.0f} min old)")
+
+            # Navigate to Redfin domain first (needed to set cookies)
+            self.driver_service.get_page("https://www.redfin.com")
+            self.wis.human_delay(1, 2)
+
+            # Add each cookie
+            for cookie in cookies:
+                try:
+                    # Remove problematic fields
+                    for field in ['sameSite', 'httpOnly', 'storeId']:
+                        cookie.pop(field, None)
+                    self.driver_service.driver.add_cookie(cookie)
+                except Exception:
+                    pass
+
+            # Navigate to dashboard to verify
+            self.driver_service.get_page(self.dashboard_url)
+            self.wis.human_delay(3, 5)
+
+            current_url = self.driver_service.get_current_url()
+            if current_url and "partnerCustomers" in current_url:
+                edit_buttons = self.driver_service.find_elements(
+                    By.CSS_SELECTOR, ".edit-status-button"
+                )
+                if edit_buttons:
+                    self.is_logged_in = True
+                    print(f"[Cookies] SUCCESS - Session restored! Found {len(edit_buttons)} customers")
+                    return True
+
+            print("[Cookies] Saved cookies didn't work, proceeding with fresh login")
+            return False
+
+        except Exception as e:
+            print(f"[Cookies] Error loading cookies: {e}")
+            return False
+
     def login2(self) -> bool:
         if not self.driver_service.initialize_driver():
             return False
 
         try:
+            # First, try using saved cookies from a previous successful login
+            if self._try_cookie_login():
+                return True
+
             print("Navigating to Redfin login page...")
             self.driver_service.get_page(self.base_url)
             self.wis.human_delay(2, 5)
@@ -218,8 +301,14 @@ class RedfinService(BaseReferralService):
                 # Try Google OAuth login
                 google_login_success = self._try_google_login()
                 if google_login_success:
+                    # Save cookies for future sessions to skip 2FA
+                    self._save_cookies()
                     return True
                 print("[Login] Google login failed, trying direct login as fallback...")
+                # Navigate back to Redfin login page - browser may be stuck on Google OAuth page
+                print("[Login] Navigating back to Redfin login page for direct login...")
+                self.driver_service.get_page(self.base_url)
+                self.wis.human_delay(2, 5)
 
             # Try direct email/password login
             email_field = self.driver_service.find_element(
@@ -248,7 +337,10 @@ class RedfinService(BaseReferralService):
                 print("2FA handled successfully")
 
             # Verify login success
-            return self._verify_login_success()
+            result = self._verify_login_success()
+            if result:
+                self._save_cookies()
+            return result
 
         except Exception as e:
             print(f"Login failed: {e}")
@@ -256,12 +348,13 @@ class RedfinService(BaseReferralService):
             return False
 
     def _get_login_method(self) -> str:
-        """Get the login method from lead source settings metadata"""
+        """Get the login method from lead source settings metadata.
+        Default is 'google' for Redfin.
+        """
         try:
             from app.service.lead_source_settings_service import LeadSourceSettingsSingleton
             settings_service = LeadSourceSettingsSingleton.get_instance()
 
-            # Try to get user-specific settings first
             if self.user_id:
                 sources = settings_service.get_all(
                     filters={"source_name": "Redfin"},
@@ -276,15 +369,11 @@ class RedfinService(BaseReferralService):
                 if isinstance(metadata, str):
                     import json
                     metadata = json.loads(metadata)
-
                 if metadata:
-                    login_method = metadata.get('login_method', 'google')
-                    return login_method
-
+                    return metadata.get('login_method', 'google')
         except Exception as e:
-            logger.warning(f"Could not load login method from database: {e}")
+            logger.warning(f"Could not get login method from settings: {e}")
 
-        # Default to google for Redfin
         return "google"
 
     def _try_google_login(self) -> bool:
@@ -293,24 +382,12 @@ class RedfinService(BaseReferralService):
             print("[Google Login] Looking for Google sign-in button...")
 
             # Find "Sign in with Google" button
+            # Verified selectors as of Feb 2026 from actual DOM inspection
             google_button_selectors = [
-                'button.googleSignIn',  # CORRECT selector as of Feb 2026
-                'button.bp-Button.googleSignIn',
-                'button[data-rf-test-name="google_login"]',
-                '//button[contains(text(), "Sign in with Google")]',
-                '//button[contains(text(), "Google")]',
-                'button[aria-label*="Google"]',
-                'button[aria-label*="google"]',
-                'a[href*="google"]',
-                '[class*="google"][role="button"]',
-                'button[class*="googleSignIn"]',
-                '[class*="google"]',
-                '[class*="Google"]',
-                '//a[contains(text(), "Google")]',
-                '//div[contains(text(), "Google")]//ancestor::button',
-                '//div[contains(text(), "Google")]//ancestor::a',
-                'button[class*="social"]',
-                'a[class*="social"]',
+                'button[data-rf-test-id="googleSignIn"]',  # Primary - Redfin's test ID
+                'button.google-btn',                        # Class-based fallback
+                '.GoogleLogin .loginButton button',         # Container-based fallback
+                '//span[contains(text(), "Sign in with Google")]//ancestor::button',  # XPath text-based
             ]
 
             google_button = None
@@ -426,9 +503,18 @@ class RedfinService(BaseReferralService):
                     if next_button:
                         self.driver_service.safe_click(next_button)
                         print("[Google OAuth] Clicked Next after email")
-                        self.wis.human_delay(3, 5)
+                        self.wis.human_delay(5, 8)  # Longer wait for Google's password page animation
 
-                # Enter password
+                # Debug: what page are we on after email Next?
+                try:
+                    current_url = self.driver_service.get_current_url()
+                    page_text = self.driver_service.driver.find_element(By.TAG_NAME, "body").text[:300]
+                    print(f"[Google OAuth] After email Next - URL: {current_url[:100]}")
+                    print(f"[Google OAuth] Page text: {page_text[:200]}")
+                except Exception as dbg_e:
+                    print(f"[Google OAuth] Debug error: {dbg_e}")
+
+                # Enter password - wait for field to be interactable (Google animates this)
                 password_selectors = [
                     'input[type="password"]',
                     'input[name="password"]',
@@ -436,16 +522,33 @@ class RedfinService(BaseReferralService):
                 ]
 
                 password_field = None
-                for selector in password_selectors:
+                for attempt in range(3):
+                    for selector in password_selectors:
+                        try:
+                            from selenium.webdriver.support.ui import WebDriverWait
+                            from selenium.webdriver.support import expected_conditions as EC
+                            password_field = WebDriverWait(self.driver_service.driver, 10).until(
+                                EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                            )
+                            if password_field:
+                                break
+                        except:
+                            continue
+                    if password_field:
+                        break
+                    # Debug: dump all inputs on failed attempt
                     try:
-                        password_field = self.driver_service.find_element(By.CSS_SELECTOR, selector)
-                        if password_field:
-                            break
+                        all_inputs = self.driver_service.driver.find_elements(By.TAG_NAME, "input")
+                        input_info = [(inp.get_attribute("type"), inp.get_attribute("name"), inp.is_displayed()) for inp in all_inputs]
+                        print(f"[Google OAuth] Password field not interactable (attempt {attempt+1}/3). Inputs on page: {input_info}")
                     except:
-                        continue
+                        print(f"[Google OAuth] Password field not interactable yet, retrying ({attempt+1}/3)...")
+                    self.wis.human_delay(3, 5)
 
                 if password_field:
                     print("[Google OAuth] Entering password")
+                    password_field.click()
+                    self.wis.human_delay(0.5, 1)
                     self.wis.simulated_typing(password_field, self.password)
                     self.wis.human_delay(1, 2)
 
@@ -474,14 +577,34 @@ class RedfinService(BaseReferralService):
                         print("[Google OAuth] Clicked Sign in")
                         self.wis.human_delay(5, 8)
 
+                if not password_field:
+                    print("[Google OAuth] ERROR: Could not find password field after all retries")
+                    # Take screenshot for debugging
+                    try:
+                        import tempfile
+                        ss_path = os.path.join(tempfile.gettempdir(), "redfin_google_no_password.png")
+                        self.driver_service.driver.save_screenshot(ss_path)
+                        print(f"[Google OAuth] Screenshot saved: {ss_path}")
+                    except:
+                        pass
+                    return False
+
                 # Check for Google 2FA
                 if self._check_and_handle_google_2fa():
                     print("[Google OAuth] Google 2FA handled")
 
-            # Switch back to main window if we were in popup
-            if len(all_windows) > 1:
-                self.driver_service.driver.switch_to.window(original_window)
+            # Switch back to main window (popup may have closed after OAuth)
+            try:
+                current_handles = self.driver_service.driver.window_handles
+                if original_window in current_handles:
+                    self.driver_service.driver.switch_to.window(original_window)
+                    print("[Google OAuth] Switched back to main Redfin window")
+                elif current_handles:
+                    self.driver_service.driver.switch_to.window(current_handles[0])
+                    print("[Google OAuth] Switched to remaining window")
                 self.wis.human_delay(3, 5)
+            except Exception as e:
+                print(f"[Google OAuth] Window switch note: {e}")
 
             # Verify we're logged into Redfin
             return self._verify_login_success()
@@ -493,7 +616,14 @@ class RedfinService(BaseReferralService):
             return False
 
     def _check_and_handle_google_2fa(self) -> bool:
-        """Handle Google's 2FA if required"""
+        """Handle Google's 2FA if required.
+
+        This account uses Google Prompt (phone notification) as the primary 2FA method.
+        The flow is:
+        1. Detect 2FA is required
+        2. Wait for user to approve on their phone (Google sends a notification)
+        3. The page auto-advances after approval
+        """
         try:
             self.wis.human_delay(2, 3)
             page_source = self.driver_service.driver.page_source.lower()
@@ -505,197 +635,82 @@ class RedfinService(BaseReferralService):
                 "verification code",
                 "enter the code",
                 "check your phone",
+                "check your galaxy",
+                "check your iphone",
+                "tap yes",
+                "sent a notification",
             ]
 
             if not any(indicator in page_source for indicator in twofa_indicators):
                 return True  # No 2FA needed
 
-            print("[Google 2FA] Google 2FA detected...")
+            print("[Google 2FA] Google 2FA detected - phone prompt verification")
+            print("[Google 2FA] Waiting for approval on phone...")
+            print("[Google 2FA] Please tap 'Yes' on the Google prompt on your phone")
 
-            # If it's showing "Check your phone", click "Try another way" to get email option
-            if "check your phone" in page_source or "try another way" in page_source:
-                print("[Google 2FA] Phone verification detected - clicking 'Try another way'...")
-                try_another_selectors = [
-                    '//button[contains(text(), "Try another way")]',
-                    '//a[contains(text(), "Try another way")]',
-                    '//span[contains(text(), "Try another way")]',
-                    '[data-challengetype]',
-                ]
+            # Wait for the 2FA to be approved (poll for page change)
+            # Google Prompt: user taps Yes on phone, page auto-redirects
+            # The popup may also close after approval (Google OAuth callback)
+            max_wait_seconds = 120  # 2 minutes to approve on phone
+            poll_interval = 3
+            elapsed = 0
 
-                try_another = None
-                for selector in try_another_selectors:
-                    try:
-                        if selector.startswith('//'):
-                            try_another = self.driver_service.find_element(By.XPATH, selector)
-                        else:
-                            try_another = self.driver_service.find_element(By.CSS_SELECTOR, selector)
-                        if try_another:
-                            break
-                    except:
-                        continue
+            while elapsed < max_wait_seconds:
+                time.sleep(poll_interval)
+                elapsed += poll_interval
 
-                if try_another:
-                    self.driver_service.safe_click(try_another)
-                    print("[Google 2FA] Clicked 'Try another way'")
-                    self.wis.human_delay(2, 3)
-
-                    # Now look for email verification option specifically
-                    # Google shows multiple options like:
-                    #   "Get a verification code at (***) ***-1234" (SMS - DO NOT select)
-                    #   "Get a verification code at a****@s******.com" (Email - SELECT THIS)
-                    # We need to find the one with "@" (email address indicator)
-                    page_source = self.driver_service.driver.page_source.lower()
-
-                    # First try Google's internal data attributes for email challenge
-                    email_option = None
-                    email_specific_selectors = [
-                        '[data-challengetype="12"]',  # Email challenge type
-                        '[data-sendmethod="EMAIL"]',
-                    ]
-
-                    for selector in email_specific_selectors:
-                        try:
-                            email_option = self.driver_service.find_element(By.CSS_SELECTOR, selector)
-                            if email_option:
-                                print(f"[Google 2FA] Found email option via: {selector}")
-                                break
-                        except:
-                            continue
-
-                    # If data attributes didn't work, find all "Get a verification code" options
-                    # and pick the one containing "@" (email) rather than phone number
-                    if not email_option:
-                        try:
-                            all_options = self.driver_service.find_elements(
-                                By.XPATH, "//*[contains(text(), 'verification code') or contains(text(), 'Verification code')]"
-                            )
-                            print(f"[Google 2FA] Found {len(all_options)} verification options")
-                            for opt in all_options:
-                                opt_text = opt.text.strip()
-                                print(f"[Google 2FA]   Option: '{opt_text}'")
-                                # Select the one with "@" (email address)
-                                if "@" in opt_text:
-                                    email_option = opt
-                                    print(f"[Google 2FA] Found EMAIL option (contains @): '{opt_text}'")
-                                    break
-                            # If no "@" option found, try to find any option with "email" text
-                            if not email_option:
-                                for opt in all_options:
-                                    opt_text = opt.text.strip().lower()
-                                    if "email" in opt_text:
-                                        email_option = opt
-                                        print(f"[Google 2FA] Found email option by text")
-                                        break
-                        except Exception as e:
-                            print(f"[Google 2FA] Error finding options: {e}")
-
-                    # Fallback: try broader selectors
-                    if not email_option:
-                        fallback_selectors = [
-                            '//div[contains(text(), "email")]',
-                            '//li[contains(text(), "email")]',
-                            '//li[contains(text(), "@")]',
-                            '//div[contains(text(), "@")]',
-                        ]
-                        for selector in fallback_selectors:
-                            try:
-                                email_option = self.driver_service.find_element(By.XPATH, selector)
-                                if email_option:
-                                    print(f"[Google 2FA] Found email option via fallback: {selector}")
-                                    break
-                            except:
-                                continue
-
-                    if email_option:
-                        self.driver_service.safe_click(email_option)
-                        print("[Google 2FA] Selected email verification option")
-                        self.wis.human_delay(3, 5)
-                    else:
-                        print("[Google 2FA] WARNING: Could not find email-specific verification option")
-                        print("[Google 2FA] Page text (first 500 chars):")
-                        try:
-                            body = self.driver_service.driver.find_element(By.TAG_NAME, "body")
-                            print(f"[Google 2FA] {body.text[:500]}")
-                        except:
-                            pass
-
-            # Check if we have 2FA credentials
-            if not self.twofa_email or not self.twofa_app_password:
-                print("[Google 2FA] ERROR: No 2FA email credentials configured!")
-                return False
-
-            # First try to get a magic link from email (Google often sends these)
-            print("[Google 2FA] Checking for magic link in email...")
-            helper = Email2FAHelper(
-                email_address=self.twofa_email,
-                app_password=self.twofa_app_password
-            )
-
-            # Try to get verification link first
-            magic_link = helper.get_verification_link(
-                sender_contains="google",
-                link_contains="accounts.google.com",
-                max_age_seconds=180,
-                max_retries=10,
-                retry_delay=3.0
-            )
-
-            if magic_link:
-                print(f"[Google 2FA] Found magic link, navigating...")
-                # Open the magic link in the browser
-                self.driver_service.get_page(magic_link)
-                self.wis.human_delay(5, 8)
-                print("[Google 2FA] Clicked magic link from email")
-                return True
-
-            # If no magic link, try to get a 6-digit code
-            print("[Google 2FA] No magic link found, trying verification code...")
-            code = helper.get_verification_code(
-                sender_contains="google",
-                max_age_seconds=180,
-                max_retries=10,
-                retry_delay=2.0,
-                code_length=6
-            )
-
-            if not code:
-                print("[Google 2FA] ERROR: Could not retrieve 2FA code or link from email")
-                print("[Google 2FA] You may need to manually approve on your phone")
-                return False
-
-            print(f"[Google 2FA] Retrieved code: {code}")
-
-            # Find and fill the 2FA input
-            twofa_selectors = [
-                'input[name="totpPin"]',
-                'input[type="tel"]',
-                'input[name="idvPin"]',
-                '#totpPin',
-                'input[name="pin"]',
-                'input[aria-label*="code"]',
-            ]
-
-            twofa_input = None
-            for selector in twofa_selectors:
                 try:
-                    twofa_input = self.driver_service.find_element(By.CSS_SELECTOR, selector)
-                    if twofa_input:
-                        break
-                except:
-                    continue
+                    current_url = self.driver_service.get_current_url()
+                except Exception:
+                    # Window closed - could mean approval or failure
+                    # Only trust if enough time passed for user to actually tap
+                    if elapsed >= 10:
+                        print(f"[Google 2FA] Window closed after {elapsed}s - checking main window...")
+                        return True
+                    print(f"[Google 2FA] Window closed too quickly ({elapsed}s) - likely auth failure")
+                    return False
 
-            if twofa_input:
-                self.wis.simulated_typing(twofa_input, code)
-                self.wis.human_delay(1, 2)
+                # Google consent page = definite success (user approved 2FA, now authorizing app)
+                if "consent" in current_url and "google.com" in current_url:
+                    print(f"[Google 2FA] On Google consent page. 2FA approved! ({elapsed}s)")
+                    try:
+                        allow_btn = self.driver_service.find_element(By.CSS_SELECTOR, '#submit_approve_access, button[name="submit_approve_access"]')
+                        if allow_btn:
+                            self.driver_service.safe_click(allow_btn)
+                            print("[Google 2FA] Clicked 'Allow' on consent page")
+                            self.wis.human_delay(3, 5)
+                    except:
+                        pass
+                    return True
 
-                # Click verify/next
-                verify_button = self.driver_service.find_element(By.CSS_SELECTOR, 'button[type="submit"]')
-                if verify_button:
-                    self.driver_service.safe_click(verify_button)
-                    print("[Google 2FA] Submitted 2FA code")
-                    self.wis.human_delay(3, 5)
+                # Redirected to Redfin callback - only trust if enough time for user to tap
+                if "redfin.com" in current_url and "oauth_callback" in current_url and elapsed >= 10:
+                    print(f"[Google 2FA] Redirected to Redfin OAuth callback! ({elapsed}s)")
+                    return True
 
-            return True
+                # If redirected to redfin.com quickly (< 10s), 2FA was NOT approved - it's a failure redirect
+                if "redfin.com" in current_url and elapsed < 10:
+                    print(f"[Google 2FA] Quick redirect to Redfin ({elapsed}s) - 2FA likely failed/skipped")
+                    return False
+
+                # Check if 2FA text is gone (page moved to different state)
+                try:
+                    page_source = self.driver_service.driver.page_source.lower()
+                    still_on_2fa = any(ind in page_source for ind in twofa_indicators)
+                    if not still_on_2fa and elapsed >= 10:
+                        print(f"[Google 2FA] 2FA page cleared after {elapsed}s!")
+                        return True
+                except Exception:
+                    if elapsed >= 10:
+                        print(f"[Google 2FA] Page changed after {elapsed}s - checking...")
+                        return True
+                    return False
+
+                if elapsed % 15 == 0:
+                    print(f"[Google 2FA] Still waiting for phone approval... ({elapsed}s / {max_wait_seconds}s)")
+
+            print(f"[Google 2FA] Timed out after {max_wait_seconds}s waiting for phone approval")
+            return False
 
         except Exception as e:
             print(f"[Google 2FA] Error: {e}")

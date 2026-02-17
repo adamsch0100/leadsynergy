@@ -104,6 +104,103 @@ def process_scheduled_lead_sync() -> Dict[str, Any]:
     return {"processed_sources": len(summary), "details": summary}
 
 
+BULK_SYNC_PLATFORMS = [
+    'Referral Exchange', 'ReferralExchange', 'HomeLight',
+    'Redfin', 'Agent Pronto', 'MyAgentFinder'
+]
+
+
+@celery.task(bind=True, max_retries=1, time_limit=1800, soft_time_limit=1500)
+def bulk_sync_lead_sources(self) -> Dict[str, Any]:
+    """Bulk sync all lead sources that are due.
+
+    Uses the optimized bulk sync approach: login once per platform,
+    process all leads in a single browser session.
+    This is MUCH faster than the per-lead approach in process_scheduled_lead_sync.
+    """
+    import uuid
+    from app.service.sync_status_tracker import get_tracker
+
+    settings_service = LeadSourceSettingsSingleton.get_instance()
+    lead_service = LeadServiceSingleton.get_instance()
+    tracker = get_tracker()
+
+    due_sources = settings_service.get_sources_due_for_sync()
+    if not due_sources:
+        logger.info("Bulk sync: no lead sources due for synchronization.")
+        return {"processed_sources": 0, "details": []}
+
+    logger.info("Bulk sync: processing %d lead sources.", len(due_sources))
+    summary = []
+
+    for source_settings in due_sources:
+        source_name = source_settings.source_name
+
+        if source_name not in BULK_SYNC_PLATFORMS:
+            logger.info("Bulk sync: skipping unsupported platform '%s'", source_name)
+            continue
+
+        logger.info("Bulk sync: starting '%s'", source_name)
+        leads = lead_service.get_by_source(source_name, limit=10000, offset=0)
+
+        if not leads:
+            logger.info("Bulk sync: no leads for '%s'", source_name)
+            settings_service.mark_sync_completed(
+                source_settings.id, source_settings.sync_interval_days
+            )
+            summary.append({"source": source_name, "successful": 0, "failed": 0, "status": "no_leads"})
+            continue
+
+        user_id = getattr(leads[0], 'user_id', None)
+        if not user_id and hasattr(leads[0], 'organization_id'):
+            user_id = str(leads[0].organization_id)
+
+        sync_id = str(uuid.uuid4())
+
+        try:
+            settings_service.sync_all_sources_bulk_with_tracker(
+                sync_id=sync_id,
+                source_name=source_name,
+                leads=leads,
+                user_id=user_id,
+                tracker=tracker,
+                force_sync=False  # Respect per-lead intervals for routine syncs
+            )
+
+            status = tracker.get_status(sync_id)
+            result = {
+                "source": source_name,
+                "successful": status.get("successful", 0) if status else 0,
+                "failed": status.get("failed", 0) if status else 0,
+                "skipped": status.get("skipped", 0) if status else 0,
+                "status": status.get("status", "unknown") if status else "unknown",
+            }
+
+            # Mark sync completed and schedule next run
+            settings_service.mark_sync_completed(
+                source_settings.id,
+                source_settings.sync_interval_days,
+                sync_results=result,
+            )
+
+            logger.info(
+                "Bulk sync: '%s' done - %d updated, %d failed, %d skipped",
+                source_name, result["successful"], result["failed"], result.get("skipped", 0)
+            )
+            summary.append(result)
+
+        except Exception as exc:
+            logger.error("Bulk sync: error syncing '%s': %s", source_name, str(exc), exc_info=True)
+            settings_service.mark_sync_completed(
+                source_settings.id,
+                source_settings.sync_interval_days,
+                sync_results={"status": "error", "error": str(exc)},
+            )
+            summary.append({"source": source_name, "successful": 0, "failed": 0, "status": "error", "error": str(exc)})
+
+    return {"processed_sources": len(summary), "details": summary}
+
+
 def _get_lead_type_from_tags(lead) -> str:
     """Extract lead type (buyer/seller) from lead tags"""
     import json

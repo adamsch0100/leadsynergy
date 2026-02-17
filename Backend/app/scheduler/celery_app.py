@@ -33,6 +33,12 @@ celery.conf.beat_schedule = {
         'task': 'app.scheduler.tasks.process_scheduled_lead_sync',
         'schedule': crontab(minute=0),
     },
+    # Bulk sync: login once per platform, process all leads efficiently
+    # Runs every 6 hours (0:30, 6:30, 12:30, 18:30 UTC)
+    'bulk_sync_lead_sources': {
+        'task': 'app.scheduler.tasks.bulk_sync_lead_sources',
+        'schedule': crontab(minute=30, hour='0,6,12,18'),
+    },
     # Process off-hours queued messages every 5 min during 8-10 AM Mountain Time
     'process_off_hours_queue': {
         'task': 'app.scheduler.ai_tasks.process_off_hours_queue',

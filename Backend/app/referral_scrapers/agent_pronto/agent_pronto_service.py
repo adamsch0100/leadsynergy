@@ -273,7 +273,8 @@ class AgentProntoService(BaseReferralService):
         organization_id: str = None,
         driver_service=None,
         min_sync_interval_hours: int = 168,
-        same_status_note: str = None
+        same_status_note: str = None,
+        force_sync: bool = False
     ) -> None:
         # For bulk operations, lead can be None initially
         if lead:
@@ -305,6 +306,7 @@ class AgentProntoService(BaseReferralService):
         self.lead = lead
         self.lead_name = f"{self.lead.first_name} {self.lead.last_name}" if lead else ""
         self.min_sync_interval_hours = min_sync_interval_hours
+        self.force_sync = force_sync
         self.is_logged_in = False
         self.same_status_note = same_status_note or "Same as previous update. Continuing to work with this referral."
 
@@ -1509,6 +1511,9 @@ class AgentProntoService(BaseReferralService):
 
     def _should_skip_lead(self, lead: Lead) -> bool:
         """Check if lead was recently synced and should be skipped"""
+        if self.force_sync:
+            return False
+
         try:
             if not lead.metadata:
                 return False
