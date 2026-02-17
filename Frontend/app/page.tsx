@@ -337,7 +337,7 @@ export default function HomePage() {
                   <h3 className="font-semibold text-blue-700 dark:text-blue-400">Referral Platforms</h3>
                 </div>
                 <div className="space-y-2.5">
-                  {["Homelight", "Redfin", "Referral Exchange", "Agent Pronto", "My Agent Finder"].map((source) => (
+                  {["Pay-at-close platforms", "Referral networks", "Zillow-type portals", "Broker referral systems", "And more..."].map((source) => (
                     <div key={source} className="flex items-center gap-2 text-sm">
                       <div className="h-2 w-2 rounded-full bg-blue-500" />
                       <span>{source}</span>
@@ -822,7 +822,7 @@ const aggregationFeatures = [
     icon: Zap,
     title: "5+ Platform Aggregation",
     description:
-      "Automatically pull new leads from Homelight, Redfin, Referral Exchange, Agent Pronto, My Agent Finder, and more — no manual entry.",
+      "Automatically pull new leads from all your referral and pay-at-close platforms into one place — no manual entry, no missed leads.",
   },
   {
     icon: RefreshCw,
@@ -834,7 +834,7 @@ const aggregationFeatures = [
     icon: Layers,
     title: "Stage Mapping",
     description:
-      "Map each platform's unique statuses to your FUB stages. \"Active\" on Homelight becomes \"New Lead\" in FUB — you define the rules.",
+      "Map each platform's unique statuses to your FUB stages. Each referral source has different terminology — you define how they translate.",
   },
   {
     icon: DollarSign,
