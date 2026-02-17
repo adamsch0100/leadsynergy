@@ -3487,3 +3487,22 @@ def get_ai_health():
         "checks": checks,
         "metrics": metrics,
     })
+
+
+@fub_bp.route('/admin/trigger-bulk-sync', methods=['POST'])
+def trigger_bulk_sync():
+    """Trigger an immediate bulk sync of all lead sources that are due."""
+    try:
+        from app.scheduler.tasks import bulk_sync_lead_sources
+        data = request.get_json() or {}
+        force = data.get('force', False)
+
+        result = bulk_sync_lead_sources.delay()
+        return jsonify({
+            "success": True,
+            "message": "Bulk sync task queued",
+            "task_id": str(result.id),
+        })
+    except Exception as e:
+        logger.error(f"Error triggering bulk sync: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
