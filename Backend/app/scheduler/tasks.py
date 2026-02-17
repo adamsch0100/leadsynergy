@@ -110,7 +110,7 @@ BULK_SYNC_PLATFORMS = [
 ]
 
 
-@celery.task(bind=True, max_retries=1, time_limit=1800, soft_time_limit=1500)
+@celery.task(bind=True, max_retries=1, time_limit=7200, soft_time_limit=7000)
 def bulk_sync_lead_sources(self) -> Dict[str, Any]:
     """Bulk sync all lead sources that are due.
 
