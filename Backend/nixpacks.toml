@@ -1,8 +1,10 @@
 # Nixpacks configuration for Railway deployment
-# Required for Playwright browser automation
+# Required for Playwright browser automation + Selenium scrapers
 
 [phases.setup]
 aptPkgs = [
+  "chromium",
+  "chromium-driver",
   "libnss3",
   "libnspr4",
   "libatk1.0-0",

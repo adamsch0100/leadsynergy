@@ -246,8 +246,29 @@ def setup_chrome_options(proxy_config=None):
     if current_os == "Windows":
         print("Setting chromedriver for Windows")
     elif current_os == "Linux":
-        chrome_options.binary_location = '/usr/bin/chromium-browser'
-        print("Setting chromedriver for Linux")
+        # Check multiple possible Chrome/Chromium binary locations
+        linux_chrome_paths = [
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable',
+        ]
+        # Also check Playwright's bundled chromium
+        import glob as glob_mod
+        pw_paths = glob_mod.glob('/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome')
+        linux_chrome_paths.extend(pw_paths)
+
+        chrome_binary = None
+        for path in linux_chrome_paths:
+            if os.path.isfile(path):
+                chrome_binary = path
+                break
+
+        if chrome_binary:
+            chrome_options.binary_location = chrome_binary
+            print(f"Setting chromedriver for Linux: {chrome_binary}")
+        else:
+            print(f"WARNING: No Chrome/Chromium binary found. Tried: {linux_chrome_paths}")
     else:
         # macOS or other OS configuration
         chrome_options.binary_location = '/usr/local/bin/chromedriver'
