@@ -72,18 +72,14 @@ class DriverService:
             # Get the Chrome options with proxy configuration only if proxy is enabled
             chrome_options = setup_chrome_options(self.proxy_config if self.use_proxy else None)
 
-            # On Linux, prefer system chromedriver (version-matched with apt chromium)
-            if platform.system() == "Linux" and os.path.isfile('/usr/bin/chromedriver'):
-                service = Service('/usr/bin/chromedriver')
+            # On Linux (Railway), let Selenium 4's selenium-manager auto-download
+            # Chrome for Testing + matching ChromeDriver. On Windows, use webdriver_manager.
+            if platform.system() == "Linux":
+                # Don't specify service - selenium-manager handles Chrome for Testing download
+                self.driver = webdriver.Chrome(options=chrome_options)
             else:
-                try:
-                    from webdriver_manager.core.os_manager import ChromeType
-                    service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
-                except Exception:
-                    service = Service(ChromeDriverManager().install())
-
-            # Initialize the driver with the options and service
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
 
             # Set timeouts to prevent indefinite hangs
             self.driver.set_page_load_timeout(self.PAGE_LOAD_TIMEOUT)
@@ -254,29 +250,9 @@ def setup_chrome_options(proxy_config=None):
     if current_os == "Windows":
         print("Setting chromedriver for Windows")
     elif current_os == "Linux":
-        # Check multiple possible Chrome/Chromium binary locations
-        linux_chrome_paths = [
-            '/usr/bin/chromium-browser',
-            '/usr/bin/chromium',
-            '/usr/bin/google-chrome',
-            '/usr/bin/google-chrome-stable',
-        ]
-        # Also check Playwright's bundled chromium
-        import glob as glob_mod
-        pw_paths = glob_mod.glob('/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome')
-        linux_chrome_paths.extend(pw_paths)
-
-        chrome_binary = None
-        for path in linux_chrome_paths:
-            if os.path.isfile(path):
-                chrome_binary = path
-                break
-
-        if chrome_binary:
-            chrome_options.binary_location = chrome_binary
-            print(f"Setting chromedriver for Linux: {chrome_binary}")
-        else:
-            print(f"WARNING: No Chrome/Chromium binary found. Tried: {linux_chrome_paths}")
+        # Don't set binary_location - let selenium-manager auto-download
+        # Chrome for Testing with a matching ChromeDriver
+        print("Setting chromedriver for Linux (selenium-manager auto-download)")
     else:
         # macOS or other OS configuration
         chrome_options.binary_location = '/usr/local/bin/chromedriver'
