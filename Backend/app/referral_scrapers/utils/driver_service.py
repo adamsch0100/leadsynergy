@@ -72,7 +72,15 @@ class DriverService:
             # Get the Chrome options with proxy configuration only if proxy is enabled
             chrome_options = setup_chrome_options(self.proxy_config if self.use_proxy else None)
 
-            service = Service(ChromeDriverManager().install())
+            # On Linux, prefer system chromedriver (version-matched with apt chromium)
+            if platform.system() == "Linux" and os.path.isfile('/usr/bin/chromedriver'):
+                service = Service('/usr/bin/chromedriver')
+            else:
+                try:
+                    from webdriver_manager.core.os_manager import ChromeType
+                    service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+                except Exception:
+                    service = Service(ChromeDriverManager().install())
 
             # Initialize the driver with the options and service
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
