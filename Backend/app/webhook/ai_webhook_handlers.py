@@ -19,6 +19,7 @@ import logging
 import asyncio
 import threading
 import random
+import re
 import pytz
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
@@ -562,20 +563,60 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
                 logger.error(f"Failed to send opt-in confirmation to person {person_id}: {e}")
             return
 
-        # Check for opt-out keywords
+        # Check for opt-out keywords (STOP, not interested, no thanks, etc.)
         if compliance_checker.is_opt_out_keyword(message_content):
-            logger.info(f"Opt-out keyword detected from person {person_id}")
+            logger.info(f"Opt-out keyword detected from person {person_id}: {message_content[:100]}")
             await compliance_checker.record_opt_out(
                 fub_person_id=person_id,
                 organization_id=organization_id,
-                reason="STOP keyword received",
+                reason=f"Opt-out keyword: {message_content[:100]}",
             )
-            # Send confirmation via FUB native API
+
+            # Cancel all pending follow-ups and disable AI for this lead
             try:
+                from app.scheduler.ai_tasks import cancel_lead_sequences
+                cancel_lead_sequences.delay(
+                    fub_person_id=person_id,
+                    reason=f"Lead opted out: {message_content[:80]}",
+                )
+                logger.info(f"Cancelled all pending sequences for opted-out lead {person_id}")
+            except Exception as cancel_err:
+                logger.error(f"Failed to cancel sequences for opted-out lead {person_id}: {cancel_err}")
+
+            try:
+                from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+                lead_ai_svc = LeadAISettingsServiceSingleton.get_instance(supabase)
+                await lead_ai_svc.disable_ai_for_lead(
+                    fub_person_id=person_id,
+                    organization_id=organization_id,
+                )
+                logger.info(f"AI disabled for opted-out lead {person_id}")
+            except Exception as disable_err:
+                logger.error(f"Failed to disable AI for opted-out lead {person_id}: {disable_err}")
+
+            # Mark conversation as completed
+            try:
+                supabase.table('ai_conversations').update({
+                    'state': 'completed',
+                    'is_active': False,
+                }).eq('fub_person_id', person_id).execute()
+            except Exception:
+                pass
+
+            # Send confirmation - softer message for "not interested" vs hard "STOP"
+            try:
+                hard_stop_patterns = [r'\bstop\b', r'\bunsubscribe\b', r'\bopt\s*out\b']
+                is_hard_stop = any(re.search(p, message_content.lower()) for p in hard_stop_patterns)
+
+                if is_hard_stop:
+                    confirm_msg = "You've been unsubscribed and won't receive any more messages from us. Reply START to opt back in."
+                else:
+                    confirm_msg = "Completely understand! I'll stop reaching out. If your plans change down the road, don't hesitate to reach out. Best of luck!"
+
                 fub_sms = FUBSMSService(api_key=fub_api_key)
                 await fub_sms.send_text_message_async(
                     person_id=person_id,
-                    message="You've been unsubscribed and won't receive any more messages from us. Reply START to opt back in.",
+                    message=confirm_msg,
                 )
             except Exception as e:
                 logger.error(f"Failed to send opt-out confirmation to person {person_id}: {e}")
@@ -584,7 +625,6 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             try:
                 from app.ai_agent.template_engine import get_template_engine
                 ab_engine = get_template_engine(supabase_client=supabase)
-                # Use person_id as conversation lookup since we may not have conversation_id here
                 ab_engine.record_ab_test_outcome(
                     conversation_id=str(person_id),
                     led_to_optout=True,

@@ -606,6 +606,7 @@ def cancel_lead_sequences(self, fub_person_id: int, reason: str = None):
         result = supabase.table("ai_scheduled_followups").update({
             "status": "cancelled",
             "cancelled_at": datetime.utcnow().isoformat(),
+            "error_message": f"Cancelled: {reason or 'lead_responded'}",
         }).eq("fub_person_id", fub_person_id).eq("status", "pending").execute()
 
         count = len(result.data) if result.data else 0

@@ -134,6 +134,16 @@ class NextBestActionEngine:
         """
         logger.info(f"Starting Next Best Action scan (batch_size={batch_size})")
 
+        # Load the user's configured timezone for TCPA compliance
+        try:
+            tz_result = self.supabase.table("ai_agent_settings").select(
+                "timezone"
+            ).limit(1).execute()
+            self._org_timezone = (tz_result.data[0].get("timezone") if tz_result.data else None) or "America/New_York"
+        except Exception:
+            self._org_timezone = "America/New_York"
+        logger.info(f"Using timezone {self._org_timezone} for TCPA compliance")
+
         recommendations = []
 
         # 1. Check for new leads needing first contact
@@ -202,8 +212,8 @@ class NextBestActionEngine:
             for lead in result.data or []:
                 fub_person_id = lead.get("fub_person_id")
 
-                # Check if within TCPA hours
-                is_allowed, next_allowed = is_within_tcpa_hours()
+                # Check if within TCPA hours (use org's configured timezone)
+                is_allowed, next_allowed = is_within_tcpa_hours(timezone=self._org_timezone)
 
                 # Determine action based on contact info
                 has_phone = bool(lead.get("phone"))
@@ -314,8 +324,8 @@ class NextBestActionEngine:
                 lead_score = conv.get("lead_score", 50)
                 priority = lead_score  # Use lead score as base priority
 
-                # Check TCPA hours
-                is_allowed, next_allowed = is_within_tcpa_hours()
+                # Check TCPA hours (use org's configured timezone)
+                is_allowed, next_allowed = is_within_tcpa_hours(timezone=self._org_timezone)
 
                 # ============================================================
                 # SMART RE-ENGAGEMENT: Choose trigger based on conversation state
@@ -442,8 +452,8 @@ class NextBestActionEngine:
                     action_type = ActionType.REENGAGEMENT_SMS
                     reason = f"Re-engagement needed - {days_dormant} days dormant"
 
-                # Check TCPA hours
-                is_allowed, next_allowed = is_within_tcpa_hours()
+                # Check TCPA hours (use org's configured timezone)
+                is_allowed, next_allowed = is_within_tcpa_hours(timezone=self._org_timezone)
 
                 actions.append(RecommendedAction(
                     fub_person_id=fub_person_id,
@@ -635,14 +645,15 @@ class NextBestActionEngine:
             f"Executing action {action.action_type.value} for lead {action.fub_person_id}"
         )
 
-        # Check TCPA compliance before executing
-        is_allowed, next_allowed = is_within_tcpa_hours()
+        # Check TCPA compliance before executing (use org's configured timezone)
+        org_tz = getattr(self, '_org_timezone', 'America/New_York')
+        is_allowed, next_allowed = is_within_tcpa_hours(timezone=org_tz)
         if not is_allowed and action.action_type in (
             ActionType.FIRST_CONTACT_SMS,
             ActionType.FOLLOWUP_SMS,
             ActionType.REENGAGEMENT_SMS,
         ):
-            logger.info(f"TCPA: Deferring SMS action until {next_allowed}")
+            logger.info(f"TCPA: Deferring SMS action until {next_allowed} ({org_tz})")
             return {
                 "success": False,
                 "reason": "outside_tcpa_hours",

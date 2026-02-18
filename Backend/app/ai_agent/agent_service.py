@@ -543,6 +543,7 @@ class AIAgentService:
                     # Cancel pending follow-ups
                     self.supabase.table('ai_scheduled_followups').update({
                         'status': 'cancelled',
+                        'error_message': 'Cancelled: handoff triggered (smart trigger)',
                     }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
                     logger.info(f"Auto-disabled AI and cancelled follow-ups for lead {fub_person_id} (handoff)")
                 except Exception as disable_err:
@@ -1571,6 +1572,7 @@ ACTION REQUIRED: Respond to this lead promptly!
                 )
                 self.supabase.table('ai_scheduled_followups').update({
                     'status': 'cancelled',
+                    'error_message': 'Cancelled: handoff triggered (finalize_response)',
                 }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
                 logger.info(f"Auto-disabled AI and cancelled follow-ups for lead {fub_person_id} (handoff from _finalize_response)")
             except Exception as disable_err:

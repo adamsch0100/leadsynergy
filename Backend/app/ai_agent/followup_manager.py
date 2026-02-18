@@ -1296,8 +1296,16 @@ class FollowUpManager:
         Returns:
             True if AI should generate the message, False to use template
         """
+        # Channel types we cannot execute - auto-skip these
+        unsupported_channel_types = {
+            MessageType.RVM_INTRO,          # Can't leave voicemails via browser
+            MessageType.CALL_CHECKIN,       # Can't make phone calls via browser
+        }
+
+        if message_type in unsupported_channel_types:
+            return None  # Signal: auto-skip this step
+
         # Message types that benefit from AI personalization
-        # ALL EMAILS should use AI for rich, context-aware content
         ai_preferred_types = {
             MessageType.FIRST_CONTACT,      # First impression matters - personalize
             MessageType.VALUE_ADD,          # Value should be contextual
@@ -1311,6 +1319,8 @@ class FollowUpManager:
             MessageType.EMAIL_SOCIAL_PROOF,   # Day 5 - Success story personalized
             MessageType.EMAIL_FINAL,          # Day 7 - Final close personalized
             MessageType.HELPFUL_CHECKIN,      # Day 6 - Soft SMS personalized
+            MessageType.GENTLE_FOLLOWUP,      # AI personalizes check-ins
+            MessageType.SOCIAL_PROOF,         # AI crafts relevant social proof
             # Long-term nurture types - AI makes these feel personal and current
             MessageType.MARKET_UPDATE,        # AI can reference current market data
             MessageType.NEW_LISTING_ALERT,    # AI personalizes to their criteria
@@ -1328,13 +1338,9 @@ class FollowUpManager:
             MessageType.RESUME_GENERAL,
         }
 
-        # Message types that work well as templates
+        # Message types that work well as templates (must have templates implemented)
         template_preferred_types = {
-            MessageType.GENTLE_FOLLOWUP,    # Simple check-ins work as templates
-            MessageType.SOCIAL_PROOF,       # Social proof can be templated
             MessageType.MONTHLY_TOUCHPOINT, # Basic monthly works with templates
-            MessageType.RVM_INTRO,          # Voice scripts need consistency
-            MessageType.CALL_CHECKIN,       # Call scripts need consistency
         }
 
         if message_type in ai_preferred_types:
@@ -1342,8 +1348,8 @@ class FollowUpManager:
         if message_type in template_preferred_types:
             return False
 
-        # Default: use AI for qualification questions and anything not explicitly templated
-        return "qualify" in message_type.value.lower() or "email" in message_type.value.lower()
+        # Default: use AI for everything else
+        return True
 
     async def schedule_followup_sequence(
         self,
@@ -1393,6 +1399,7 @@ class FollowUpManager:
                 if existing.count and existing.count > 0:
                     self.supabase.table('ai_scheduled_followups').update({
                         'status': 'cancelled',
+                        'error_message': 'Cancelled: dedup - new sequence replacing old',
                     }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
                     logger.info(
                         f"Cancelled {existing.count} existing pending followups for person "
@@ -1743,6 +1750,7 @@ class FollowUpManager:
                         # Cancel this and all remaining pending follow-ups for this lead
                         self.supabase.table('ai_scheduled_followups').update({
                             'status': 'cancelled',
+                            'error_message': f'Cancelled: stage "{stage_name}" is excluded',
                         }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
                         logger.info(f"Stage changed to '{stage_name}' - cancelled all follow-ups for lead {fub_person_id}")
                         return {"success": False, "error": f"Lead stage '{stage_name}' excluded", "delivery_error": "stage_excluded"}
@@ -1763,6 +1771,7 @@ class FollowUpManager:
                     # Lead has been texting recently - cancel all pending follow-ups
                     self.supabase.table('ai_scheduled_followups').update({
                         'status': 'cancelled',
+                        'error_message': 'Cancelled: lead has active conversation (inbound within 4h)',
                     }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
                     logger.info(f"Lead {fub_person_id} has active conversation (inbound msg within 4h) - cancelled all follow-ups")
                     return {"success": False, "error": "Active conversation detected - follow-ups cancelled", "delivery_error": "active_conversation"}
@@ -1812,8 +1821,28 @@ class FollowUpManager:
 
             # ================================================================
             # AI GENERATION: Check if this message type should use AI
+            # Returns True (use AI), False (use template), None (auto-skip)
             # ================================================================
-            if self.should_use_ai_for_step(message_type):
+            ai_decision = self.should_use_ai_for_step(message_type)
+
+            if ai_decision is None:
+                # Unsupported channel (RVM, phone calls) - auto-skip and unblock queue
+                logger.info(f"Auto-skipping unsupported channel type {message_type.value} for follow-up {followup_id}")
+                try:
+                    self.supabase.table('ai_scheduled_followups').update({
+                        'status': 'sent',
+                        'executed_at': datetime.utcnow().isoformat(),
+                        'error_message': f'Auto-skipped: {channel} channel not supported',
+                    }).eq('id', followup_id).execute()
+                except Exception as skip_err:
+                    logger.warning(f"Failed to mark followup as skipped: {skip_err}")
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "reason": f"{message_type.value} auto-skipped (channel not supported)",
+                }
+
+            elif ai_decision:
                 logger.info(f"Using AI generation for {message_type.value}")
 
                 # If person_data not provided, try to fetch from FUB
@@ -1872,12 +1901,20 @@ class FollowUpManager:
                     }
 
             else:
-                # AI not available for this step type - skip, don't send garbage
-                logger.error(f"AI not configured for {message_type.value} follow-up {followup_id}. NOT sending.")
+                # Template-preferred but no template implemented - auto-skip to unblock queue
+                logger.warning(f"No template for {message_type.value} follow-up {followup_id}. Auto-skipping.")
+                try:
+                    self.supabase.table('ai_scheduled_followups').update({
+                        'status': 'sent',
+                        'executed_at': datetime.utcnow().isoformat(),
+                        'error_message': f'Auto-skipped: no template for {message_type.value}',
+                    }).eq('id', followup_id).execute()
+                except Exception as skip_err:
+                    logger.warning(f"Failed to mark followup as skipped: {skip_err}")
                 return {
-                    "success": False,
-                    "error": f"AI not available for {message_type.value} - refusing to send without AI",
-                    "delivery_error": "ai_not_available",
+                    "success": True,
+                    "skipped": True,
+                    "reason": f"{message_type.value} auto-skipped (no template)",
                 }
 
             # ================================================================

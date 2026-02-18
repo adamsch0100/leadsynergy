@@ -652,6 +652,10 @@ class ComplianceChecker:
             r'\bopt\s*out\b',        # "opt out" or "optout"
             r'\bremove me\b',        # Request to remove
             r"\bdon'?t\s+text\b",    # "don't text" or "dont text"
+            r'\bnot\s+interested\b',  # "not interested" / "not interested at this time"
+            r'\bno\s+thanks\b',      # "no thanks"
+            r'\bleave me alone\b',   # "leave me alone"
+            r'\bdelete\b.*\bmessages?\b',  # "delete your messages" / "deleting your messages"
             # Note: "end" removed - too many false positives with "end of year", "weekend", etc.
         ]
 
