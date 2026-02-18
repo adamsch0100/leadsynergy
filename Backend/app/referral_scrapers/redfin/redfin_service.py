@@ -593,7 +593,32 @@ class RedfinService(BaseReferralService):
                 if self._check_and_handle_google_2fa():
                     print("[Google OAuth] Google 2FA handled")
 
-            # Switch back to main window (popup may have closed after OAuth)
+            # Wait for popup to close (means OAuth callback completed)
+            if popup_window:
+                print("[Google OAuth] Waiting for popup to close (OAuth callback)...")
+                max_popup_wait = 30
+                popup_elapsed = 0
+                while popup_elapsed < max_popup_wait:
+                    try:
+                        current_handles = self.driver_service.driver.window_handles
+                        if popup_window not in current_handles:
+                            print(f"[Google OAuth] Popup closed after {popup_elapsed}s")
+                            break
+                        # Check if we're already on Redfin in the popup (OAuth callback redirect)
+                        try:
+                            popup_url = self.driver_service.get_current_url()
+                            if "redfin.com" in popup_url:
+                                print(f"[Google OAuth] Popup redirected to Redfin: {popup_url[:80]}")
+                                break
+                        except:
+                            pass
+                    except Exception:
+                        print(f"[Google OAuth] Window handle check failed - popup likely closed")
+                        break
+                    time.sleep(2)
+                    popup_elapsed += 2
+
+            # Switch back to main window
             try:
                 current_handles = self.driver_service.driver.window_handles
                 if original_window in current_handles:
@@ -602,7 +627,7 @@ class RedfinService(BaseReferralService):
                 elif current_handles:
                     self.driver_service.driver.switch_to.window(current_handles[0])
                     print("[Google OAuth] Switched to remaining window")
-                self.wis.human_delay(3, 5)
+                self.wis.human_delay(5, 8)  # Longer wait for Redfin to process OAuth token
             except Exception as e:
                 print(f"[Google OAuth] Window switch note: {e}")
 
@@ -626,7 +651,12 @@ class RedfinService(BaseReferralService):
         """
         try:
             self.wis.human_delay(2, 3)
-            page_source = self.driver_service.driver.page_source.lower()
+            page_source = self.driver_service.driver.page_source
+            if not page_source:
+                # page_source is None - popup likely closed (OAuth completed instantly)
+                print("[Google 2FA] Page source unavailable - popup may have auto-closed (OAuth complete)")
+                return True
+            page_source = page_source.lower()
 
             # Check for 2FA indicators
             twofa_indicators = [
@@ -655,6 +685,8 @@ class RedfinService(BaseReferralService):
             poll_interval = 3
             elapsed = 0
 
+            from urllib.parse import urlparse
+
             while elapsed < max_wait_seconds:
                 time.sleep(poll_interval)
                 elapsed += poll_interval
@@ -670,26 +702,38 @@ class RedfinService(BaseReferralService):
                     print(f"[Google 2FA] Window closed too quickly ({elapsed}s) - likely auth failure")
                     return False
 
+                # Parse URL properly - NEVER use string containment on full URLs
+                # (query params contain redirect_uri with redfin.com and consent paths)
+                parsed = urlparse(current_url)
+                url_host = parsed.netloc.lower()
+                url_path = parsed.path.lower()
+
                 # Google consent page = definite success (user approved 2FA, now authorizing app)
-                if "consent" in current_url and "google.com" in current_url:
-                    print(f"[Google 2FA] On Google consent page. 2FA approved! ({elapsed}s)")
-                    try:
-                        allow_btn = self.driver_service.find_element(By.CSS_SELECTOR, '#submit_approve_access, button[name="submit_approve_access"]')
-                        if allow_btn:
-                            self.driver_service.safe_click(allow_btn)
-                            print("[Google 2FA] Clicked 'Allow' on consent page")
-                            self.wis.human_delay(3, 5)
-                    except:
-                        pass
+                is_consent_page = ("google.com" in url_host and
+                                   ("/consent" in url_path or "/oauth/consent" in url_path))
+                if is_consent_page:
+                    print(f"[Google 2FA] On Google consent page (path: {url_path}). 2FA approved! ({elapsed}s)")
+                    # Click Allow/Continue on consent page
+                    if not self._click_google_consent_button():
+                        print("[Google 2FA] Could not click consent button - waiting for auto-redirect...")
+                        # Wait up to 15s for popup to close or redirect
+                        for _ in range(5):
+                            self.wis.human_delay(2, 3)
+                            try:
+                                self.driver_service.get_current_url()
+                            except Exception:
+                                print("[Google 2FA] Popup closed after consent")
+                                break
                     return True
 
-                # Redirected to Redfin callback - only trust if enough time for user to tap
-                if "redfin.com" in current_url and "oauth_callback" in current_url and elapsed >= 10:
-                    print(f"[Google 2FA] Redirected to Redfin OAuth callback! ({elapsed}s)")
+                # Redirected to Redfin = OAuth callback completed
+                is_on_redfin = "redfin.com" in url_host
+                if is_on_redfin and elapsed >= 10:
+                    print(f"[Google 2FA] Redirected to Redfin! ({elapsed}s) URL: {current_url[:80]}")
                     return True
 
-                # If redirected to redfin.com quickly (< 10s), 2FA was NOT approved - it's a failure redirect
-                if "redfin.com" in current_url and elapsed < 10:
+                # If redirected to redfin.com very quickly (< 10s), 2FA was skipped/failed
+                if is_on_redfin and elapsed < 10:
                     print(f"[Google 2FA] Quick redirect to Redfin ({elapsed}s) - 2FA likely failed/skipped")
                     return False
 
@@ -706,8 +750,8 @@ class RedfinService(BaseReferralService):
                         return True
                     return False
 
-                if elapsed % 15 == 0:
-                    print(f"[Google 2FA] Still waiting for phone approval... ({elapsed}s / {max_wait_seconds}s)")
+                if elapsed % 10 == 0:
+                    print(f"[Google 2FA] Still waiting... host={url_host} path={url_path} ({elapsed}s / {max_wait_seconds}s)")
 
             print(f"[Google 2FA] Timed out after {max_wait_seconds}s waiting for phone approval")
             return False
@@ -716,6 +760,103 @@ class RedfinService(BaseReferralService):
             print(f"[Google 2FA] Error: {e}")
             import traceback
             traceback.print_exc()
+            return False
+
+    def _click_google_consent_button(self) -> bool:
+        """Click Allow/Continue on Google's OAuth consent page.
+
+        Google's consent UI has changed over the years. Try multiple selectors
+        and fall back to JavaScript click if needed.
+        """
+        try:
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+
+            self.wis.human_delay(2, 3)  # Let page fully render
+
+            # Debug: capture page state
+            try:
+                consent_url = self.driver_service.get_current_url()
+                print(f"[Google Consent] URL: {consent_url[:120]}")
+                page_text = self.driver_service.driver.find_element(By.TAG_NAME, "body").text[:500]
+                print(f"[Google Consent] Page text: {page_text[:300]}")
+            except:
+                pass
+
+            # Try multiple consent button selectors (old and new Google UI)
+            # These are ONLY for the consent/authorization page, NOT 2FA page
+            consent_selectors = [
+                # Text-based selectors first (most reliable for consent page)
+                ('xpath', '//button[contains(., "Continue")]'),
+                ('xpath', '//button[contains(., "Allow")]'),
+                ('xpath', '//span[contains(text(), "Continue")]/ancestor::button'),
+                ('xpath', '//span[contains(text(), "Allow")]/ancestor::button'),
+                # Legacy consent page selectors
+                ('css', '#submit_approve_access'),
+                ('css', 'button[name="submit_approve_access"]'),
+                ('css', '#oauthScopeDialog button'),
+                # Modern Google consent UI (v3) - generic, use last
+                ('css', 'button[data-idom-class*="nCP5yc"]'), # Material button
+            ]
+
+            for selector_type, selector in consent_selectors:
+                try:
+                    if selector_type == 'xpath':
+                        btn = WebDriverWait(self.driver_service.driver, 3).until(
+                            EC.element_to_be_clickable((By.XPATH, selector))
+                        )
+                    else:
+                        btn = WebDriverWait(self.driver_service.driver, 3).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
+                    if btn:
+                        btn_text = btn.text.strip()
+                        print(f"[Google Consent] Found button '{btn_text}' with selector: {selector}")
+                        self.driver_service.safe_click(btn)
+                        print(f"[Google Consent] Clicked consent button")
+                        self.wis.human_delay(3, 5)
+                        return True
+                except:
+                    continue
+
+            # Last resort: find all buttons and click the most likely one
+            try:
+                all_buttons = self.driver_service.driver.find_elements(By.TAG_NAME, "button")
+                btn_info = [(b.text.strip(), b.is_displayed(), b.is_enabled()) for b in all_buttons]
+                print(f"[Google Consent] All buttons on page: {btn_info}")
+
+                for btn in all_buttons:
+                    text = btn.text.strip().lower()
+                    if btn.is_displayed() and btn.is_enabled() and text in ('continue', 'allow', 'accept', 'approve', 'next'):
+                        print(f"[Google Consent] Clicking button by text: '{btn.text.strip()}'")
+                        self.driver_service.safe_click(btn)
+                        self.wis.human_delay(3, 5)
+                        return True
+
+                # If no matching text, try JavaScript click on first visible enabled button
+                for btn in all_buttons:
+                    if btn.is_displayed() and btn.is_enabled():
+                        print(f"[Google Consent] JS-clicking first visible button: '{btn.text.strip()}'")
+                        self.driver_service.driver.execute_script("arguments[0].click();", btn)
+                        self.wis.human_delay(3, 5)
+                        return True
+            except Exception as e:
+                print(f"[Google Consent] Button enumeration error: {e}")
+
+            # Save screenshot for debugging
+            try:
+                import tempfile
+                ss_path = os.path.join(tempfile.gettempdir(), "google_consent_page.png")
+                self.driver_service.driver.save_screenshot(ss_path)
+                print(f"[Google Consent] Screenshot saved: {ss_path}")
+            except:
+                pass
+
+            print("[Google Consent] Could not find any consent button")
+            return False
+
+        except Exception as e:
+            print(f"[Google Consent] Error: {e}")
             return False
 
     def _verify_login_success(self) -> bool:
@@ -1335,7 +1476,7 @@ class RedfinService(BaseReferralService):
                                 lead.metadata = {}
                             lead.metadata["redfin_last_updated"] = datetime.now(timezone.utc).isoformat()
                             lead.metadata["redfin_last_status"] = target_status
-                            self.lead_service.update_lead(lead)
+                            self.lead_service.update(lead)
                         except Exception as meta_error:
                             logger.warning(f"Failed to update metadata for {full_name}: {meta_error}")
                     else:
@@ -1519,7 +1660,7 @@ class RedfinService(BaseReferralService):
                                 lead.metadata = {}
                             lead.metadata["redfin_last_updated"] = datetime.now(timezone.utc).isoformat()
                             lead.metadata["redfin_last_status"] = target_status
-                            self.lead_service.update_lead(lead)
+                            self.lead_service.update(lead)
                         except Exception as meta_error:
                             logger.warning(f"Failed to update metadata for {full_name}: {meta_error}")
 

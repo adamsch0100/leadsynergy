@@ -281,6 +281,17 @@ def setup_chrome_options(proxy_config=None):
             else:
                 print(f"Setting up proxy without authentication: {proxy_host}:{proxy_port}")
 
+    # Use persistent Chrome profile so Google remembers the device (skips 2FA)
+    chrome_profile_dir = os.getenv("CHROME_PROFILE_DIR")
+    if not chrome_profile_dir:
+        if current_os == "Windows":
+            chrome_profile_dir = os.path.join(os.path.expanduser("~"), ".leadsynergy", "chrome-profile")
+        else:
+            chrome_profile_dir = "/tmp/leadsynergy-chrome-profile"
+    os.makedirs(chrome_profile_dir, exist_ok=True)
+    chrome_options.add_argument(f"--user-data-dir={chrome_profile_dir}")
+    print(f"Using Chrome profile: {chrome_profile_dir}")
+
     # Add common Chrome options that apply to all platforms
     headless_enabled = os.getenv("SELENIUM_HEADLESS", "true").lower() in ["true", "1", "yes"]
     if headless_enabled:
