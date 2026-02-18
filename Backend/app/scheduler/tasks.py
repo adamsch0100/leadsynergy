@@ -133,6 +133,8 @@ def bulk_sync_lead_sources(self) -> Dict[str, Any]:
     logger.info("Bulk sync: processing %d lead sources.", len(due_sources))
     summary = []
 
+    import gc
+
     for source_settings in due_sources:
         source_name = source_settings.source_name
 
@@ -197,6 +199,11 @@ def bulk_sync_lead_sources(self) -> Dict[str, Any]:
                 sync_results={"status": "error", "error": str(exc)},
             )
             summary.append({"source": source_name, "successful": 0, "failed": 0, "status": "error", "error": str(exc)})
+
+        finally:
+            # Force garbage collection between platforms to free Chrome memory
+            gc.collect()
+            logger.info("Bulk sync: cleaned up after '%s'", source_name)
 
     return {"processed_sources": len(summary), "details": summary}
 
