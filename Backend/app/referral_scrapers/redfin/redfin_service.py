@@ -1626,6 +1626,9 @@ class RedfinService(BaseReferralService):
             )
 
             processed_count = 0
+            consecutive_timeouts = 0
+            MAX_CONSECUTIVE_TIMEOUTS = 3  # Restart Chrome after 3 consecutive timeouts
+
             for lead, target_status in leads_data:
                 # Check for cancellation
                 if tracker.is_cancelled(sync_id):
@@ -1642,6 +1645,25 @@ class RedfinService(BaseReferralService):
                         "error": "Sync was cancelled by user"
                     })
                     break
+
+                # Detect frozen renderer and restart Chrome
+                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                    logger.warning(f"Chrome renderer frozen ({consecutive_timeouts} consecutive timeouts) - restarting Chrome")
+                    tracker.update_progress(sync_id, message="Restarting Chrome (renderer frozen)...")
+                    try:
+                        self.driver_service.close()
+                    except Exception:
+                        pass
+                    import gc
+                    gc.collect()
+                    self.wis.human_delay(3, 5)
+                    login_success = self.login2()
+                    if not login_success:
+                        logger.error("Failed to re-login after Chrome restart - aborting remaining leads")
+                        tracker.update_progress(sync_id, message="Re-login failed after Chrome restart")
+                        break
+                    consecutive_timeouts = 0
+                    logger.info("Chrome restarted and re-logged in successfully")
 
                 processed_count += 1
                 full_name = f"{lead.first_name} {lead.last_name}"
@@ -1698,6 +1720,7 @@ class RedfinService(BaseReferralService):
                     success = self.find_and_click_customer_by_name2(full_name, target_status)
 
                     if success:
+                        consecutive_timeouts = 0  # Reset on success
                         results["successful"] += 1
                         results["details"].append({
                             "lead_id": lead.id,
@@ -1744,6 +1767,11 @@ class RedfinService(BaseReferralService):
                 except Exception as e:
                     error_msg = str(e)
                     logger.error(f"Error processing lead {full_name}: {error_msg}")
+                    # Track consecutive timeouts to detect frozen renderer
+                    if "timeout" in error_msg.lower() or "renderer" in error_msg.lower():
+                        consecutive_timeouts += 1
+                    else:
+                        consecutive_timeouts = 0
                     results["failed"] += 1
                     results["details"].append({
                         "lead_id": lead.id,
