@@ -302,15 +302,23 @@ def setup_chrome_options(proxy_config=None):
     chrome_options.add_argument(f"user-agent={user_agent}")
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')  # Helpful for headless mode
+    chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--disable-extensions')
 
-    # Temporarily disable potentially problematic options for troubleshooting
-    # chrome_options.add_argument('--remote-debugging-port=9222')
-    # chrome_options.add_argument('--disable-extensions')
-    # chrome_options.add_argument('--disable-features=VizDisplayCompositor')
-
-    chrome_options.add_argument('--disable-dev-shm-usage')
+    # Memory optimization for Railway (limited RAM)
+    if current_os == "Linux":
+        chrome_options.add_argument('--disable-software-rasterizer')
+        chrome_options.add_argument('--disable-background-networking')
+        chrome_options.add_argument('--disable-default-apps')
+        chrome_options.add_argument('--disable-sync')
+        chrome_options.add_argument('--disable-translate')
+        chrome_options.add_argument('--metrics-recording-only')
+        chrome_options.add_argument('--no-first-run')
+        chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+        chrome_options.add_argument('--disable-renderer-backgrounding')
+        chrome_options.add_argument('--disable-background-timer-throttling')
+        chrome_options.add_argument('--js-flags=--max-old-space-size=256')
 
     return chrome_options
 

@@ -201,11 +201,25 @@ def bulk_sync_lead_sources(self) -> Dict[str, Any]:
             summary.append({"source": source_name, "successful": 0, "failed": 0, "status": "error", "error": str(exc)})
 
         finally:
-            # Force garbage collection between platforms to free Chrome memory
+            # Kill any lingering Chrome processes between platforms
+            _kill_chrome_processes()
             gc.collect()
             logger.info("Bulk sync: cleaned up after '%s'", source_name)
 
     return {"processed_sources": len(summary), "details": summary}
+
+
+def _kill_chrome_processes():
+    """Kill any lingering Chrome/ChromeDriver processes to free memory between platform syncs."""
+    import subprocess
+    import platform as plat
+    try:
+        if plat.system() == "Linux":
+            subprocess.run(["pkill", "-f", "chrome"], capture_output=True, timeout=10)
+            subprocess.run(["pkill", "-f", "chromedriver"], capture_output=True, timeout=10)
+            logger.info("Killed lingering Chrome processes")
+    except Exception as e:
+        logger.debug("Chrome process cleanup (non-fatal): %s", e)
 
 
 def _get_lead_type_from_tags(lead) -> str:

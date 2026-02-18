@@ -29,10 +29,12 @@ celery.conf.beat_schedule = {
         'task': 'app.scheduler.tasks.weekly_process_tags',
         'schedule': crontab(hour=9, minute=30, day_of_week='fri'),
     },
-    'hourly_scheduled_lead_sync': {
-        'task': 'app.scheduler.tasks.process_scheduled_lead_sync',
-        'schedule': crontab(minute=0),
-    },
+    # DISABLED: per-lead sync creates a new Chrome per lead → OOM on Railway.
+    # Use bulk_sync_lead_sources instead (login once, process all leads).
+    # 'hourly_scheduled_lead_sync': {
+    #     'task': 'app.scheduler.tasks.process_scheduled_lead_sync',
+    #     'schedule': crontab(minute=0),
+    # },
     # Bulk sync: login once per platform, process all leads efficiently
     # Runs every 6 hours (0:30, 6:30, 12:30, 18:30 UTC)
     'bulk_sync_lead_sources': {

@@ -304,14 +304,12 @@ class AgentProntoService(BaseReferralService):
         # Also try to load from database two_factor_auth config
         self._load_gmail_credentials_from_database()
 
-        # If the magic link goes to the AP login email (not the GMAIL_EMAIL),
-        # use the AP login email for IMAP (assumes Google Workspace same domain)
+        # If AP login email differs from GMAIL_EMAIL, log it but keep using
+        # GMAIL_EMAIL for IMAP - the magic link may arrive via forwarding/alias.
+        # Only override if we loaded specific two_factor_auth credentials for AP email.
         if self.email and self.gmail_email and self.email != self.gmail_email:
-            ap_domain = self.email.split('@')[-1] if '@' in self.email else ''
-            gmail_domain = self.gmail_email.split('@')[-1] if '@' in self.gmail_email else ''
-            if ap_domain == gmail_domain:
-                logger.info(f"Agent Pronto email ({self.email}) differs from GMAIL_EMAIL - using AP email for IMAP")
-                self.gmail_email = self.email
+            logger.info(f"Agent Pronto login email ({self.email}) differs from GMAIL_EMAIL ({self.gmail_email})")
+            logger.info(f"Using GMAIL_EMAIL for IMAP (magic link arrives via forwarding/alias)")
 
         self.lead = lead
         self.lead_name = f"{self.lead.first_name} {self.lead.last_name}" if lead else ""
