@@ -114,7 +114,10 @@ def get_agent_pronto_magic_link(
                 ids = message_ids[0].split()
                 ids.reverse()  # Most recent first
 
-                for msg_id in ids[:20]:
+                if attempt == 0:
+                    logger.info(f"Found {len(ids)} emails since {since_date}, checking top 30")
+
+                for msg_id in ids[:30]:
                     try:
                         # Use BODY.PEEK to avoid marking email as read (may prevent link tracking)
                         status, msg_data = connection.fetch(msg_id, "(BODY.PEEK[])")
@@ -128,6 +131,10 @@ def get_agent_pronto_magic_link(
                         from_header = msg.get("From", "").lower()
                         if "agentpronto" not in from_header and "agent pronto" not in from_header:
                             continue
+
+                        # Log that we found an AP email (debug)
+                        if attempt < 3:
+                            logger.info(f"Found AP email - From: {from_header[:60]}, Date: {msg.get('Date', 'unknown')}")
 
                         # Check email age and min time
                         date_str = msg.get("Date", "")
@@ -524,9 +531,9 @@ class AgentProntoService(BaseReferralService):
             magic_link = get_agent_pronto_magic_link(
                 email_address=self.gmail_email,
                 app_password=self.gmail_app_password,
-                max_retries=20,
-                retry_delay=3.0,
-                max_age_seconds=300,
+                max_retries=40,
+                retry_delay=5.0,
+                max_age_seconds=600,
                 min_email_time=magic_link_request_time
             )
 
