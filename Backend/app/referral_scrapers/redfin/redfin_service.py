@@ -210,40 +210,94 @@ class RedfinService(BaseReferralService):
         return os.path.join(cookie_dir, "redfin_cookies.json")
 
     def _save_cookies(self):
-        """Save browser cookies to file for session reuse."""
+        """Save browser cookies to file AND database for cross-machine session reuse."""
         try:
             import json
             cookies = self.driver_service.driver.get_cookies()
+            # Save to local file
             cookie_path = self._get_cookie_path()
             with open(cookie_path, 'w') as f:
                 json.dump(cookies, f)
             print(f"[Cookies] Saved {len(cookies)} cookies to {cookie_path}")
+
+            # Also save to database for Railway to use
+            self._save_cookies_to_db(cookies)
         except Exception as e:
             print(f"[Cookies] Failed to save cookies: {e}")
 
-    def _try_cookie_login(self) -> bool:
-        """Try to login using saved cookies from a previous session."""
+    def _save_cookies_to_db(self, cookies):
+        """Save cookies to lead_source_settings metadata for cross-machine access."""
         try:
             import json
+            from datetime import datetime, timezone
+            from supabase import create_client
+            sb = create_client(os.getenv('SUPABASE_URL'), os.getenv('SUPABASE_KEY'))
+            result = sb.table('lead_source_settings').select('metadata').eq('source_name', 'Redfin').execute()
+            if result.data:
+                metadata = result.data[0].get('metadata') or {}
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                metadata['session_cookies'] = cookies
+                metadata['cookies_saved_at'] = datetime.now(timezone.utc).isoformat()
+                sb.table('lead_source_settings').update({'metadata': json.dumps(metadata)}).eq('source_name', 'Redfin').execute()
+                print(f"[Cookies] Saved {len(cookies)} cookies to database")
+        except Exception as e:
+            print(f"[Cookies] Failed to save cookies to DB: {e}")
+
+    def _load_cookies_from_db(self):
+        """Load cookies from database (for Railway where local file doesn't exist)."""
+        try:
+            import json
+            from datetime import datetime, timezone
+            from supabase import create_client
+            sb = create_client(os.getenv('SUPABASE_URL'), os.getenv('SUPABASE_KEY'))
+            result = sb.table('lead_source_settings').select('metadata').eq('source_name', 'Redfin').execute()
+            if result.data:
+                metadata = result.data[0].get('metadata') or {}
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                cookies = metadata.get('session_cookies')
+                saved_at = metadata.get('cookies_saved_at')
+                if cookies and saved_at:
+                    saved_time = datetime.fromisoformat(saved_at.replace('Z', '+00:00'))
+                    age_hours = (datetime.now(timezone.utc) - saved_time).total_seconds() / 3600
+                    if age_hours < 24:
+                        print(f"[Cookies] Loaded {len(cookies)} cookies from database ({age_hours:.1f}h old)")
+                        return cookies
+                    else:
+                        print(f"[Cookies] Database cookies expired ({age_hours:.1f}h old)")
+                        return None
+            return None
+        except Exception as e:
+            print(f"[Cookies] Failed to load cookies from DB: {e}")
+            return None
+
+    def _try_cookie_login(self) -> bool:
+        """Try to login using saved cookies from a previous session (file or database)."""
+        try:
+            import json
+            cookies = None
+
+            # Try local file first
             cookie_path = self._get_cookie_path()
-            if not os.path.exists(cookie_path):
-                print("[Cookies] No saved cookies found")
-                return False
+            if os.path.exists(cookie_path):
+                file_age = time.time() - os.path.getmtime(cookie_path)
+                if file_age <= 86400:  # 24 hours
+                    with open(cookie_path, 'r') as f:
+                        cookies = json.load(f)
+                    if cookies:
+                        print(f"[Cookies] Loading {len(cookies)} cookies from file ({file_age/60:.0f} min old)")
+                else:
+                    print(f"[Cookies] Local cookies expired ({file_age/3600:.1f} hours old)")
+                    os.remove(cookie_path)
 
-            # Check cookie file age (expire after 24 hours)
-            file_age = time.time() - os.path.getmtime(cookie_path)
-            if file_age > 86400:  # 24 hours
-                print(f"[Cookies] Cookies expired ({file_age/3600:.1f} hours old)")
-                os.remove(cookie_path)
-                return False
-
-            with open(cookie_path, 'r') as f:
-                cookies = json.load(f)
+            # Fall back to database cookies (for Railway)
+            if not cookies:
+                cookies = self._load_cookies_from_db()
 
             if not cookies:
+                print("[Cookies] No saved cookies found")
                 return False
-
-            print(f"[Cookies] Loading {len(cookies)} saved cookies ({file_age/60:.0f} min old)")
 
             # Navigate to Redfin domain first (needed to set cookies)
             self.driver_service.get_page("https://www.redfin.com")
