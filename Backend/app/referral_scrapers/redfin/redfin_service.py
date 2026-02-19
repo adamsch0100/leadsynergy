@@ -162,8 +162,10 @@ class RedfinService(BaseReferralService):
             if not all([email_field, password_field, login_button]):
                 return False
 
+            email_field.clear()  # Clear any pre-filled value from Chrome profile
             self.wis.simulated_typing(email_field, self.email)
             self.wis.human_delay(1, 2)
+            password_field.clear()
             self.wis.simulated_typing(password_field, self.password)
             self.wis.human_delay(3, 5)
             login_button.click()
@@ -379,8 +381,10 @@ class RedfinService(BaseReferralService):
                 print("Direct login form not found")
                 return False
 
+            email_field.clear()  # Clear any pre-filled value from Chrome profile
             self.wis.simulated_typing(email_field, self.email)
             self.wis.human_delay(1, 2)
+            password_field.clear()
             self.wis.simulated_typing(password_field, self.password)
             self.wis.human_delay(3, 5)
             login_button.click()
