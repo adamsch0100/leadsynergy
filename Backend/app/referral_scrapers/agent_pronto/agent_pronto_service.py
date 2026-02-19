@@ -503,6 +503,10 @@ class AgentProntoService(BaseReferralService):
                 except:
                     pass
 
+            # Record time BEFORE clicking so we don't miss fast emails
+            magic_link_request_time = datetime.now(timezone.utc) - timedelta(seconds=10)
+            logger.info(f"Magic link request time (with 10s buffer): {magic_link_request_time}")
+
             if submit_btn:
                 self.driver_service.safe_click(submit_btn)
                 logger.info("Clicked Sign In button - magic link email should be sent")
@@ -512,10 +516,6 @@ class AgentProntoService(BaseReferralService):
                 logger.info("Pressed Enter to submit")
 
             self.wis.human_delay(3, 5)
-
-            # Record time when magic link was requested
-            magic_link_request_time = datetime.now(timezone.utc)
-            logger.info(f"Magic link requested at: {magic_link_request_time}")
 
             # Take screenshot of post-submit page
             self._take_screenshot("after_magic_link_request")
