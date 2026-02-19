@@ -1771,8 +1771,9 @@ class RedfinService(BaseReferralService):
                 except Exception as e:
                     error_msg = str(e)
                     logger.error(f"Error processing lead {full_name}: {error_msg}")
-                    # Track consecutive timeouts to detect frozen renderer
-                    if "timeout" in error_msg.lower() or "renderer" in error_msg.lower():
+                    # Track consecutive errors to detect dead/frozen Chrome
+                    error_lower = error_msg.lower()
+                    if any(x in error_lower for x in ["timeout", "renderer", "connection refused", "newconnectionerror", "max retries exceeded"]):
                         consecutive_timeouts += 1
                     else:
                         consecutive_timeouts = 0
