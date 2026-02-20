@@ -727,32 +727,41 @@ async def trigger_proactive_outreach(
                     email_only=is_email_only,
                 )
 
-                total_scheduled = sequence_result.get("total_scheduled", 0)
-                nurture_scheduled = sequence_result.get("nurture_scheduled", 0)
+                # If dedup detected a fresh sequence, skip post-processing
+                if sequence_result.get("dedup_skipped"):
+                    logger.info(
+                        f"Follow-up sequence already exists for lead {fub_person_id} "
+                        f"({sequence_result.get('reason', 'dedup')}), skipping duplicate creation"
+                    )
+                    result["followups_scheduled"] = 0
+                    result["dedup_skipped"] = True
+                else:
+                    total_scheduled = sequence_result.get("total_scheduled", 0)
+                    nurture_scheduled = sequence_result.get("nurture_scheduled", 0)
 
-                # Mark initial outreach steps as already sent
-                # For SMS leads: first_contact SMS + email_welcome already sent by orchestrator
-                # For email-only: email_welcome + first_contact (converted to email) already sent
-                initial_types = ("first_contact", "email_welcome")
-                steps_marked = 0
-                for fu in sequence_result.get("followups", []):
-                    msg_type = fu.get("message_type", "")
-                    if msg_type in initial_types:
-                        try:
-                            supabase.table("ai_scheduled_followups").update({
-                                "status": "sent",
-                            }).eq("id", fu["id"]).execute()
-                            steps_marked += 1
-                        except Exception:
-                            pass
+                    # Mark initial outreach steps as already sent
+                    # For SMS leads: first_contact SMS + email_welcome already sent by orchestrator
+                    # For email-only: email_welcome + first_contact (converted to email) already sent
+                    initial_types = ("first_contact", "email_welcome")
+                    steps_marked = 0
+                    for fu in sequence_result.get("followups", []):
+                        msg_type = fu.get("message_type", "")
+                        if msg_type in initial_types:
+                            try:
+                                supabase.table("ai_scheduled_followups").update({
+                                    "status": "sent",
+                                }).eq("id", fu["id"]).execute()
+                                steps_marked += 1
+                            except Exception:
+                                pass
 
-                logger.info(
-                    f"📅 Follow-up sequence scheduled for lead {fub_person_id}: "
-                    f"{total_scheduled} follow-ups + {nurture_scheduled} nurture "
-                    f"({steps_marked} initial steps marked as sent)"
-                )
-                result["followup_sequence_id"] = sequence_result.get("sequence_id")
-                result["followups_scheduled"] = total_scheduled
+                    logger.info(
+                        f"📅 Follow-up sequence scheduled for lead {fub_person_id}: "
+                        f"{total_scheduled} follow-ups + {nurture_scheduled} nurture "
+                        f"({steps_marked} initial steps marked as sent)"
+                    )
+                    result["followup_sequence_id"] = sequence_result.get("sequence_id")
+                    result["followups_scheduled"] = total_scheduled
 
             except Exception as followup_err:
                 logger.error(f"Failed to schedule follow-up sequence for lead {fub_person_id}: {followup_err}", exc_info=True)

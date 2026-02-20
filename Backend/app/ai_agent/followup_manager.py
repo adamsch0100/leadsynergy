@@ -1386,17 +1386,43 @@ class FollowUpManager:
             Dict with sequence_id and scheduled follow-ups
         """
         # ================================================================
-        # DEDUP: Cancel any existing pending followups before scheduling
-        # Prevents duplicate sequences when AI is toggled on/off or
-        # when multiple events trigger scheduling for the same lead.
+        # DEDUP: Prevent duplicate sequences for the same lead.
+        # If pending followups already exist AND were created recently
+        # (within 5 min), skip entirely - a fresh sequence already exists.
+        # If older pending followups exist, cancel them and create new ones.
         # ================================================================
         if self.supabase:
             try:
                 existing = self.supabase.table('ai_scheduled_followups').select(
-                    'id', count='exact'
-                ).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
+                    'id, created_at', count='exact'
+                ).eq('fub_person_id', fub_person_id).eq('status', 'pending').order(
+                    'created_at', desc=True
+                ).limit(1).execute()
 
                 if existing.count and existing.count > 0:
+                    # Check if the newest pending followup was created recently
+                    newest_created = existing.data[0].get('created_at', '') if existing.data else ''
+                    is_fresh = False
+                    if newest_created:
+                        from dateutil import parser as dt_parser
+                        newest_dt = dt_parser.parse(newest_created).replace(tzinfo=None)
+                        age_seconds = (datetime.utcnow() - newest_dt).total_seconds()
+                        is_fresh = age_seconds < 300  # 5 minutes
+
+                    if is_fresh:
+                        logger.info(
+                            f"DEDUP SKIP: {existing.count} pending followups for person "
+                            f"{fub_person_id} were created {age_seconds:.0f}s ago - "
+                            f"keeping existing sequence, skipping duplicate creation"
+                        )
+                        return {
+                            'sequence_id': None,
+                            'followups_scheduled': 0,
+                            'dedup_skipped': True,
+                            'reason': f'Fresh sequence exists ({age_seconds:.0f}s old)',
+                        }
+
+                    # Older sequence exists - cancel it and create fresh
                     self.supabase.table('ai_scheduled_followups').update({
                         'status': 'cancelled',
                         'error_message': 'Cancelled: dedup - new sequence replacing old',
