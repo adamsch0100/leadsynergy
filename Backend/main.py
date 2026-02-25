@@ -113,7 +113,7 @@ if SOCKETIO_AVAILABLE:
 CORS(app, resources={r"/*": {
     "origins": ALLOWED_ORIGINS,
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    "allow_headers": ["Content-Type", "Authorization", "X-User-ID", "X-Requested-With"],
+    "allow_headers": ["Content-Type", "Authorization", "X-User-ID", "X-Requested-With", "X-FUB-Context", "X-System", "X-System-Key"],
     "supports_credentials": True
 }})
 
@@ -135,12 +135,13 @@ def add_cors_headers(response):
 def handle_preflight():
     if request.method == 'OPTIONS':
         origin = request.headers.get('Origin')
-        if origin in ALLOWED_ORIGINS:
+        is_allowed = origin in ALLOWED_ORIGINS or (origin and FUB_DOMAIN_PATTERN in origin)
+        if is_allowed:
             response = app.make_default_options_response()
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Requested-With'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Requested-With, X-FUB-Context, X-System, X-System-Key'
             return response
 
 # Register the setup blueprint
