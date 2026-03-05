@@ -1267,6 +1267,19 @@ def toggle_ai_agent():
                         organization_id=organization_id or "8b8c289e-bccd-481b-98ca-2389a4b6648e",
                     )
                 )
+
+                # Cancel any pending follow-ups immediately so they don't fire
+                # while AI is disabled. Without this, existing ai_scheduled_followups
+                # rows keep firing because the NBA scan doesn't check per-lead status.
+                try:
+                    from app.scheduler.ai_tasks import cancel_lead_sequences
+                    cancel_lead_sequences.delay(
+                        fub_person_id=int(fub_person_id),
+                        reason="AI disabled via embedded app toggle",
+                    )
+                    logger.info(f"Cancelled pending sequences for AI-disabled lead {fub_person_id}")
+                except Exception as cancel_err:
+                    logger.error(f"Failed to cancel sequences for {fub_person_id} after AI disable: {cancel_err}")
         finally:
             loop.close()
 

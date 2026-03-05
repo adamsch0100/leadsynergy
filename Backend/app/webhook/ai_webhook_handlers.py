@@ -20,11 +20,51 @@ import asyncio
 import threading
 import random
 import re
+import sys
 import pytz
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from flask import Blueprint, request, Response
 import uuid
+
+# ============================================================
+# PERSISTENT EVENT LOOP FOR WEBHOOK ASYNC PROCESSING
+# ============================================================
+# Problem: run_async_task() used to create a NEW event loop per request,
+# then close it when done. Playwright's browser connection is tied to the
+# event loop it was started in — closing that loop kills the connection.
+# Every subsequent webhook had to restart the browser (~10s) and re-login
+# (~30-60s), easily blowing the 90s operation timeout.
+#
+# Fix: One persistent background event loop for all webhook processing.
+# The Playwright PlaywrightSMSService global reuses the same loop, so
+# its browser connection stays alive between requests.
+# ============================================================
+_webhook_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_webhook_loop_lock = threading.Lock()
+
+
+def _get_persistent_webhook_loop() -> asyncio.AbstractEventLoop:
+    """Get (or create) the single persistent event loop for webhook async work."""
+    global _webhook_event_loop
+    if _webhook_event_loop is not None and not _webhook_event_loop.is_closed():
+        return _webhook_event_loop
+
+    with _webhook_loop_lock:
+        if _webhook_event_loop is not None and not _webhook_event_loop.is_closed():
+            return _webhook_event_loop
+
+        loop = asyncio.new_event_loop()
+        _webhook_event_loop = loop
+
+        def run_loop():
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        t = threading.Thread(target=run_loop, daemon=True, name="webhook-event-loop")
+        t.start()
+        logging.getLogger(__name__).info("Started persistent webhook event loop")
+        return loop
 
 from app.database.supabase_client import SupabaseClientSingleton
 from app.database.fub_api_client import FUBApiClient
@@ -166,33 +206,27 @@ async def queue_message_for_delivery(
 
 
 def run_async_task(coroutine):
-    """Helper function to run async tasks from sync code with error handling."""
-    loop = asyncio.new_event_loop()
+    """Submit an async coroutine to the persistent webhook event loop (fire-and-forget).
 
-    def run_in_thread(loop, coro):
+    Uses a single long-lived event loop so Playwright browser connections
+    (and other async state) survive between webhook requests.
+    """
+    loop = _get_persistent_webhook_loop()
+
+    def on_done(future):
         try:
-            asyncio.set_event_loop(loop)
-            logger.info("Background task starting...")
-            loop.run_until_complete(coro)
-            logger.info("Background task completed successfully")
-        except Exception as e:
-            import traceback
-            import sys
-            logger.error(f"CRITICAL: Background task failed with error: {e}")
-            logger.error(f"Full traceback:\n{traceback.format_exc()}")
-            # Also print to stderr so Railway can capture it
-            print(f"BACKGROUND TASK ERROR: {e}", file=sys.stderr)
-            traceback.print_exc()
-            sys.stderr.flush()
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
+            exc = future.exception()
+            if exc:
+                import traceback
+                import sys
+                logger.error(f"CRITICAL: Webhook async task failed: {exc}")
+                logger.error(f"Traceback: {traceback.format_exception(type(exc), exc, exc.__traceback__)}")
+                print(f"WEBHOOK ASYNC ERROR: {exc}", file=sys.stderr)
+        except Exception:
+            pass
 
-    thread = threading.Thread(target=run_in_thread, args=(loop, coroutine))
-    thread.daemon = True
-    thread.start()
+    future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+    future.add_done_callback(on_done)
 
 
 @ai_webhook_bp.route('/text-received', methods=['POST'])
@@ -432,6 +466,38 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
 
         logger.info(f"AI ENABLED for lead {person_id} - global=ON, per_lead=True")
 
+        # ============================================
+        # CRITICAL: Cancel pending automation EARLY
+        # ============================================
+        # Must happen before any Playwright/AI work. If message reading or AI
+        # generation fails later, the sequences are still paused. Previously this
+        # was only called near the bottom of the function, so Playwright failures
+        # caused an early return with no cancel → scheduled follow-ups kept firing.
+        try:
+            from app.scheduler.ai_tasks import cancel_lead_sequences
+            cancel_lead_sequences.delay(
+                fub_person_id=person_id,
+                reason="Lead responded - pausing automation",
+            )
+            logger.info(f"[EARLY CANCEL] Paused pending automation for engaged lead {person_id}")
+        except Exception as cancel_error:
+            logger.error(f"Could not dispatch cancel_lead_sequences via Celery for lead {person_id}: {cancel_error}")
+            # Fallback: cancel directly in DB without Celery (handles Redis connection issues)
+            try:
+                now_iso = datetime.utcnow().isoformat()
+                supabase.table("ai_scheduled_followups").update({
+                    "status": "cancelled",
+                    "cancelled_at": now_iso,
+                    "error_message": "Lead responded - pausing automation (direct cancel, Celery unavailable)",
+                }).eq("fub_person_id", person_id).eq("status", "pending").execute()
+                supabase.table("ai_conversations").update({
+                    "last_lead_response_at": now_iso,
+                    "state": "engaged",
+                }).eq("fub_person_id", person_id).execute()
+                logger.info(f"[EARLY CANCEL] Direct DB cancel succeeded for lead {person_id}")
+            except Exception as db_cancel_error:
+                logger.error(f"CRITICAL: Both Celery and direct DB cancel failed for lead {person_id}: {db_cancel_error}")
+
         # Fetch person data for profile building
         fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
         person_data = fub_client.get_person(person_id)
@@ -459,6 +525,14 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
 
             if not credentials:
                 logger.error(f"No FUB credentials found for Playwright read - cannot process message for person {person_id}")
+                # Still log the inbound event so the followup_manager safety net (4h check) activates
+                await log_ai_message(
+                    conversation_id=None,
+                    fub_person_id=person_id,
+                    direction="inbound",
+                    channel="sms",
+                    message_content="[content unavailable - no Playwright credentials]",
+                )
                 return
 
             # Use Playwright to read the actual message content
@@ -526,12 +600,28 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
 
                 if not read_result.get("success"):
                     logger.error(f"Playwright read failed for person {person_id}: {read_result.get('error')}")
+                    # Still log the inbound event so the followup_manager safety net (4h check) activates
+                    await log_ai_message(
+                        conversation_id=None,
+                        fub_person_id=person_id,
+                        direction="inbound",
+                        channel="sms",
+                        message_content="[content unavailable - Playwright read failed]",
+                    )
                     return
 
                 message_content = read_result.get("message", "")
 
             if not message_content:
                 logger.error(f"Could not get message content for person {person_id}")
+                # Still log the inbound event so the followup_manager safety net (4h check) activates
+                await log_ai_message(
+                    conversation_id=None,
+                    fub_person_id=person_id,
+                    direction="inbound",
+                    channel="sms",
+                    message_content="[content unavailable - Playwright returned empty]",
+                )
                 return
 
             logger.info(f"Successfully read message via Playwright: {message_content[:50]}...")
@@ -745,22 +835,6 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
         except Exception:
             pass  # A/B tracking is non-critical, don't block message processing
 
-        # ============================================
-        # CRITICAL: Cancel pending automation when lead responds
-        # ============================================
-        # This prevents scheduled messages from continuing while
-        # the lead is actively engaged in conversation
-        try:
-            from app.scheduler.ai_tasks import cancel_lead_sequences
-            cancel_lead_sequences.delay(
-                fub_person_id=person_id,
-                reason="Lead responded - pausing automation",
-            )
-            logger.info(f"Cancelled pending automation for engaged lead {person_id}")
-        except Exception as cancel_error:
-            logger.error(f"CRITICAL: Could not cancel sequences for lead {person_id}: {cancel_error} - lead may receive duplicate messages")
-            # Continue processing - but log at ERROR level since duplicate messages are possible
-
         # Process through full AI Agent Service
         logger.info(f"Processing message for person {person_id} through AI Agent Service...")
 
@@ -874,30 +948,20 @@ async def process_inbound_text(webhook_data: Dict[str, Any], resource_uri: str, 
             await asyncio.sleep(total_delay)
 
             # Send response via Playwright browser automation
-            # We use Playwright instead of FUB Native Texting API because we don't have
-            # System-level API credentials (which would be required for the API endpoint)
+            # Must use send_sms_with_auto_credentials() — uses the singleton with default_agent
+            # (cached cookies). Creating a new PlaywrightSMSService() per request uses a
+            # different agent_id with no cached session, causing login failures.
             logger.info(f"Sending SMS via Playwright to person {person_id}...")
 
             try:
-                from app.messaging.playwright_sms_service import PlaywrightSMSService
-                from app.utils.constants import Credentials
+                from app.messaging.playwright_sms_service import send_sms_with_auto_credentials
 
-                creds_config = Credentials()
-
-                # Build FUB login credentials (same as used for reading messages)
-                credentials = {
-                    "type": creds_config.FUB_LOGIN_TYPE or "email",
-                    "email": creds_config.FUB_LOGIN_EMAIL,
-                    "password": creds_config.FUB_LOGIN_PASSWORD,
-                }
-
-                # Use browser automation to send SMS through FUB web UI
-                sms_service = PlaywrightSMSService()
-                result = await sms_service.send_sms(
-                    agent_id=user_id,  # Use LeadSynergy user ID as agent identifier
+                result = await send_sms_with_auto_credentials(
                     person_id=person_id,
                     message=agent_response.response_text,
-                    credentials=credentials,
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    supabase_client=supabase,
                 )
             except Exception as sms_err:
                 logger.error(f"SMS send FAILED for person {person_id}: {sms_err}")
@@ -2167,21 +2231,27 @@ async def process_email_cache_update(webhook_data: Dict[str, Any]):
         if not person_id:
             return
 
-        # CRITICAL: If this is an INCOMING email from the lead, cancel pending follow-ups
-        # This ensures the AI agent stops automation when the lead responds via email
-        is_incoming = email.get('isIncoming', False)
-        if is_incoming:
-            logger.info(f"[EMAIL] Incoming email from lead {person_id} - cancelling pending sequences")
-            from app.scheduler.ai_tasks import cancel_lead_sequences
-            cancel_lead_sequences.delay(
-                fub_person_id=person_id,
-                reason="lead_responded_email"
-            )
-
-        # Resolve organization
+        # Resolve organization (needed for both cache update and AI response)
         organization_id = await resolve_organization_for_person(person_id)
         if not organization_id:
             return
+
+        is_incoming = email.get('isIncoming', False)
+        if is_incoming:
+            logger.info(f"[EMAIL] Incoming email from lead {person_id} - cancelling sequences and processing AI reply")
+
+            # Cancel pending follow-ups immediately
+            try:
+                from app.scheduler.ai_tasks import cancel_lead_sequences
+                cancel_lead_sequences.delay(
+                    fub_person_id=person_id,
+                    reason="lead_responded_email"
+                )
+            except Exception as cancel_err:
+                logger.error(f"[EMAIL] Could not cancel sequences for {person_id}: {cancel_err}")
+
+            # Generate and send AI response
+            await process_inbound_email(email, person_id, organization_id)
 
         # Update cache incrementally
         cache = get_profile_cache()
@@ -2203,6 +2273,184 @@ async def process_email_cache_update(webhook_data: Dict[str, Any]):
 
     except Exception as e:
         logger.error(f"Error updating cache for email: {e}")
+
+
+async def process_inbound_email(email: dict, person_id: int, organization_id: str):
+    """
+    Process an inbound email reply from a lead and send an AI response.
+
+    Mirrors process_inbound_text() but for the email channel:
+    - Strips HTML from body to get plain text
+    - Skips auto-replies and out-of-office messages
+    - Checks AI enabled (global + per-lead)
+    - Checks opt-out keywords
+    - Runs through full AI agent pipeline
+    - Sends reply via Playwright email
+    """
+    try:
+        subject = email.get('subject', '') or ''
+        body_html = email.get('body', '') or email.get('message', '') or ''
+
+        # Strip HTML tags and collapse whitespace to get plain text
+        import html as _html
+        body_text = re.sub(r'<[^>]+>', ' ', body_html)
+        body_text = _html.unescape(body_text)
+        body_text = re.sub(r'\s+', ' ', body_text).strip()
+
+        # Trim quoted reply chains — stop at common reply delimiters
+        for delimiter in ['\nOn ', '\n-----Original Message-----', '\n________________________________', '\nFrom:', '\n> ']:
+            idx = body_text.find(delimiter)
+            if idx > 80:  # keep at least 80 chars to avoid cutting real content
+                body_text = body_text[:idx].strip()
+                break
+
+        if not body_text:
+            logger.warning(f"[EMAIL] Empty body for person {person_id} after stripping HTML")
+            return
+
+        # Skip auto-replies / out-of-office
+        subject_lower = subject.lower()
+        auto_reply_patterns = ['out of office', 'auto-reply', 'automatic reply', 'vacation reply',
+                               'away from the office', 'autoreply', 'noreply', 'no-reply']
+        if any(p in subject_lower for p in auto_reply_patterns):
+            logger.info(f"[EMAIL] Skipping auto-reply from {person_id}: {subject}")
+            return
+
+        # Resolve user_id
+        user_id = await resolve_user_for_person(person_id, organization_id)
+        if not user_id:
+            logger.warning(f"[EMAIL] Could not resolve user for person {person_id}")
+            return
+
+        # Check global AI switch
+        from app.ai_agent.settings_service import get_agent_settings
+        ai_settings = await get_agent_settings(supabase, organization_id, user_id)
+        if not ai_settings.is_enabled:
+            logger.info(f"[EMAIL] AI globally disabled - skipping email response for {person_id}")
+            return
+
+        # Check per-lead AI enabled
+        from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+        lead_ai_service = LeadAISettingsServiceSingleton.get_instance(supabase)
+        per_lead_enabled = await lead_ai_service.is_ai_enabled_for_lead(
+            fub_person_id=person_id,
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+        if per_lead_enabled is not True:
+            logger.info(f"[EMAIL] AI not enabled for lead {person_id} - skipping email response")
+            return
+
+        # Check opt-out keywords
+        from app.ai_agent.compliance_checker import ComplianceChecker
+        compliance_checker = ComplianceChecker(supabase_client=supabase)
+        if compliance_checker.is_opt_out_keyword(body_text):
+            logger.info(f"[EMAIL] Opt-out keyword in email from {person_id}")
+            await compliance_checker.record_opt_out(
+                fub_person_id=person_id,
+                organization_id=organization_id,
+                reason=f"Email opt-out: {body_text[:100]}",
+            )
+            try:
+                from app.scheduler.ai_tasks import cancel_lead_sequences
+                cancel_lead_sequences.delay(fub_person_id=person_id, reason="email opt-out")
+            except Exception:
+                pass
+            return
+
+        # Log inbound email to ai_message_log
+        await log_ai_message(
+            conversation_id=None,
+            fub_person_id=person_id,
+            direction="inbound",
+            channel="email",
+            message_content=body_text[:1000],
+        )
+
+        # Build lead profile and conversation context
+        fub_client = FUBApiClient(api_key=CREDS.FUB_API_KEY)
+        person_data = fub_client.get_person(person_id)
+        if not person_data:
+            logger.warning(f"[EMAIL] Could not fetch person data for {person_id}")
+            return
+
+        lead_profile = await build_lead_profile_from_fub(person_data, organization_id)
+        conversation_history = await get_conversation_history(person_id, limit=15)
+
+        from app.ai_agent.conversation_manager import ConversationManager, ConversationState
+        conversation_manager = ConversationManager(supabase_client=supabase)
+        context = await conversation_manager.get_or_create_conversation(
+            fub_person_id=person_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            lead_data=person_data,
+        )
+
+        if context.state == ConversationState.HANDED_OFF:
+            logger.info(f"[EMAIL] Conversation {person_id} is HANDED_OFF - skipping AI response")
+            return
+
+        context.add_message("inbound", body_text, "email")
+
+        # Generate AI response
+        logger.info(f"[EMAIL] Processing inbound email for person {person_id}...")
+        agent_service = get_agent_service()
+        try:
+            agent_response = await agent_service.process_message(
+                message=body_text,
+                lead_profile=lead_profile,
+                conversation_context=context,
+                conversation_history=conversation_history,
+                channel="email",
+                fub_person_id=person_id,
+                user_id=user_id,
+                organization_id=organization_id,
+            )
+        except Exception as ai_error:
+            logger.error(f"[EMAIL] AI processing failed for {person_id}: {ai_error}")
+            return
+
+        if not agent_response or not agent_response.response_text:
+            logger.warning(f"[EMAIL] No AI response generated for {person_id}")
+            return
+
+        # Send email reply via Playwright
+        reply_subject = subject if subject.lower().startswith('re:') else f"Re: {subject}"
+
+        from app.messaging.playwright_sms_service import send_email_with_auto_credentials
+        result = await send_email_with_auto_credentials(
+            person_id=person_id,
+            subject=reply_subject,
+            body=agent_response.response_text,
+            user_id=user_id,
+            organization_id=organization_id,
+            supabase_client=supabase,
+        )
+
+        if result.get('success'):
+            context.add_message("outbound", agent_response.response_text, "email")
+            if agent_response.lead_score_delta:
+                context.lead_score += agent_response.lead_score_delta
+            if agent_response.state_changed and agent_response.conversation_state:
+                from app.ai_agent.conversation_manager import ConversationState
+                context.state = ConversationState(agent_response.conversation_state)
+            await conversation_manager.save_context(context)
+            await log_ai_message(
+                conversation_id=context.conversation_id,
+                fub_person_id=person_id,
+                direction="outbound",
+                channel="email",
+                message_content=agent_response.response_text,
+                intent_detected=agent_response.detected_intent if agent_response.detected_intent else None,
+            )
+            logger.info(f"[EMAIL] AI reply sent to person {person_id}: subject='{reply_subject}'")
+        else:
+            logger.error(f"[EMAIL] Failed to send email reply to {person_id}: {result.get('error')}")
+
+    except Exception as e:
+        import traceback
+        logger.error(f"[EMAIL] Error in process_inbound_email for {person_id}: {e}")
+        logger.error(traceback.format_exc())
 
 
 @ai_webhook_bp.route('/cache/note-created', methods=['POST'])

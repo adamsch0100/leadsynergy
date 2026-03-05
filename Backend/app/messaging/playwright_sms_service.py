@@ -23,7 +23,7 @@ class PlaywrightSMSService:
 
     # Self-healing settings
     MAX_CONSECUTIVE_FAILURES = 2  # Destroy session after this many failures
-    PROACTIVE_RESTART_INTERVAL = 2  # Restart browser every N operations to prevent zombie process buildup
+    PROACTIVE_RESTART_INTERVAL = 20  # Restart browser every N operations to prevent zombie process buildup
 
     # Login rate limiting - prevent spamming FUB with verification emails
     LOGIN_COOLDOWN_SECONDS = 600  # 10 minutes cooldown after failed login

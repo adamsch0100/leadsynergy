@@ -3718,7 +3718,18 @@ def toggle_lead_ai(person_id):
                     organization_id=organization_id,
                 )
             )
-        
+
+            # Cancel any pending follow-ups so they don't fire while AI is disabled
+            try:
+                from app.scheduler.ai_tasks import cancel_lead_sequences
+                cancel_lead_sequences.delay(
+                    fub_person_id=int(person_id),
+                    reason="AI disabled via frontend toggle",
+                )
+                logger.info(f"Cancelled pending sequences for AI-disabled lead {person_id}")
+            except Exception as cancel_err:
+                logger.error(f"Failed to cancel sequences for {person_id} after AI disable: {cancel_err}")
+
         if not success:
             return jsonify({"success": False, "error": "Failed to update AI settings"}), 500
 

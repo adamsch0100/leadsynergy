@@ -1783,6 +1783,26 @@ class FollowUpManager:
             except Exception as stage_err:
                 logger.warning(f"Stage re-check failed for {fub_person_id}, proceeding: {stage_err}")
 
+            # Safety net: Check if AI is still enabled for this lead
+            # Catches leads where AI was disabled via the toggle AFTER follow-ups were scheduled
+            try:
+                from app.ai_agent.lead_ai_settings_service import LeadAISettingsServiceSingleton
+                lead_ai_svc = LeadAISettingsServiceSingleton.get_instance(self.supabase)
+                org_id = followup_data.get('organization_id')
+                is_enabled = await lead_ai_svc.is_ai_enabled_for_lead(
+                    fub_person_id=fub_person_id,
+                    organization_id=org_id,
+                )
+                if not is_enabled:
+                    self.supabase.table('ai_scheduled_followups').update({
+                        'status': 'cancelled',
+                        'error_message': 'Cancelled: AI disabled for this lead',
+                    }).eq('fub_person_id', fub_person_id).eq('status', 'pending').execute()
+                    logger.info(f"Lead {fub_person_id} has AI disabled - cancelled all pending follow-ups")
+                    return {"success": False, "error": "AI disabled for lead", "delivery_error": "ai_disabled"}
+            except Exception as ai_check_err:
+                logger.warning(f"AI enabled check failed for {fub_person_id}, proceeding: {ai_check_err}")
+
             # Safety net: Check if lead has been actively conversing
             # If the lead sent an inbound message recently, the reactive AI is handling
             # the conversation and scheduled follow-ups should NOT fire
