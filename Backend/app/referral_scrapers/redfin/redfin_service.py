@@ -162,10 +162,16 @@ class RedfinService(BaseReferralService):
             if not all([email_field, password_field, login_button]):
                 return False
 
-            email_field.clear()  # Clear any pre-filled value from Chrome profile
+            # Clear any pre-filled value (select-all+delete works on React inputs where clear() doesn't)
+            from selenium.webdriver.common.keys import Keys as _Keys
+            email_field.click()
+            email_field.send_keys(_Keys.CONTROL + "a")
+            email_field.send_keys(_Keys.DELETE)
             self.wis.simulated_typing(email_field, self.email)
             self.wis.human_delay(1, 2)
-            password_field.clear()
+            password_field.click()
+            password_field.send_keys(_Keys.CONTROL + "a")
+            password_field.send_keys(_Keys.DELETE)
             self.wis.simulated_typing(password_field, self.password)
             self.wis.human_delay(3, 5)
             login_button.click()
@@ -381,10 +387,16 @@ class RedfinService(BaseReferralService):
                 print("Direct login form not found")
                 return False
 
-            email_field.clear()  # Clear any pre-filled value from Chrome profile
+            # Clear any pre-filled value (select-all+delete works on React inputs where clear() doesn't)
+            from selenium.webdriver.common.keys import Keys as _Keys
+            email_field.click()
+            email_field.send_keys(_Keys.CONTROL + "a")
+            email_field.send_keys(_Keys.DELETE)
             self.wis.simulated_typing(email_field, self.email)
             self.wis.human_delay(1, 2)
-            password_field.clear()
+            password_field.click()
+            password_field.send_keys(_Keys.CONTROL + "a")
+            password_field.send_keys(_Keys.DELETE)
             self.wis.simulated_typing(password_field, self.password)
             self.wis.human_delay(3, 5)
             login_button.click()
@@ -562,6 +574,36 @@ class RedfinService(BaseReferralService):
                         self.driver_service.safe_click(next_button)
                         print("[Google OAuth] Clicked Next after email")
                         self.wis.human_delay(5, 8)  # Longer wait for Google's password page animation
+                else:
+                    # No email field - check for account chooser
+                    # Google shows a list of accounts when the user previously signed in
+                    print("[Google OAuth] No email field found - checking for account chooser...")
+                    account_clicked = False
+                    try:
+                        # Try to find and click the account matching our email
+                        account_selectors = [
+                            f'//div[contains(text(), "{self.email}")]//ancestor::li',
+                            f'//div[contains(text(), "{self.email}")]//ancestor::div[@role="link"]',
+                            f'//div[contains(text(), "{self.email}")]/..',
+                            f'//div[@data-identifier="{self.email}"]',
+                            f'//*[@data-email="{self.email}"]',
+                        ]
+                        for selector in account_selectors:
+                            try:
+                                account_el = self.driver_service.driver.find_element(By.XPATH, selector)
+                                if account_el:
+                                    self.driver_service.safe_click(account_el)
+                                    print(f"[Google OAuth] Clicked account: {self.email}")
+                                    account_clicked = True
+                                    self.wis.human_delay(5, 8)
+                                    break
+                            except:
+                                continue
+                    except Exception as chooser_err:
+                        print(f"[Google OAuth] Account chooser error: {chooser_err}")
+
+                    if not account_clicked:
+                        print("[Google OAuth] Could not find account in chooser")
 
                 # Debug: what page are we on after email Next?
                 try:
