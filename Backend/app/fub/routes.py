@@ -3510,10 +3510,10 @@ def trigger_bulk_sync():
         data = request.get_json() or {}
         force = data.get('force', False)
 
-        result = bulk_sync_lead_sources.delay()
+        result = bulk_sync_lead_sources.delay(force_sync=force)
         return jsonify({
             "success": True,
-            "message": "Bulk sync task queued",
+            "message": f"Bulk sync task queued (force={force})",
             "task_id": str(result.id),
         })
     except Exception as e:

@@ -921,19 +921,39 @@ class ReferralExchangeService(BaseReferralService):
                 need_action_default_used = 0
 
                 # Process each Need Action lead with FUB integration
-                for i in range(need_action_count):
+                # Always process index 0: after each successful update, the lead
+                # is removed from the Needs Action list, so the next lead shifts
+                # to index 0. Track processed names to avoid infinite loops.
+                processed_names = set()
+                max_iterations = need_action_count + 5  # safety limit
+                iteration = 0
+                while iteration < max_iterations:
+                    iteration += 1
                     try:
-                        # Re-get the rows (they might change after updates)
+                        # Re-get the rows (they change after updates)
                         lead_rows = self.driver_service.driver.find_elements(By.CSS_SELECTOR, ".leads-row")
-                        if i >= len(lead_rows):
+                        if not lead_rows:
+                            self.logger.info("[NEED ACTION] No more leads in Need Action list")
                             break
 
-                        row = lead_rows[i]
-                        row_text = row.text.strip()
-                        row_lines = row_text.split('\n')
-                        display_name = row_lines[0].strip() if row_lines else row_text[:30]
+                        # Find the first row we haven't processed yet
+                        row = None
+                        display_name = None
+                        for candidate_row in lead_rows:
+                            candidate_text = candidate_row.text.strip()
+                            candidate_lines = candidate_text.split('\n')
+                            candidate_name = candidate_lines[0].strip() if candidate_lines else candidate_text[:30]
+                            if candidate_name not in processed_names:
+                                row = candidate_row
+                                display_name = candidate_name
+                                break
 
-                        self.logger.info(f"\n[NEED ACTION] Processing {i+1}/{need_action_count}: {display_name}")
+                        if row is None:
+                            self.logger.info("[NEED ACTION] All remaining leads already processed")
+                            break
+
+                        processed_names.add(display_name)
+                        self.logger.info(f"\n[NEED ACTION] Processing {len(processed_names)}/{need_action_count}: {display_name}")
 
                         # Try to look up lead in database
                         db_lead = fub_helper.lookup_lead_by_name(display_name, "ReferralExchange")
@@ -1014,7 +1034,7 @@ class ReferralExchangeService(BaseReferralService):
 
                 self.logger.info("\n" + "="*60)
                 self.logger.info("[NEED ACTION] Sweep completed!")
-                self.logger.info(f"[NEED ACTION] Updated: {need_action_updated}/{need_action_count}")
+                self.logger.info(f"[NEED ACTION] Updated: {need_action_updated}/{need_action_count} (processed {len(processed_names)} unique leads)")
                 self.logger.info(f"[NEED ACTION] Used FUB data: {need_action_fub_used}, Used default: {need_action_default_used}")
                 self.logger.info("="*60)
 

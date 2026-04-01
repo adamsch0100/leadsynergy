@@ -111,7 +111,7 @@ BULK_SYNC_PLATFORMS = [
 
 
 @celery.task(bind=True, max_retries=1, time_limit=7200, soft_time_limit=7000)
-def bulk_sync_lead_sources(self) -> Dict[str, Any]:
+def bulk_sync_lead_sources(self, force_sync: bool = False) -> Dict[str, Any]:
     """Bulk sync all lead sources that are due.
 
     Uses the optimized bulk sync approach: login once per platform,
@@ -130,7 +130,7 @@ def bulk_sync_lead_sources(self) -> Dict[str, Any]:
         logger.info("Bulk sync: no lead sources due for synchronization.")
         return {"processed_sources": 0, "details": []}
 
-    logger.info("Bulk sync: processing %d lead sources.", len(due_sources))
+    logger.info("Bulk sync: processing %d lead sources (force_sync=%s).", len(due_sources), force_sync)
     summary = []
 
     import gc
@@ -166,7 +166,7 @@ def bulk_sync_lead_sources(self) -> Dict[str, Any]:
                 leads=leads,
                 user_id=user_id,
                 tracker=tracker,
-                force_sync=False  # Respect per-lead intervals for routine syncs
+                force_sync=force_sync
             )
 
             status = tracker.get_status(sync_id)
